@@ -1,0 +1,126 @@
+services:
+
+  postgres:
+    image: pgvector/pgvector:pg16
+    container_name: norma-postgres
+    restart: unless-stopped
+
+    environment:
+      POSTGRES_DB: norma
+      POSTGRES_USER: norma
+      POSTGRES_PASSWORD: norma
+
+    ports:
+      - "5432:5432"
+
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "pg_isready -U norma -d norma"
+        ]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+
+  redis:
+    image: redis:7-alpine
+    container_name: norma-redis
+    restart: unless-stopped
+
+    ports:
+      - "6379:6379"
+
+    volumes:
+      - redis_data:/data
+
+    command:
+      [
+        "redis-server",
+        "--appendonly",
+        "yes"
+      ]
+
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "redis-cli",
+          "ping"
+        ]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+
+  api:
+    build:
+      context: ./apps/api
+      dockerfile: Dockerfile
+
+    container_name: norma-api
+    restart: unless-stopped
+
+    env_file:
+      - .env
+
+    ports:
+      - "8000:8000"
+
+    volumes:
+      - ./apps/api:/app
+
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+    command:
+      [
+        "uvicorn",
+        "app.main:app",
+        "--host",
+        "0.0.0.0",
+        "--port",
+        "8000",
+        "--reload"
+      ]
+
+  web:
+    build:
+      context: ./apps/web
+      dockerfile: Dockerfile
+
+    container_name: norma-web
+    restart: unless-stopped
+
+    environment:
+      NEXT_PUBLIC_API_URL: http://localhost:8000
+
+    ports:
+      - "3000:3000"
+
+    volumes:
+      - ./apps/web:/app
+      - /app/node_modules
+      - /app/.next
+
+    depends_on:
+      - api
+
+    command:
+      [
+        "npm",
+        "run",
+        "dev"
+      ]
+
+
+volumes:
+  postgres_data:
+  redis_data:
