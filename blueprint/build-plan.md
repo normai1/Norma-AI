@@ -9,7 +9,11 @@
   - [x] 1b. **Registration and login API** - register and login endpoints issuing access and refresh tokens
   - [x] 1c. **Session lifecycle and route protection** - token refresh, logout and session invalidation, and the authenticated-user dependency
   - [x] 1d. **Authentication UI** - register, log in, and log out screens wired to the auth API
-- [ ] 2. **Organization workspaces and invitations** - create organizations, manage memberships, invite users, and enforce tenant isolation
+- [x] 2. **Organization workspaces and invitations** - create organizations, manage memberships, invite users, and enforce tenant isolation
+  - [x] 2a. **Organization and membership foundation** - Organization and OrganizationMember tables, org creation with an owner, org listing/detail, and the tenant-isolation membership dependency later features depend on
+  - [x] 2b. **Membership management** - update organization details, list and remove members, change member roles, with last-owner protection
+  - [x] 2c. **Invitations** - invite by email, accept/revoke/list invitations, behind a swappable email-sending abstraction (no provider is decided in the plans yet, so this ships with a logging mock)
+  - [x] 2d. **Organization UI** - create-organization flow and a members/invitations management screen
 - [ ] 3. **Role-based access control** - define and enforce organization roles and permissions
 - [ ] 4. **User and organization settings** - manage profiles, organization configuration, and basic preferences
 - [ ] 5. **Core application shell** - provide the authenticated dashboard, navigation, workspace switching, and global states

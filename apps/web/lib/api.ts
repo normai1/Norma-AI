@@ -40,40 +40,71 @@ export async function toApiError(
   );
 }
 
-export async function apiFetch<T>(
+/**
+ * Merge caller headers over the JSON defaults.
+ *
+ * Returns `Headers` rather than a plain object so names compare
+ * case-insensitively. A plain spread treats `authorization` and `Authorization`
+ * as two distinct keys, which lets a caller-supplied value survive alongside
+ * one the caller should not be able to influence.
+ */
+export function buildHeaders(init?: HeadersInit): Headers {
+  const headers = new Headers(init);
+
+  if (!headers.has("Content-Type")) {
+    headers.set("Content-Type", "application/json");
+  }
+
+  return headers;
+}
+
+/**
+ * Send a request, throwing an ApiError on any non-2xx response.
+ *
+ * The single place response failure is turned into an error, so authenticated
+ * and anonymous callers cannot drift apart in how they report one.
+ */
+export async function apiSend(
   path: string,
   options?: RequestInit,
-): Promise<T> {
-  const response = await fetch(
-    `${API_URL}${path}`,
-    {
-      ...options,
-      headers: {
-        "Content-Type": "application/json",
-        ...options?.headers,
-      },
-    },
-  );
+): Promise<Response> {
+  const response = await fetch(`${API_URL}${path}`, {
+    ...options,
+    headers: buildHeaders(options?.headers),
+  });
 
   if (!response.ok) {
     throw await toApiError(response);
   }
 
-  // 204 carries no body, so parsing it would throw on an otherwise fine
-  // request. Logout is the current example.
-  if (response.status === 204) {
-    return undefined as T;
-  }
+  return response;
+}
+
+export async function apiJson<T>(
+  path: string,
+  options?: RequestInit,
+): Promise<T> {
+  const response = await apiSend(path, options);
 
   return response.json() as Promise<T>;
 }
 
-export async function apiPost<T>(
+export async function apiPostJson<T>(
   path: string,
   body: unknown,
 ): Promise<T> {
-  return apiFetch<T>(path, {
-    method: "POST",
-    body: JSON.stringify(body),
-  });
+  return apiJson<T>(path, { method: "POST", body: JSON.stringify(body) });
+}
+
+/**
+ * Send a request whose response carries no body, such as a 204.
+ *
+ * Kept separate from the JSON helpers rather than returning a cast: a caller
+ * that expects no body says so, so nothing has to pretend `undefined` is a `T`.
+ */
+export async function apiPostEmpty(
+  path: string,
+  body: unknown,
+): Promise<void> {
+  await apiSend(path, { method: "POST", body: JSON.stringify(body) });
 }

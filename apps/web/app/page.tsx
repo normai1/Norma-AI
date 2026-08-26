@@ -97,6 +97,13 @@ export default function Home() {
                     {user.full_name ?? user.email}
                   </span>
 
+                  <Link
+                    href="/organizations"
+                    className="rounded-lg border border-slate-700 px-4 py-2 text-sm font-medium text-white transition hover:bg-slate-900"
+                  >
+                    Organizations
+                  </Link>
+
                   <button
                     type="button"
                     onClick={handleSignOut}
