@@ -4,7 +4,11 @@ from typing import Annotated
 from fastapi import APIRouter, Depends, HTTPException, Response, status
 
 from app.api.deps import CurrentUser, DbSession
-from app.api.org_deps import CurrentOrgMembership, OrgAdmin
+from app.api.org_deps import (
+    CanCreateInvitations,
+    CanRevokeInvitations,
+    CurrentOrgMembership,
+)
 from app.core.email import EmailSender, get_email_sender
 from app.core.exceptions import (
     AlreadyAMember,
@@ -40,7 +44,7 @@ _INVALID_INVITATION = HTTPException(
 )
 async def create_invitation(
     payload: InvitationCreate,
-    membership: OrgAdmin,
+    membership: CanCreateInvitations,
     db: DbSession,
     sender: Sender,
 ) -> InvitationCreatedResponse:
@@ -109,7 +113,7 @@ async def list_invitations(
 )
 async def revoke_invitation(
     invitation_id: uuid.UUID,
-    membership: OrgAdmin,
+    membership: CanRevokeInvitations,
     db: DbSession,
 ) -> Response:
     """

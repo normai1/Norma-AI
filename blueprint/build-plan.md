@@ -14,7 +14,7 @@
   - [x] 2b. **Membership management** - update organization details, list and remove members, change member roles, with last-owner protection
   - [x] 2c. **Invitations** - invite by email, accept/revoke/list invitations, behind a swappable email-sending abstraction (no provider is decided in the plans yet, so this ships with a logging mock)
   - [x] 2d. **Organization UI** - create-organization flow and a members/invitations management screen
-- [ ] 3. **Role-based access control** - define and enforce organization roles and permissions
+- [x] 3. **Role-based access control** - define and enforce organization roles and permissions
 - [ ] 4. **User and organization settings** - manage profiles, organization configuration, and basic preferences
 - [ ] 5. **Core application shell** - provide the authenticated dashboard, navigation, workspace switching, and global states
 - [ ] 6. **Company management** - create, view, search, update, and organize company records

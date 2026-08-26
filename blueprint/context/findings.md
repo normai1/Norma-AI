@@ -24,3 +24,24 @@ item 28) is exactly where it would first appear.
 possibly-tainted connection is disposed with it rather than pooled. Do not change
 anything now; there is no failure to chase.
 **Resolution:**
+
+### F-27 [P3] open - `_signed_in` is duplicated across five test files, byte-identical
+
+**File:** apps/api/tests/test_permission_enforcement.py:20
+**Found:** 2026-08-26 by /audit (scope: current; lens: quality)
+**Why it matters:** The exact same `_signed_in(client, email)` helper is defined
+identically in `test_organizations.py`, `test_organization_authorization.py`,
+`test_organization_members.py`, `test_invitations.py`, and now
+`test_permission_enforcement.py` (diffed all five, byte-identical). Four predate
+this feature - pre-existing drift from feature 2 that its own three audit rounds
+never caught - and this feature added a fifth rather than breaking the pattern.
+Not a defect; every copy works. It is compounding maintainability debt: a change
+to the registration payload shape now needs five identical edits, and each new
+test file makes the eventual extraction slightly more work.
+**Suggested fix:** Move `_signed_in` into `conftest.py` as a shared helper or
+fixture, import it from all five files. While in that territory, the three
+differently-named "create an org and add a member" helpers
+(`_org_with_role`, `_org_with_owner`, `_org_with_second_member`) are a related,
+looser instance of the same pattern - worth a look in the same pass, though their
+differing return shapes mean the fix isn't as mechanical.
+**Resolution:**

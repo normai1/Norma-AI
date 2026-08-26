@@ -5,6 +5,13 @@ from typing import Annotated
 from fastapi import Depends, HTTPException, status
 
 from app.api.deps import CurrentUser, DbSession
+from app.core.permissions import (
+    CREATE_INVITATIONS,
+    MANAGE_MEMBERS,
+    MANAGE_ORGANIZATION,
+    REVOKE_INVITATIONS,
+    has_permission,
+)
 from app.models.organization_member import OrganizationMember
 from app.services import organization as organization_service
 
@@ -44,19 +51,17 @@ async def require_org_member(
 CurrentOrgMembership = Annotated[OrganizationMember, Depends(require_org_member)]
 
 
-def require_org_role(*allowed_roles: str) -> Callable:
+def require_permission(permission: str) -> Callable:
     """
-    Build a dependency that also requires one of the given roles.
+    Build a dependency that also requires the caller's role to hold a permission.
 
-    Minimal on purpose: feature 3 (RBAC) replaces this with a real permission
-    model. Until then, membership management needs some role gate and this is
-    the smallest one that does the job. Unlike missing membership, an
-    insufficient role is a genuine 403: the caller has already proven the
-    organization exists to them, so there is nothing left to leak.
+    Unlike missing membership, an insufficient permission is a genuine 403: the
+    caller has already proven the organization exists to them, so there is
+    nothing left to leak.
     """
 
     async def dependency(membership: CurrentOrgMembership) -> OrganizationMember:
-        if membership.role not in allowed_roles:
+        if not has_permission(membership.role, permission):
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail="Your role does not allow this action",
@@ -67,9 +72,22 @@ def require_org_role(*allowed_roles: str) -> Callable:
     return dependency
 
 
-OrgAdmin = Annotated[
+CanManageOrganization = Annotated[
     OrganizationMember,
-    Depends(require_org_role("owner", "admin")),
+    Depends(require_permission(MANAGE_ORGANIZATION)),
 ]
 
-OrgOwner = Annotated[OrganizationMember, Depends(require_org_role("owner"))]
+CanManageMembers = Annotated[
+    OrganizationMember,
+    Depends(require_permission(MANAGE_MEMBERS)),
+]
+
+CanCreateInvitations = Annotated[
+    OrganizationMember,
+    Depends(require_permission(CREATE_INVITATIONS)),
+]
+
+CanRevokeInvitations = Annotated[
+    OrganizationMember,
+    Depends(require_permission(REVOKE_INVITATIONS)),
+]

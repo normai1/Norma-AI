@@ -207,7 +207,8 @@ async def test_a_member_can_remove_themselves(client: AsyncClient) -> None:
         headers=member,
     )
 
-    # A plain member is not an OrgAdmin, so the role gate stops them first.
+    # A plain member holds no members:manage permission, so the permission
+    # gate stops them first.
     assert response.status_code == 403
 
 

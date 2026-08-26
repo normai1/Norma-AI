@@ -3,7 +3,11 @@ import uuid
 from fastapi import APIRouter, HTTPException, Response, status
 
 from app.api.deps import CurrentUser, DbSession
-from app.api.org_deps import CurrentOrgMembership, OrgAdmin
+from app.api.org_deps import (
+    CanManageMembers,
+    CanManageOrganization,
+    CurrentOrgMembership,
+)
 from app.core.exceptions import (
     LastOwnerRemoval,
     MemberNotFound,
@@ -133,7 +137,7 @@ async def get_organization(
 )
 async def update_organization(
     payload: OrganizationUpdate,
-    membership: OrgAdmin,
+    membership: CanManageOrganization,
     db: DbSession,
 ) -> OrganizationMembershipResponse:
     """
@@ -188,7 +192,7 @@ async def list_members(
 async def change_member_role(
     member_id: uuid.UUID,
     payload: MemberRoleUpdate,
-    membership: OrgAdmin,
+    membership: CanManageMembers,
     db: DbSession,
 ) -> MemberResponse:
     """
@@ -228,7 +232,7 @@ async def change_member_role(
 )
 async def remove_member(
     member_id: uuid.UUID,
-    membership: OrgAdmin,
+    membership: CanManageMembers,
     db: DbSession,
 ) -> Response:
     """
