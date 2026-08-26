@@ -4,7 +4,6 @@ from sqlalchemy import text
 from app.core.database import AsyncSessionLocal
 from app.core.redis import redis
 
-
 router = APIRouter(tags=["health"])
 
 

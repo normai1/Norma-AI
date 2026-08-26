@@ -1,0 +1,175 @@
+import { API_URL, ApiError, apiPost, toApiError } from "./api";
+
+export interface AuthUser {
+  id: string;
+  email: string;
+  full_name: string | null;
+  avatar_url: string | null;
+  is_active: boolean;
+  created_at: string;
+}
+
+export interface AuthResponse {
+  access_token: string;
+  refresh_token: string;
+  token_type: string;
+  expires_in: number;
+  user: AuthUser;
+}
+
+const ACCESS_TOKEN_KEY = "norma.access_token";
+const REFRESH_TOKEN_KEY = "norma.refresh_token";
+
+// Tokens live in localStorage because the API is a separate origin and takes
+// bearer credentials. That is readable by any script on the page, so it trades
+// XSS exposure for cross-origin simplicity; revisit with httpOnly cookies when
+// the production domains are settled.
+export function getAccessToken(): string | null {
+  if (typeof window === "undefined") {
+    return null;
+  }
+
+  return window.localStorage.getItem(ACCESS_TOKEN_KEY);
+}
+
+export function getRefreshToken(): string | null {
+  if (typeof window === "undefined") {
+    return null;
+  }
+
+  return window.localStorage.getItem(REFRESH_TOKEN_KEY);
+}
+
+export function storeTokens(auth: AuthResponse): void {
+  if (typeof window === "undefined") {
+    return;
+  }
+
+  window.localStorage.setItem(ACCESS_TOKEN_KEY, auth.access_token);
+  window.localStorage.setItem(REFRESH_TOKEN_KEY, auth.refresh_token);
+}
+
+export function clearTokens(): void {
+  if (typeof window === "undefined") {
+    return;
+  }
+
+  window.localStorage.removeItem(ACCESS_TOKEN_KEY);
+  window.localStorage.removeItem(REFRESH_TOKEN_KEY);
+}
+
+export async function register(input: {
+  email: string;
+  password: string;
+  fullName?: string;
+}): Promise<AuthResponse> {
+  const auth = await apiPost<AuthResponse>("/api/v1/auth/register", {
+    email: input.email,
+    password: input.password,
+    full_name: input.fullName?.trim() || null,
+  });
+
+  storeTokens(auth);
+
+  return auth;
+}
+
+export async function login(input: {
+  email: string;
+  password: string;
+}): Promise<AuthResponse> {
+  const auth = await apiPost<AuthResponse>("/api/v1/auth/login", input);
+
+  storeTokens(auth);
+
+  return auth;
+}
+
+/** Revoke the stored session server-side, then clear it locally regardless. */
+export async function logout(): Promise<void> {
+  const refreshToken = getRefreshToken();
+
+  if (refreshToken) {
+    try {
+      await apiPost("/api/v1/auth/logout", { refresh_token: refreshToken });
+    } catch {
+      // A failed revoke must not strand the user in a signed-in UI.
+    }
+  }
+
+  clearTokens();
+}
+
+async function refreshSession(): Promise<string | null> {
+  const refreshToken = getRefreshToken();
+
+  if (!refreshToken) {
+    return null;
+  }
+
+  try {
+    const auth = await apiPost<AuthResponse>("/api/v1/auth/refresh", {
+      refresh_token: refreshToken,
+    });
+
+    storeTokens(auth);
+
+    return auth.access_token;
+  } catch {
+    clearTokens();
+
+    return null;
+  }
+}
+
+/** Fetch with the access token, retrying once through refresh on a 401. */
+export async function authorizedFetch(
+  path: string,
+  options?: RequestInit,
+): Promise<Response> {
+  const send = (token: string | null) =>
+    fetch(`${API_URL}${path}`, {
+      ...options,
+      headers: {
+        "Content-Type": "application/json",
+        ...options?.headers,
+        // Last, so a caller-supplied header cannot replace the session token.
+        ...(token ? { Authorization: `Bearer ${token}` } : {}),
+      },
+    });
+
+  let response = await send(getAccessToken());
+
+  if (response.status === 401) {
+    const refreshed = await refreshSession();
+
+    if (refreshed) {
+      response = await send(refreshed);
+    }
+  }
+
+  return response;
+}
+
+/** Return the signed-in user, or null when there is no usable session. */
+export async function fetchCurrentUser(): Promise<AuthUser | null> {
+  if (!getAccessToken()) {
+    return null;
+  }
+
+  const response = await authorizedFetch("/api/v1/auth/me");
+
+  if (response.status === 401) {
+    clearTokens();
+
+    return null;
+  }
+
+  if (!response.ok) {
+    throw await toApiError(response);
+  }
+
+  return response.json() as Promise<AuthUser>;
+}
+
+export { ApiError };

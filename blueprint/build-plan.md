@@ -4,11 +4,11 @@
 
 ## MVP
 
-- [ ] 1. **User authentication** - register, log in, log out, and maintain secure authenticated sessions
-  - [ ] 1a. **User identity foundation** - User and Session tables, model conventions, password hashing, and the async test-database fixtures
-  - [ ] 1b. **Registration and login API** - register and login endpoints issuing access and refresh tokens
-  - [ ] 1c. **Session lifecycle and route protection** - token refresh, logout and session invalidation, and the authenticated-user dependency
-  - [ ] 1d. **Authentication UI** - register, log in, and log out screens wired to the auth API
+- [x] 1. **User authentication** - register, log in, log out, and maintain secure authenticated sessions
+  - [x] 1a. **User identity foundation** - User and Session tables, model conventions, password hashing, and the async test-database fixtures
+  - [x] 1b. **Registration and login API** - register and login endpoints issuing access and refresh tokens
+  - [x] 1c. **Session lifecycle and route protection** - token refresh, logout and session invalidation, and the authenticated-user dependency
+  - [x] 1d. **Authentication UI** - register, log in, and log out screens wired to the auth API
 - [ ] 2. **Organization workspaces and invitations** - create organizations, manage memberships, invite users, and enforce tenant isolation
 - [ ] 3. **Role-based access control** - define and enforce organization roles and permissions
 - [ ] 4. **User and organization settings** - manage profiles, organization configuration, and basic preferences

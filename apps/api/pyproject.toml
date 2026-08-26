@@ -2,6 +2,11 @@
 target-version = "py312"
 line-length = 88
 
+# Applied migrations are historical records that environments already reference,
+# so they are not reformatted to satisfy a linter. New ones are generated clean
+# by alembic/script.py.mako instead.
+extend-exclude = ["alembic/versions"]
+
 [tool.ruff.lint]
 select = [
     "E",
@@ -11,5 +16,7 @@ select = [
     "B",
 ]
 
-[tool.pytest.ini_options]
-asyncio_mode = "auto"
+# pytest configuration lives in pytest.ini at the repository root, so one config
+# serves runs started from either directory. Do not add a
+# [tool.pytest.ini_options] block here: it would shadow the root config for runs
+# started inside apps/api and the two would drift.

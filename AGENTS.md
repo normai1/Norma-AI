@@ -114,13 +114,44 @@ checks do not make the Blueprint unusable.
 
 ## Commands
 
-For a standard Next.js project. Change or remove if you're using something else.
+Norma AI is a monorepo: a FastAPI backend in `apps/api` and a Next.js frontend in
+`apps/web`. Run everything below from the repository root unless stated otherwise.
+
+### Whole stack
+
+- Start: `docker compose up -d` (web 3000, api 8000, postgres 5432, redis 6379)
+- Logs: `docker compose logs -f api`
+- Rebuild after a dependency change: `docker compose build api && docker compose up -d api`
+
+A dependency added to `apps/api/requirements.txt` does not reach the running
+container until it is rebuilt. The API will crash-loop on the missing import
+until then.
+
+### Backend (`apps/api`)
+
+- Test: `pytest`
+- Lint: `ruff check apps/api`
+- Migrations: `docker compose exec api alembic upgrade head`
+
+`pytest` works from the repository root and from `apps/api`; `pytest.ini` at the
+root is the single config for both. Tests need postgres and redis running, and
+use a separate `norma_test` database plus redis index 15, never the dev data.
+
+Alembic runs inside the container because `DATABASE_URL` uses the Compose service
+name, which does not resolve from the host.
+
+### Frontend (`apps/web`)
 
 - Dev server: `npm run dev` (http://localhost:3000)
 - Build: `npm run build`
 - Production server: `npm run start`
 - Lint: `npm run lint`
 
-Testing is opt-in. If this project does not already have a unit test runner, run
-`/tests` or `$tests` to add one and update this section with the real test
-commands.
+Adding a new route directory does not always reach the dev server through a
+Docker bind mount on Windows. Restart `norma-web` if a new page 404s.
+
+### Verify
+
+No single `Verify` command is configured yet. Until `/ci` defines one, the
+automated gate is `pytest` for backend work and `npm run build` for frontend
+work.
