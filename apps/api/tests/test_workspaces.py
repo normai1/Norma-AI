@@ -242,6 +242,53 @@ async def test_get_succeeds_for_an_explicit_member(
     assert response.json()["id"] == created["id"]
 
 
+async def test_member_access_to_one_workspace_does_not_reach_a_sibling(
+    client: AsyncClient,
+    db: AsyncSession,
+) -> None:
+    organization_id, owner_headers, member_headers = await _org_with_member(
+        client,
+        "ws-sibling-member",
+        "member",
+    )
+    granted = await _create_workspace(
+        client,
+        organization_id,
+        owner_headers,
+        "Granted",
+    )
+    sibling = await _create_workspace(
+        client,
+        organization_id,
+        owner_headers,
+        "Sibling",
+    )
+
+    member = await db.scalar(
+        select(User).where(User.email == "ws-sibling-member-member@example.com"),
+    )
+    db.add(WorkspaceMember(workspace_id=granted["id"], user_id=member.id))
+    await db.flush()
+    await db.commit()
+
+    reachable = await client.get(
+        f"{_workspaces_url(organization_id)}/{granted['id']}",
+        headers=member_headers,
+    )
+    unreachable = await client.get(
+        f"{_workspaces_url(organization_id)}/{sibling['id']}",
+        headers=member_headers,
+    )
+    listed = await client.get(_workspaces_url(organization_id), headers=member_headers)
+
+    assert reachable.status_code == 200
+    assert unreachable.status_code == 404
+
+    listed_ids = {workspace["id"] for workspace in listed.json()}
+
+    assert listed_ids == {granted["id"]}
+
+
 async def test_get_succeeds_for_an_admin_without_explicit_membership(
     client: AsyncClient,
 ) -> None:

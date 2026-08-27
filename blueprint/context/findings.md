@@ -72,7 +72,7 @@ and add a smoke test for `/health` at the same time. Not worth standing up a
 whole test suite for one static endpoint in isolation before then.
 **Resolution:**
 
-### F-29 [P2] fixed - Workspace `settings` update has zero test coverage
+### F-29 [P2] closed - Workspace `settings` update has zero test coverage
 
 **File:** apps/api/tests/test_workspaces.py
 **Found:** 2026-08-27 by /audit (scope: current; lens: tests)
@@ -86,10 +86,11 @@ so this is a coverage gap rather than a suspected bug - hence P2, not P1.
 **Suggested fix:** Add a test that PATCHes `settings` on a workspace and asserts it persists,
 and (mirroring the organization test) a test proving a name-only update leaves `settings`
 untouched, and a settings-only update leaves `name` untouched.
-**Resolution:** Fixed. Added `test_update_settings_without_touching_name` and
-`test_update_name_without_touching_settings` to `test_workspaces.py`, mirroring
-`test_organization_members.py`'s coverage of the identical pattern. Not yet re-reviewed by
-`/audit`, so this stays `fixed` rather than `closed` per the ledger's own rule.
+**Resolution:** Fixed, then re-reviewed 2026-08-27 (scope: apps/api item-6 files; lens: tests).
+`test_update_settings_without_touching_name` and `test_update_name_without_touching_settings`
+in `test_workspaces.py` both pass, correctly assert `settings` persists on a settings-only PATCH
+and stays untouched on a name-only PATCH (and vice versa) - the exact partial-update semantic
+`workspace_repo.update` implements. No new defect introduced. Closed.
 
 ### F-30 [P3] open - "Workspace not found" is defined twice, byte-identical in message and status
 
@@ -106,3 +107,26 @@ code this time.
 instead of redefining an identical constant, or hoist a single shared constant both
 modules import. Small, low-risk, not urgent.
 **Resolution:**
+
+### F-31 [P2] fixed - No test proves a WorkspaceMember grant to one workspace doesn't leak access to a sibling workspace
+
+**File:** apps/api/tests/test_workspaces.py
+**Found:** 2026-08-27 by /audit (scope: apps/api item-6 files; lens: tests)
+**Why it matters:** `require_workspace_access` and `workspace_repo.list_for_user` both scope
+the `WorkspaceMember` check to the exact `workspace_id` in play (`WHERE workspace_id = :id AND
+user_id = :id`), so a member granted access to workspace A should not be able to `GET` or see
+in the list a sibling workspace B in the same organization. The query logic is correct on
+inspection, but nothing tests it: the existing coverage only proves "zero memberships -> empty
+list / 404" and "the one membership that matches -> access granted," never "a membership that
+exists but doesn't match." This is exactly the kind of tenant/resource-boundary case this
+project otherwise tests explicitly (see `test_tenant_isolation.py` for the equivalent at the
+organization level). Not a proven bug - hence P2, not P1.
+**Suggested fix:** Add a test that inserts a `WorkspaceMember` row for workspace A (same
+technique F-29's sibling tests and the existing `test_get_succeeds_for_an_explicit_member`
+already use, since 6a has no member-add endpoint yet) and asserts that member gets 404 on
+`GET` for workspace B, and that workspace B does not appear in their `list` results.
+**Resolution:** Fixed. Added `test_member_access_to_one_workspace_does_not_reach_a_sibling` to
+`test_workspaces.py`, verified it actually catches the regression by temporarily dropping the
+`workspace_id` filter in `workspace_member_repo.get` (the test failed as expected: 200 instead
+of 404), then reverted that change cleanly. Not yet re-reviewed by `/audit`, so this stays
+`fixed` rather than `closed`.
