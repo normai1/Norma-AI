@@ -1,9 +1,9 @@
 "use client";
 
 import Link from "next/link";
-import { useRouter } from "next/navigation";
-import { useCallback, useEffect, useState, type FormEvent } from "react";
+import { useState, type FormEvent } from "react";
 
+import { useTenant } from "@/components/app/tenant-provider";
 import {
   Button,
   Card,
@@ -12,49 +12,14 @@ import {
   PageShell,
   RoleBadge,
 } from "@/components/organizations/ui";
-import { fetchCurrentUser } from "@/lib/auth";
-import {
-  createOrganization,
-  listOrganizations,
-  type Organization,
-} from "@/lib/organizations";
+import { createOrganization } from "@/lib/organizations";
 
 export default function OrganizationsPage() {
-  const router = useRouter();
+  const { status, error, organizations, refresh } = useTenant();
 
-  const [organizations, setOrganizations] = useState<Organization[] | null>(
-    null,
-  );
-  const [error, setError] = useState<string | null>(null);
   const [name, setName] = useState("");
   const [creating, setCreating] = useState(false);
   const [formError, setFormError] = useState<string | null>(null);
-
-  const load = useCallback(async () => {
-    try {
-      setOrganizations(await listOrganizations());
-    } catch (err) {
-      setError(
-        err instanceof Error ? err.message : "Could not load organizations.",
-      );
-    }
-  }, []);
-
-  useEffect(() => {
-    async function init() {
-      const user = await fetchCurrentUser();
-
-      if (!user) {
-        router.replace("/login");
-
-        return;
-      }
-
-      await load();
-    }
-
-    init();
-  }, [load, router]);
 
   async function handleCreate(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -66,7 +31,7 @@ export default function OrganizationsPage() {
       await createOrganization(name);
 
       setName("");
-      await load();
+      await refresh();
     } catch (err) {
       setFormError(
         err instanceof Error ? err.message : "Could not create organization.",
@@ -106,17 +71,19 @@ export default function OrganizationsPage() {
       </Card>
 
       <div className="mt-8">
-        {error && <ErrorText message={error} />}
+        {status === "error" && (
+          <ErrorText message={error ?? "Could not load organizations."} />
+        )}
 
-        {!error && organizations === null && (
+        {status === "loading" && (
           <p className="text-slate-400">Loading organizations...</p>
         )}
 
-        {!error && organizations?.length === 0 && (
+        {status === "ready" && organizations.length === 0 && (
           <EmptyState message="You do not belong to any organization yet. Create one above to get started." />
         )}
 
-        {organizations && organizations.length > 0 && (
+        {status === "ready" && organizations.length > 0 && (
           <ul className="space-y-3">
             {organizations.map((organization) => (
               <li key={organization.id}>

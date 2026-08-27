@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { useParams, useRouter } from "next/navigation";
+import { useParams } from "next/navigation";
 import { useCallback, useEffect, useState, type FormEvent } from "react";
 
 import {
@@ -13,7 +13,6 @@ import {
   RoleBadge,
   StatusBadge,
 } from "@/components/organizations/ui";
-import { fetchCurrentUser } from "@/lib/auth";
 import {
   canManage,
   changeMemberRole,
@@ -38,7 +37,6 @@ const ASSIGNABLE_ROLES: OrganizationRole[] = [
 ];
 
 export default function OrganizationDetailPage() {
-  const router = useRouter();
   const params = useParams<{ organizationId: string }>();
   const organizationId = params.organizationId;
 
@@ -71,20 +69,8 @@ export default function OrganizationDetailPage() {
   }, [organizationId]);
 
   useEffect(() => {
-    async function init() {
-      const user = await fetchCurrentUser();
-
-      if (!user) {
-        router.replace("/login");
-
-        return;
-      }
-
-      await load();
-    }
-
-    init();
-  }, [load, router]);
+    load();
+  }, [load]);
 
   async function run(action: () => Promise<unknown>) {
     setActionError(null);

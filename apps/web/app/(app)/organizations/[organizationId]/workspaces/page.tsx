@@ -1,53 +1,40 @@
 "use client";
 
 import Link from "next/link";
-import { useParams, useRouter } from "next/navigation";
-import { useCallback, useEffect, useState, type FormEvent } from "react";
+import { useParams } from "next/navigation";
+import { useEffect, useState, type FormEvent } from "react";
 
+import { useTenant } from "@/components/app/tenant-provider";
 import { Button, Card, EmptyState, ErrorText, PageShell } from "@/components/organizations/ui";
-import { fetchCurrentUser } from "@/lib/auth";
-import { canManage, getOrganization, type Organization } from "@/lib/organizations";
-import { createWorkspace, listWorkspaces, type Workspace } from "@/lib/workspaces";
+import { canManage } from "@/lib/organizations";
+import { createWorkspace } from "@/lib/workspaces";
 
 export default function WorkspacesPage() {
-  const router = useRouter();
   const params = useParams<{ organizationId: string }>();
   const organizationId = params.organizationId;
 
-  const [organization, setOrganization] = useState<Organization | null>(null);
-  const [workspaces, setWorkspaces] = useState<Workspace[] | null>(null);
-  const [error, setError] = useState<string | null>(null);
+  const {
+    status,
+    error,
+    activeOrganization,
+    setActiveOrganization,
+    workspaces,
+    refresh,
+  } = useTenant();
+
+  useEffect(() => {
+    // Skip while the provider's own initial resolution is still in flight -
+    // `activeOrganization` starts null before that settles, which would
+    // otherwise read as "wrong org" and fire a redundant, racing fetch
+    // alongside the provider's own.
+    if (status !== "loading" && activeOrganization?.id !== organizationId) {
+      setActiveOrganization(organizationId);
+    }
+  }, [status, organizationId, activeOrganization, setActiveOrganization]);
 
   const [name, setName] = useState("");
   const [creating, setCreating] = useState(false);
   const [formError, setFormError] = useState<string | null>(null);
-
-  const load = useCallback(async () => {
-    try {
-      setOrganization(await getOrganization(organizationId));
-      setWorkspaces(await listWorkspaces(organizationId));
-    } catch (err) {
-      setError(
-        err instanceof Error ? err.message : "Could not load workspaces.",
-      );
-    }
-  }, [organizationId]);
-
-  useEffect(() => {
-    async function init() {
-      const user = await fetchCurrentUser();
-
-      if (!user) {
-        router.replace("/login");
-
-        return;
-      }
-
-      await load();
-    }
-
-    init();
-  }, [load, router]);
 
   async function handleCreate(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -59,7 +46,7 @@ export default function WorkspacesPage() {
       await createWorkspace(organizationId, name);
 
       setName("");
-      await load();
+      await refresh();
     } catch (err) {
       setFormError(
         err instanceof Error ? err.message : "Could not create workspace.",
@@ -69,10 +56,10 @@ export default function WorkspacesPage() {
     }
   }
 
-  if (error) {
+  if (status === "error") {
     return (
       <PageShell title="Workspaces">
-        <ErrorText message={error} />
+        <ErrorText message={error ?? "Could not load workspaces."} />
 
         <p className="mt-6">
           <Link
@@ -86,7 +73,11 @@ export default function WorkspacesPage() {
     );
   }
 
-  if (!organization || !workspaces) {
+  if (
+    status === "loading" ||
+    !activeOrganization ||
+    activeOrganization.id !== organizationId
+  ) {
     return (
       <PageShell title="Workspaces">
         <p className="text-slate-400">Loading...</p>
@@ -94,11 +85,11 @@ export default function WorkspacesPage() {
     );
   }
 
-  const manages = canManage(organization.role);
+  const manages = canManage(activeOrganization.role);
 
   return (
     <PageShell
-      title={`${organization.name} workspaces`}
+      title={`${activeOrganization.name} workspaces`}
       description="Locations, teams, or departments within this organization."
       action={
         <Link href={`/organizations/${organizationId}`}>

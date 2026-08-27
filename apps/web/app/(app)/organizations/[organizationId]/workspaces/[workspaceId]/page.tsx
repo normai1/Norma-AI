@@ -1,11 +1,10 @@
 "use client";
 
 import Link from "next/link";
-import { useParams, useRouter } from "next/navigation";
+import { useParams } from "next/navigation";
 import { useCallback, useEffect, useState, type FormEvent } from "react";
 
 import { Button, Card, EmptyState, ErrorText, PageShell } from "@/components/organizations/ui";
-import { fetchCurrentUser } from "@/lib/auth";
 import {
   canManage,
   getOrganization,
@@ -23,7 +22,6 @@ import {
 } from "@/lib/workspaces";
 
 export default function WorkspaceMembersPage() {
-  const router = useRouter();
   const params = useParams<{ organizationId: string; workspaceId: string }>();
   const { organizationId, workspaceId } = params;
 
@@ -56,20 +54,8 @@ export default function WorkspaceMembersPage() {
   }, [organizationId, workspaceId]);
 
   useEffect(() => {
-    async function init() {
-      const user = await fetchCurrentUser();
-
-      if (!user) {
-        router.replace("/login");
-
-        return;
-      }
-
-      await load();
-    }
-
-    init();
-  }, [load, router]);
+    load();
+  }, [load]);
 
   async function run(action: () => Promise<unknown>) {
     setActionError(null);

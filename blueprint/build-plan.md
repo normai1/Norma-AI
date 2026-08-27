@@ -28,6 +28,9 @@
   - [x] 6b. **Workspace membership management** - add/remove/list organization members on a workspace, backend only
   - [x] 6c. **Workspace switching UI** - workspace list/switcher, create-workspace form, and a member management screen
 - [ ] 7. **Core application shell** - authenticated layout, navigation, organization and workspace switching, and global loading/empty/error states
+  - [x] 7a. **Session and tenant context** - a session provider that resolves the signed-in user once, an active organization/workspace context persisted and validated against real membership, and an authenticated route group whose layout guards every page inside it
+  - [ ] 7b. **Application shell and navigation** - sidebar navigation showing only built features, a top bar with the organization and workspace switchers and a user menu with sign-out, and the existing organization/workspace pages moved onto the shell
+  - [ ] 7c. **Overview home and global states** - the `/overview` authenticated landing page, shared loading/empty/error primitives with a route error boundary applied shell-wide, and post-authentication redirect wiring
 - [ ] 8. **User and organization settings** - profile and password management, and validated organization/workspace settings (timezone, locale, business hours, currency) in place of an unvalidated JSON blob
 
 ### Assistant configuration
