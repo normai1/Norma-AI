@@ -9,6 +9,7 @@ import {
   Card,
   EmptyState,
   ErrorText,
+  LoadingState,
   PageShell,
   RoleBadge,
   StatusBadge,
@@ -127,7 +128,7 @@ export default function OrganizationDetailPage() {
   if (!organization) {
     return (
       <PageShell title="Organization">
-        <p className="text-slate-400">Loading...</p>
+        <LoadingState />
       </PageShell>
     );
   }

@@ -6,6 +6,7 @@ import { useEffect, type ReactNode } from "react";
 import { AppShell } from "@/components/app/app-shell";
 import { SessionProvider, useSession } from "@/components/app/session-provider";
 import { TenantProvider } from "@/components/app/tenant-provider";
+import { LoadingState } from "@/components/organizations/ui";
 
 function AuthGuard({ children }: { children: ReactNode }) {
   const router = useRouter();
@@ -20,7 +21,9 @@ function AuthGuard({ children }: { children: ReactNode }) {
   if (status === "loading") {
     return (
       <main className="min-h-screen bg-slate-950 text-white">
-        <p className="p-12 text-slate-400">Loading...</p>
+        <div className="p-12">
+          <LoadingState />
+        </div>
       </main>
     );
   }

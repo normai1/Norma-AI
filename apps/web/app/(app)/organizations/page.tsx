@@ -9,6 +9,7 @@ import {
   Card,
   EmptyState,
   ErrorText,
+  LoadingState,
   PageShell,
   RoleBadge,
 } from "@/components/organizations/ui";
@@ -75,9 +76,7 @@ export default function OrganizationsPage() {
           <ErrorText message={error ?? "Could not load organizations."} />
         )}
 
-        {status === "loading" && (
-          <p className="text-slate-400">Loading organizations...</p>
-        )}
+        {status === "loading" && <LoadingState message="Loading organizations..." />}
 
         {status === "ready" && organizations.length === 0 && (
           <EmptyState message="You do not belong to any organization yet. Create one above to get started." />

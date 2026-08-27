@@ -4,7 +4,14 @@ import Link from "next/link";
 import { useParams } from "next/navigation";
 import { useCallback, useEffect, useState, type FormEvent } from "react";
 
-import { Button, Card, EmptyState, ErrorText, PageShell } from "@/components/organizations/ui";
+import {
+  Button,
+  Card,
+  EmptyState,
+  ErrorText,
+  LoadingState,
+  PageShell,
+} from "@/components/organizations/ui";
 import {
   canManage,
   getOrganization,
@@ -110,7 +117,7 @@ export default function WorkspaceMembersPage() {
   if (!organization || !workspace) {
     return (
       <PageShell title="Workspace">
-        <p className="text-slate-400">Loading...</p>
+        <LoadingState />
       </PageShell>
     );
   }

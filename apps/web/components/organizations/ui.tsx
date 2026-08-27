@@ -40,6 +40,19 @@ export function Card({ children }: { children: ReactNode }) {
   );
 }
 
+export function LoadingState({ message = "Loading..." }: { message?: string }) {
+  return (
+    <div className="flex items-center gap-3 py-10 text-slate-400">
+      <span
+        aria-hidden="true"
+        className="h-4 w-4 animate-spin rounded-full border-2 border-slate-700 border-t-slate-400"
+      />
+
+      <p>{message}</p>
+    </div>
+  );
+}
+
 export function EmptyState({ message }: { message: string }) {
   return (
     <p className="rounded-2xl border border-dashed border-slate-800 px-6 py-10 text-center text-slate-400">

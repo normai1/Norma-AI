@@ -40,7 +40,7 @@ export default function RegisterPage() {
     try {
       await register({ email, password, fullName });
 
-      router.push("/");
+      router.push("/overview");
       router.refresh();
     } catch (err) {
       setError(

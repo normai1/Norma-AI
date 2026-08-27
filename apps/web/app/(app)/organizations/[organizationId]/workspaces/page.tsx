@@ -5,7 +5,14 @@ import { useParams } from "next/navigation";
 import { useEffect, useState, type FormEvent } from "react";
 
 import { useTenant } from "@/components/app/tenant-provider";
-import { Button, Card, EmptyState, ErrorText, PageShell } from "@/components/organizations/ui";
+import {
+  Button,
+  Card,
+  EmptyState,
+  ErrorText,
+  LoadingState,
+  PageShell,
+} from "@/components/organizations/ui";
 import { canManage } from "@/lib/organizations";
 import { createWorkspace } from "@/lib/workspaces";
 
@@ -80,7 +87,7 @@ export default function WorkspacesPage() {
   ) {
     return (
       <PageShell title="Workspaces">
-        <p className="text-slate-400">Loading...</p>
+        <LoadingState />
       </PageShell>
     );
   }

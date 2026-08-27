@@ -98,10 +98,10 @@ export default function Home() {
                   </span>
 
                   <Link
-                    href="/organizations"
+                    href="/overview"
                     className="rounded-lg border border-slate-700 px-4 py-2 text-sm font-medium text-white transition hover:bg-slate-900"
                   >
-                    Organizations
+                    Go to app
                   </Link>
 
                   <button
