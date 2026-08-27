@@ -25,7 +25,7 @@ possibly-tainted connection is disposed with it rather than pooled. Do not chang
 anything now; there is no failure to chase.
 **Resolution:**
 
-### F-27 [P3] open - `_signed_in` is duplicated across five test files, byte-identical
+### F-27 [P3] fixed - `_signed_in` is duplicated across five test files, byte-identical
 
 **File:** apps/api/tests/test_permission_enforcement.py:20
 **Found:** 2026-08-26 by /audit (scope: current; lens: quality)
@@ -44,4 +44,13 @@ differently-named "create an org and add a member" helpers
 (`_org_with_role`, `_org_with_owner`, `_org_with_second_member`) are a related,
 looser instance of the same pattern - worth a look in the same pass, though their
 differing return shapes mean the fix isn't as mechanical.
-**Resolution:**
+**Resolution:** Fixed in feature 4a, Step 1. `_signed_in` and the two byte-identical
+`_org_with_owner` copies (`test_invitations.py`, `test_organization_members.py`)
+moved into `tests/conftest.py`; all five `_signed_in` sites and both
+`_org_with_owner` sites now import the shared version. `_org_with_role`
+(`test_permission_enforcement.py`) and `_org_with_second_member`
+(`test_organization_authorization.py`) were deliberately left in place - their
+differing return shapes (2-tuple vs. 4-tuple) mean a forced merge risks a subtle
+bug in two already-correct files for a P3 finding's marginal benefit. The
+unrelated DB-level `_org_with_owner` in `test_organization_concurrency.py` was
+also left alone; it builds fixtures directly, not through the API.

@@ -146,6 +146,8 @@ name, which does not resolve from the host.
 - Build: `npm run build`
 - Production server: `npm run start`
 - Lint: `npm run lint`
+- Test: `npm run test` (Vitest + React Testing Library)
+- Test (E2E): `npx playwright test` - needs the dev server running at `localhost:3000`
 
 Adding a new route directory does not always reach the dev server through a
 Docker bind mount on Windows. Restart `norma-web` if a new page 404s.
@@ -153,5 +155,5 @@ Docker bind mount on Windows. Restart `norma-web` if a new page 404s.
 ### Verify
 
 No single `Verify` command is configured yet. Until `/ci` defines one, the
-automated gate is `pytest` for backend work and `npm run build` for frontend
-work.
+automated gate is `pytest` for backend work, and `npm run test` plus
+`npm run build` for frontend work.

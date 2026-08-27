@@ -8,18 +8,11 @@ These tests pin every step of that sequence shut.
 
 from httpx import AsyncClient
 
+from tests.conftest import _signed_in
+
 REGISTER = "/api/v1/auth/register"
 ORGS = "/api/v1/organizations"
 ACCEPT = "/api/v1/invitations/accept"
-
-
-async def _signed_in(client: AsyncClient, email: str) -> dict[str, str]:
-    response = await client.post(
-        REGISTER,
-        json={"email": email, "password": "a-strong-password"},
-    )
-
-    return {"Authorization": f"Bearer {response.json()['access_token']}"}
 
 
 async def _org_with_second_member(

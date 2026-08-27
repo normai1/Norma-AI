@@ -17,6 +17,9 @@ from app.core.redis import get_redis
 from app.db.base import Base
 from app.main import app
 
+_REGISTER = "/api/v1/auth/register"
+_ORGANIZATIONS = "/api/v1/organizations"
+
 
 def _resolve_test_database_url() -> str:
     """
@@ -164,3 +167,33 @@ async def client(
         yield http_client
 
     app.dependency_overrides.clear()
+
+
+async def _signed_in(client: AsyncClient, email: str) -> dict[str, str]:
+    """
+    Register a user and return an Authorization header for them.
+    """
+
+    response = await client.post(
+        _REGISTER,
+        json={"email": email, "password": "a-strong-password"},
+    )
+
+    return {"Authorization": f"Bearer {response.json()['access_token']}"}
+
+
+async def _org_with_owner(
+    client: AsyncClient,
+    email: str,
+    name: str = "Test Org",
+) -> tuple[dict[str, str], str]:
+    """
+    Register a user and create an organization they own.
+
+    Returns the owner's auth headers and the organization id.
+    """
+
+    headers = await _signed_in(client, email)
+    created = await client.post(_ORGANIZATIONS, json={"name": name}, headers=headers)
+
+    return headers, created.json()["id"]

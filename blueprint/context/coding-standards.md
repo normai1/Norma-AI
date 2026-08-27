@@ -84,12 +84,12 @@
 
 ## Testing
 
-The blueprint installs no test runner; testing is opt-in at the project level,
-because the overlay can't know your stack. Adding unit testing is an explicit
-setup task the AI can do through the normal workflow, either as a build-plan item
-or with `/tests`. The setup should choose the stack-native runner, wire the
-scripts or commands, add a small example test, and update the Commands section
-of `AGENTS.md`.
+The backend test runner is already configured and running: **pytest** is the
+declared `test` command in the Commands section of `AGENTS.md`, so the gate
+below is live for every backend build step, not a future setup task. Frontend
+testing is not yet configured - feature 4b (Automated testing foundation) adds
+Vitest, React Testing Library, and Playwright; until it lands, frontend steps
+ride on screenshot plus build evidence per Browser Verification below.
 
 When `AGENTS.md` declares a `Verify` command, treat it as the umbrella automated
 gate. It combines only the checks this project actually has, in this order when
@@ -121,13 +121,40 @@ of the switch; the skills and `ai-interaction.md` only point back here.
   `/implement` writes the test with the step, and if a step surfaces logic the spec
   didn't foresee, add a focused test then.
 - An empty suite should fail, not pass, so "no tests ran" never looks like "passed".
-- Test files live next to source files (for example `feature.test.ts`).
+- Backend test files live in `apps/api/tests/`, one file per resource or concern
+  (`test_organizations.py`, `test_invitations.py`, ...) - not co-located with
+  the source they cover. This is the established Python/pytest convention here,
+  unlike the co-located `feature.test.ts` pattern a TypeScript/Vitest setup uses.
 - Run them via the project's test command (see Commands in `AGENTS.md`), not a
   hardcoded tool name.
 
-Stack binding (swap for yours): a TypeScript app uses Vitest, `vi.mock()` for
-external dependencies (Prisma, Clerk, etc.), and `vi.useFakeTimers()` for
-time-dependent logic; a Python app would use pytest; a Go app `go test`.
+### Backend conventions (pytest)
+
+- Root `pytest.ini` is the single config, so `pytest` works from the repository
+  root or from `apps/api` (`testpaths = apps/api/tests`, `pythonpath = apps/api`).
+- `apps/api/tests/conftest.py` provides `engine` (session-scoped, creates and
+  drops the test schema once), `connection` and `db` (per-test, wrapped in a
+  transaction that always rolls back), `redis_client` (a throwaway Redis index,
+  flushed before and after each test), and `client` (an `httpx.AsyncClient`
+  bound to the app with `get_db`/`get_redis` overridden to the test fixtures).
+- Tests run against a separate `TEST_DATABASE_URL`/`TEST_REDIS_URL`, never the
+  dev database or Redis index - the fixtures refuse to start if either matches
+  the non-test setting.
+- Shared test helpers (`_signed_in`, `_org_with_owner`) live in `conftest.py`
+  and are imported with `from tests.conftest import ...`. Don't redefine a
+  byte-identical helper in a new test file; import the shared one, or extend it
+  if the new file's need is a genuine variant.
+- **Provider mocks ship with the provider, not before.** Every future provider
+  abstraction (`SpeechToTextProvider`, `TextToSpeechProvider`, `LLMProvider`,
+  `TelephonyProvider` - items 9, 18, 23) must add its deterministic `Mock*`
+  implementation in the same diff that introduces the real one, matching the
+  already-decided `MockEmbeddingProvider` precedent. Never invent a mock for a
+  provider that doesn't exist yet, and never let a feature's tests depend on a
+  live, paid, or rate-limited external API.
+
+Stack binding for the future TypeScript/Vitest setup (feature 4b): `vi.mock()`
+for external dependencies, `vi.useFakeTimers()` for time-dependent logic, and
+co-located `feature.test.ts` files - update this note once that feature lands.
 
 ## Browser Verification
 
