@@ -3,6 +3,7 @@
 import { useRouter } from "next/navigation";
 import { useEffect, type ReactNode } from "react";
 
+import { AppShell } from "@/components/app/app-shell";
 import { SessionProvider, useSession } from "@/components/app/session-provider";
 import { TenantProvider } from "@/components/app/tenant-provider";
 
@@ -28,7 +29,11 @@ function AuthGuard({ children }: { children: ReactNode }) {
     return null;
   }
 
-  return <TenantProvider>{children}</TenantProvider>;
+  return (
+    <TenantProvider>
+      <AppShell>{children}</AppShell>
+    </TenantProvider>
+  );
 }
 
 export default function AppLayout({ children }: { children: ReactNode }) {

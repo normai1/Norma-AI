@@ -14,23 +14,21 @@ export function PageShell({
   children: ReactNode;
 }) {
   return (
-    <main className="min-h-screen bg-slate-950 text-white">
-      <div className="mx-auto max-w-4xl px-6 py-12">
-        <div className="mb-8 flex flex-wrap items-start justify-between gap-4">
-          <div>
-            <h1 className="text-3xl font-bold tracking-tight">{title}</h1>
+    <div className="mx-auto max-w-4xl px-6 py-12">
+      <div className="mb-8 flex flex-wrap items-start justify-between gap-4">
+        <div>
+          <h1 className="text-3xl font-bold tracking-tight">{title}</h1>
 
-            {description && (
-              <p className="mt-2 text-slate-400">{description}</p>
-            )}
-          </div>
-
-          {action}
+          {description && (
+            <p className="mt-2 text-slate-400">{description}</p>
+          )}
         </div>
 
-        {children}
+        {action}
       </div>
-    </main>
+
+      {children}
+    </div>
   );
 }
 
