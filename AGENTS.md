@@ -119,13 +119,29 @@ Norma AI is a monorepo: a FastAPI backend in `apps/api` and a Next.js frontend i
 
 ### Whole stack
 
-- Start: `docker compose up -d` (web 3000, api 8000, postgres 5432, redis 6379)
+- Start: `docker compose up -d` (web 3000, api 8000, voice 8080, postgres 5432, redis 6379)
 - Logs: `docker compose logs -f api`
 - Rebuild after a dependency change: `docker compose build api && docker compose up -d api`
 
 A dependency added to `apps/api/requirements.txt` does not reach the running
 container until it is rebuilt. The API will crash-loop on the missing import
 until then.
+
+### Public tunnel (telephony webhooks)
+
+Inbound telephony webhooks and media streams cannot reach a local machine
+directly, so development needs a public tunnel once a telephony provider is
+configured:
+
+1. Install a tunnel tool - [ngrok](https://ngrok.com) or an equivalent.
+2. Run it against the API: `ngrok http 8000`.
+3. Copy the forwarding URL into your own `.env` (never commit it - `.gitignore`
+   already excludes `.env`), and configure it with the telephony provider once
+   one is wired up.
+
+No telephony provider exists in this repository yet (that's items 23+), so
+there is nothing to point a tunnel at today. The in-browser test call (item 21)
+works without a tunnel and is the default local development loop until then.
 
 ### Backend (`apps/api`)
 
@@ -139,6 +155,23 @@ use a separate `norma_test` database plus redis index 15, never the dev data.
 
 Alembic runs inside the container because `DATABASE_URL` uses the Compose service
 name, which does not resolve from the host.
+
+### Media plane (`apps/voice`)
+
+- Logs: `docker compose logs -f voice`
+- Health: `curl http://localhost:8080/health`
+
+No standalone local dev command yet - it only runs via `docker compose up`. This
+is a minimal skeleton (build-plan item 5); the real session-handling logic is
+item 20.
+
+### Background jobs (`apps/worker`)
+
+- Logs: `docker compose logs -f worker`
+
+A minimal skeleton (build-plan item 5) that only proves it can start and reach
+Redis - no job queue library is chosen yet. Real job processing lands with
+whichever feature first needs one.
 
 ### Frontend (`apps/web`)
 

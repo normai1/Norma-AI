@@ -54,3 +54,20 @@ differing return shapes (2-tuple vs. 4-tuple) mean a forced merge risks a subtle
 bug in two already-correct files for a P3 finding's marginal benefit. The
 unrelated DB-level `_org_with_owner` in `test_organization_concurrency.py` was
 also left alone; it builds fixtures directly, not through the API.
+
+### F-28 [P3] open - `apps/voice`'s new health endpoint has no test, unlike every other health endpoint in the repo
+
+**File:** apps/voice/app/main.py:11
+**Found:** 2026-08-27 by /audit (scope: current; lens: tests)
+**Why it matters:** `apps/api`'s health endpoints (`test_health.py::test_root`,
+`::test_health`) are just as trivial - static status checks with no real logic -
+and both still get a basic smoke test. `apps/voice`'s new `GET /health` is the
+same kind of endpoint but has no test at all, and `apps/voice` has no test
+infrastructure yet (no `pytest`/`httpx` in its `requirements.txt`, no `tests/`
+directory). Low risk today since the response is hardcoded, not computed, but
+it's a real drift from an established repo-wide pattern.
+**Suggested fix:** When `apps/voice` gets its first piece of real logic (most
+likely item 20), set up `pytest` + `httpx` for it the same way `apps/api` did
+and add a smoke test for `/health` at the same time. Not worth standing up a
+whole test suite for one static endpoint in isolation before then.
+**Resolution:**

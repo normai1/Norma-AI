@@ -22,7 +22,7 @@
 - [x] 4. **Automated testing foundation** - establish backend pytest patterns, tenant-isolation regression tests, deterministic provider mocks, and frontend Vitest/React Testing Library plus Playwright scaffolding, before the feature surface grows
   - [x] 4a. **Backend test foundation** - a consolidated cross-organization tenant-isolation regression suite covering every existing org-scoped endpoint, plus tuning `coding-standards.md`'s Testing section to describe this project's actual pytest conventions and provider-mock pattern
   - [x] 4b. **Frontend test tooling** - install and wire Vitest, React Testing Library, and Playwright, turn on the frontend test gate in `AGENTS.md`, and ship one example unit test and one example E2E test
-- [ ] 5. **Dockerized development environment** - run the full stack with Docker Compose including the media-plane and background-worker services, and document the public-tunnel setup required for telephony webhooks
+- [x] 5. **Dockerized development environment** - run the full stack with Docker Compose including the media-plane and background-worker services, and document the public-tunnel setup required for telephony webhooks
 - [ ] 6. **Workspaces** - Workspace and WorkspaceMember tables, workspace-scoped authorization, and the scoping dependency that assistants, numbers, calls, and contacts all depend on
 - [ ] 7. **Core application shell** - authenticated layout, navigation, organization and workspace switching, and global loading/empty/error states
 - [ ] 8. **User and organization settings** - profile and password management, and validated organization/workspace settings (timezone, locale, business hours, currency) in place of an unvalidated JSON blob
