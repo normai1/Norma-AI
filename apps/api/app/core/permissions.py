@@ -11,6 +11,7 @@ MANAGE_ORGANIZATION = "organization:manage"
 MANAGE_MEMBERS = "members:manage"
 CREATE_INVITATIONS = "invitations:create"
 REVOKE_INVITATIONS = "invitations:revoke"
+MANAGE_WORKSPACES = "workspaces:manage"
 
 # Owner and admin get identical grants today - this is byte-for-byte what the
 # OrgAdmin role list it replaces already allowed. Member and viewer get none.
@@ -20,6 +21,7 @@ _ELEVATED = frozenset(
         MANAGE_MEMBERS,
         CREATE_INVITATIONS,
         REVOKE_INVITATIONS,
+        MANAGE_WORKSPACES,
     }
 )
 

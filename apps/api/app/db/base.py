@@ -12,6 +12,8 @@ from app.models.organization import Organization
 from app.models.organization_member import OrganizationMember
 from app.models.session import UserSession
 from app.models.user import User
+from app.models.workspace import Workspace
+from app.models.workspace_member import WorkspaceMember
 
 __all__ = [
     "Base",
@@ -20,4 +22,6 @@ __all__ = [
     "OrganizationMember",
     "User",
     "UserSession",
+    "Workspace",
+    "WorkspaceMember",
 ]

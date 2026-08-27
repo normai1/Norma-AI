@@ -71,3 +71,38 @@ likely item 20), set up `pytest` + `httpx` for it the same way `apps/api` did
 and add a smoke test for `/health` at the same time. Not worth standing up a
 whole test suite for one static endpoint in isolation before then.
 **Resolution:**
+
+### F-29 [P2] fixed - Workspace `settings` update has zero test coverage
+
+**File:** apps/api/tests/test_workspaces.py
+**Found:** 2026-08-27 by /audit (scope: current; lens: tests)
+**Why it matters:** `WorkspaceUpdate.settings` and `workspace_repo.update`'s partial-update
+handling of it are live, mutable code paths, but no test in `test_workspaces.py` ever sends
+`settings` in a PATCH request. The only reference to `settings` in the whole file is the
+create-test's default-`{}` assertion. The sibling resource, organizations, has direct
+coverage of this exact pattern (`test_organization_members.py::test_update_settings_without_touching_name`).
+The underlying code is a structural copy of `organization_repo.update` (already proven correct),
+so this is a coverage gap rather than a suspected bug - hence P2, not P1.
+**Suggested fix:** Add a test that PATCHes `settings` on a workspace and asserts it persists,
+and (mirroring the organization test) a test proving a name-only update leaves `settings`
+untouched, and a settings-only update leaves `name` untouched.
+**Resolution:** Fixed. Added `test_update_settings_without_touching_name` and
+`test_update_name_without_touching_settings` to `test_workspaces.py`, mirroring
+`test_organization_members.py`'s coverage of the identical pattern. Not yet re-reviewed by
+`/audit`, so this stays `fixed` rather than `closed` per the ledger's own rule.
+
+### F-30 [P3] open - "Workspace not found" is defined twice, byte-identical in message and status
+
+**File:** apps/api/app/api/workspace_deps.py:15
+**Found:** 2026-08-27 by /audit (scope: current; lens: quality)
+**Why it matters:** `workspace_deps.py`'s `_NOT_FOUND` and `workspaces.py`'s
+`_WORKSPACE_NOT_FOUND` are two separate `HTTPException` objects with the identical
+status code and detail message, one raised from the access dependency, the other from
+the service-exception handler in the PATCH route. Not a defect today - both currently
+say the same thing - but they can silently drift if either is edited without the other,
+the same class of duplication F-27 already flagged for test helpers, just in production
+code this time.
+**Suggested fix:** Have `workspaces.py` reuse `workspace_deps.py`'s `_NOT_FOUND` directly
+instead of redefining an identical constant, or hoist a single shared constant both
+modules import. Small, low-risk, not urgent.
+**Resolution:**

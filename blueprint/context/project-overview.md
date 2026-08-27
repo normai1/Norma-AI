@@ -260,10 +260,8 @@ pivot. Do not alter this shape without a real requirement.
 
 - `organization_id` (UUID, FK -> Organization)
 - `name` (text, NOT NULL) - a location, team, brand, or department
-- `timezone` (text, NOT NULL) - drives calling-window and business-hours logic everywhere downstream
-- `locale` (text, NOT NULL)
-- `business_hours` (JSONB) - validated shape defined in feature 8
-- `currency` (text, NOT NULL)
+- `settings` (JSONB, default `{}`) - unvalidated for now, matching `Organization.settings`;
+  item 8 gives timezone/locale/business-hours/currency a validated shape here
 - Has many `WorkspaceMember`, and owns every workspace-scoped record (assistants, numbers, contacts, calls)
 
 #### WorkspaceMember

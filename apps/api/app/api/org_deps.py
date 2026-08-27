@@ -9,6 +9,7 @@ from app.core.permissions import (
     CREATE_INVITATIONS,
     MANAGE_MEMBERS,
     MANAGE_ORGANIZATION,
+    MANAGE_WORKSPACES,
     REVOKE_INVITATIONS,
     has_permission,
 )
@@ -90,4 +91,9 @@ CanCreateInvitations = Annotated[
 CanRevokeInvitations = Annotated[
     OrganizationMember,
     Depends(require_permission(REVOKE_INVITATIONS)),
+]
+
+CanManageWorkspaces = Annotated[
+    OrganizationMember,
+    Depends(require_permission(MANAGE_WORKSPACES)),
 ]

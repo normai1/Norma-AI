@@ -95,3 +95,15 @@ class InvitationEmailMismatch(OrganizationError):
     """
     The accepting user's address does not match the invited address.
     """
+
+
+class WorkspaceError(Exception):
+    """
+    Base class for workspace failures.
+    """
+
+
+class WorkspaceNotFound(WorkspaceError):
+    """
+    No such workspace in this organization.
+    """

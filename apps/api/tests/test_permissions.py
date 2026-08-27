@@ -4,6 +4,7 @@ from app.core.permissions import (
     CREATE_INVITATIONS,
     MANAGE_MEMBERS,
     MANAGE_ORGANIZATION,
+    MANAGE_WORKSPACES,
     REVOKE_INVITATIONS,
     has_permission,
 )
@@ -13,6 +14,7 @@ ALL_PERMISSIONS = (
     MANAGE_MEMBERS,
     CREATE_INVITATIONS,
     REVOKE_INVITATIONS,
+    MANAGE_WORKSPACES,
 )
 
 ELEVATED_ROLES = ("owner", "admin")
