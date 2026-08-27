@@ -455,6 +455,342 @@ async def test_update_404s_for_a_workspace_in_another_organization(
     assert response.status_code == 404
 
 
+async def _org_member_id(
+    client: AsyncClient,
+    organization_id: str,
+    owner_headers: dict[str, str],
+    email: str,
+) -> str:
+    roster = await client.get(
+        f"{ORGS}/{organization_id}/members",
+        headers=owner_headers,
+    )
+
+    return next(m["id"] for m in roster.json() if m["user"]["email"] == email)
+
+
+async def test_add_member_succeeds_and_appears_in_list(client: AsyncClient) -> None:
+    organization_id, owner_headers, member_headers = await _org_with_member(
+        client,
+        "ws-add-member",
+        "member",
+    )
+    workspace = await _create_workspace(
+        client,
+        organization_id,
+        owner_headers,
+        "Team Workspace",
+    )
+    member_id = await _org_member_id(
+        client,
+        organization_id,
+        owner_headers,
+        "ws-add-member-member@example.com",
+    )
+
+    response = await client.post(
+        f"{_workspaces_url(organization_id)}/{workspace['id']}/members",
+        json={"member_id": member_id},
+        headers=owner_headers,
+    )
+
+    assert response.status_code == 201
+    assert response.json()["user"]["email"] == "ws-add-member-member@example.com"
+
+    listing = await client.get(
+        f"{_workspaces_url(organization_id)}/{workspace['id']}/members",
+        headers=owner_headers,
+    )
+
+    assert listing.status_code == 200
+    assert len(listing.json()) == 1
+
+    reachable = await client.get(
+        f"{_workspaces_url(organization_id)}/{workspace['id']}",
+        headers=member_headers,
+    )
+
+    assert reachable.status_code == 200
+
+
+async def test_add_member_is_denied_for_a_member(client: AsyncClient) -> None:
+    organization_id, owner_headers, member_headers = await _org_with_member(
+        client,
+        "ws-add-denied",
+        "member",
+    )
+    workspace = await _create_workspace(
+        client,
+        organization_id,
+        owner_headers,
+        "Restricted",
+    )
+    member_id = await _org_member_id(
+        client,
+        organization_id,
+        owner_headers,
+        "ws-add-denied-member@example.com",
+    )
+
+    response = await client.post(
+        f"{_workspaces_url(organization_id)}/{workspace['id']}/members",
+        json={"member_id": member_id},
+        headers=member_headers,
+    )
+
+    assert response.status_code == 403
+
+
+async def test_add_member_404s_for_a_member_from_another_organization(
+    client: AsyncClient,
+) -> None:
+    owner_a_headers, organization_a_id = await _org_with_owner(
+        client,
+        "ws-add-cross-a@example.com",
+    )
+    workspace = await _create_workspace(
+        client,
+        organization_a_id,
+        owner_a_headers,
+        "Org A Workspace",
+    )
+
+    organization_b_id, owner_b_headers, _ = await _org_with_member(
+        client,
+        "ws-add-cross-b",
+        "member",
+    )
+    foreign_member_id = await _org_member_id(
+        client,
+        organization_b_id,
+        owner_b_headers,
+        "ws-add-cross-b-member@example.com",
+    )
+
+    response = await client.post(
+        f"{_workspaces_url(organization_a_id)}/{workspace['id']}/members",
+        json={"member_id": foreign_member_id},
+        headers=owner_a_headers,
+    )
+
+    assert response.status_code == 404
+
+
+async def test_add_member_409s_when_already_granted(client: AsyncClient) -> None:
+    organization_id, owner_headers, _ = await _org_with_member(
+        client,
+        "ws-add-dupe",
+        "member",
+    )
+    workspace = await _create_workspace(
+        client,
+        organization_id,
+        owner_headers,
+        "Dupe Target",
+    )
+    member_id = await _org_member_id(
+        client,
+        organization_id,
+        owner_headers,
+        "ws-add-dupe-member@example.com",
+    )
+
+    first = await client.post(
+        f"{_workspaces_url(organization_id)}/{workspace['id']}/members",
+        json={"member_id": member_id},
+        headers=owner_headers,
+    )
+    second = await client.post(
+        f"{_workspaces_url(organization_id)}/{workspace['id']}/members",
+        json={"member_id": member_id},
+        headers=owner_headers,
+    )
+
+    assert first.status_code == 201
+    assert second.status_code == 409
+
+
+async def test_list_members_is_reachable_by_an_explicit_member(
+    client: AsyncClient,
+) -> None:
+    organization_id, owner_headers, member_headers = await _org_with_member(
+        client,
+        "ws-list-members",
+        "member",
+    )
+    workspace = await _create_workspace(
+        client,
+        organization_id,
+        owner_headers,
+        "Shared",
+    )
+    member_id = await _org_member_id(
+        client,
+        organization_id,
+        owner_headers,
+        "ws-list-members-member@example.com",
+    )
+    await client.post(
+        f"{_workspaces_url(organization_id)}/{workspace['id']}/members",
+        json={"member_id": member_id},
+        headers=owner_headers,
+    )
+
+    response = await client.get(
+        f"{_workspaces_url(organization_id)}/{workspace['id']}/members",
+        headers=member_headers,
+    )
+
+    assert response.status_code == 200
+    assert len(response.json()) == 1
+
+
+async def test_list_members_404s_for_a_workspace_in_another_organization(
+    client: AsyncClient,
+) -> None:
+    owner_a_headers, organization_a_id = await _org_with_owner(
+        client,
+        "ws-list-members-a@example.com",
+    )
+    owner_b_headers, organization_b_id = await _org_with_owner(
+        client,
+        "ws-list-members-b@example.com",
+    )
+    workspace = await _create_workspace(
+        client,
+        organization_b_id,
+        owner_b_headers,
+        "Org B Workspace",
+    )
+
+    response = await client.get(
+        f"{_workspaces_url(organization_a_id)}/{workspace['id']}/members",
+        headers=owner_a_headers,
+    )
+
+    assert response.status_code == 404
+
+
+async def test_remove_member_succeeds_and_revokes_access(client: AsyncClient) -> None:
+    organization_id, owner_headers, member_headers = await _org_with_member(
+        client,
+        "ws-remove-member",
+        "member",
+    )
+    workspace = await _create_workspace(
+        client,
+        organization_id,
+        owner_headers,
+        "Revocable",
+    )
+    member_id = await _org_member_id(
+        client,
+        organization_id,
+        owner_headers,
+        "ws-remove-member-member@example.com",
+    )
+    added = await client.post(
+        f"{_workspaces_url(organization_id)}/{workspace['id']}/members",
+        json={"member_id": member_id},
+        headers=owner_headers,
+    )
+
+    before = await client.get(
+        f"{_workspaces_url(organization_id)}/{workspace['id']}",
+        headers=member_headers,
+    )
+
+    response = await client.delete(
+        f"{_workspaces_url(organization_id)}/{workspace['id']}/members/{added.json()['id']}",
+        headers=owner_headers,
+    )
+
+    after = await client.get(
+        f"{_workspaces_url(organization_id)}/{workspace['id']}",
+        headers=member_headers,
+    )
+    listing = await client.get(
+        f"{_workspaces_url(organization_id)}/{workspace['id']}/members",
+        headers=owner_headers,
+    )
+
+    assert before.status_code == 200
+    assert response.status_code == 204
+    assert after.status_code == 404
+    assert listing.json() == []
+
+
+async def test_remove_member_is_denied_for_a_member(client: AsyncClient) -> None:
+    organization_id, owner_headers, member_headers = await _org_with_member(
+        client,
+        "ws-remove-denied",
+        "member",
+    )
+    workspace = await _create_workspace(
+        client,
+        organization_id,
+        owner_headers,
+        "Protected",
+    )
+    member_id = await _org_member_id(
+        client,
+        organization_id,
+        owner_headers,
+        "ws-remove-denied-member@example.com",
+    )
+    added = await client.post(
+        f"{_workspaces_url(organization_id)}/{workspace['id']}/members",
+        json={"member_id": member_id},
+        headers=owner_headers,
+    )
+
+    response = await client.delete(
+        f"{_workspaces_url(organization_id)}/{workspace['id']}/members/{added.json()['id']}",
+        headers=member_headers,
+    )
+
+    assert response.status_code == 403
+
+
+async def test_remove_member_404s_for_a_membership_in_another_workspace(
+    client: AsyncClient,
+) -> None:
+    owner_headers, organization_id = await _org_with_owner(
+        client,
+        "ws-remove-cross@example.com",
+    )
+    workspace_a = await _create_workspace(
+        client,
+        organization_id,
+        owner_headers,
+        "Workspace A",
+    )
+    workspace_b = await _create_workspace(
+        client,
+        organization_id,
+        owner_headers,
+        "Workspace B",
+    )
+    member_id = await _org_member_id(
+        client,
+        organization_id,
+        owner_headers,
+        "ws-remove-cross@example.com",
+    )
+    added = await client.post(
+        f"{_workspaces_url(organization_id)}/{workspace_a['id']}/members",
+        json={"member_id": member_id},
+        headers=owner_headers,
+    )
+
+    response = await client.delete(
+        f"{_workspaces_url(organization_id)}/{workspace_b['id']}/members/{added.json()['id']}",
+        headers=owner_headers,
+    )
+
+    assert response.status_code == 404
+
+
 async def test_get_rejects_a_malformed_workspace_id(client: AsyncClient) -> None:
     owner_headers, organization_id = await _org_with_owner(
         client,

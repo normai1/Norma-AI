@@ -4,6 +4,8 @@ from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from app.schemas.organization import MemberUserResponse
+
 
 class WorkspaceCreate(BaseModel):
     name: str = Field(min_length=1, max_length=255)
@@ -22,3 +24,14 @@ class WorkspaceResponse(BaseModel):
     name: str
     settings: dict[str, Any]
     created_at: datetime
+
+
+class WorkspaceMemberCreate(BaseModel):
+    member_id: uuid.UUID
+
+
+class WorkspaceMemberResponse(BaseModel):
+    id: uuid.UUID
+    workspace_id: uuid.UUID
+    created_at: datetime
+    user: MemberUserResponse

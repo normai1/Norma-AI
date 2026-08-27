@@ -25,7 +25,8 @@
 - [x] 5. **Dockerized development environment** - run the full stack with Docker Compose including the media-plane and background-worker services, and document the public-tunnel setup required for telephony webhooks
 - [ ] 6. **Workspaces** - Workspace and WorkspaceMember tables, workspace-scoped authorization, and the scoping dependency that assistants, numbers, calls, and contacts all depend on
   - [x] 6a. **Workspace foundation** - Workspace/WorkspaceMember tables, workspace CRUD, and the `require_workspace_access` dependency later features depend on
-  - [ ] 6b. **Workspace membership and switching UI** - add/remove organization members to a workspace, and the workspace list/switcher screen
+  - [x] 6b. **Workspace membership management** - add/remove/list organization members on a workspace, backend only
+  - [ ] 6c. **Workspace switching UI** - workspace list/switcher, create-workspace form, and a member management screen
 - [ ] 7. **Core application shell** - authenticated layout, navigation, organization and workspace switching, and global loading/empty/error states
 - [ ] 8. **User and organization settings** - profile and password management, and validated organization/workspace settings (timezone, locale, business hours, currency) in place of an unvalidated JSON blob
 

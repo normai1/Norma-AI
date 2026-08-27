@@ -25,7 +25,7 @@ possibly-tainted connection is disposed with it rather than pooled. Do not chang
 anything now; there is no failure to chase.
 **Resolution:**
 
-### F-27 [P3] fixed - `_signed_in` is duplicated across five test files, byte-identical
+### F-27 [P3] closed - `_signed_in` is duplicated across five test files, byte-identical
 
 **File:** apps/api/tests/test_permission_enforcement.py:20
 **Found:** 2026-08-26 by /audit (scope: current; lens: quality)
@@ -53,7 +53,10 @@ moved into `tests/conftest.py`; all five `_signed_in` sites and both
 differing return shapes (2-tuple vs. 4-tuple) mean a forced merge risks a subtle
 bug in two already-correct files for a P3 finding's marginal benefit. The
 unrelated DB-level `_org_with_owner` in `test_organization_concurrency.py` was
-also left alone; it builds fixtures directly, not through the API.
+also left alone; it builds fixtures directly, not through the API. Re-reviewed
+2026-08-27 (scope: full; lens: quality): `conftest.py` and the five originally
+affected test files are unchanged since the fix, confirmed zero duplicate
+`_signed_in` definitions outside `conftest.py`. Closed.
 
 ### F-28 [P3] open - `apps/voice`'s new health endpoint has no test, unlike every other health endpoint in the repo
 
@@ -92,7 +95,7 @@ in `test_workspaces.py` both pass, correctly assert `settings` persists on a set
 and stays untouched on a name-only PATCH (and vice versa) - the exact partial-update semantic
 `workspace_repo.update` implements. No new defect introduced. Closed.
 
-### F-30 [P3] open - "Workspace not found" is defined twice, byte-identical in message and status
+### F-30 [P3] fixed - "Workspace not found" is defined twice, byte-identical in message and status
 
 **File:** apps/api/app/api/workspace_deps.py:15
 **Found:** 2026-08-27 by /audit (scope: current; lens: quality)
@@ -106,9 +109,11 @@ code this time.
 **Suggested fix:** Have `workspaces.py` reuse `workspace_deps.py`'s `_NOT_FOUND` directly
 instead of redefining an identical constant, or hoist a single shared constant both
 modules import. Small, low-risk, not urgent.
-**Resolution:**
+**Resolution:** Fixed. `workspaces.py` now imports `_NOT_FOUND as _WORKSPACE_NOT_FOUND` from
+`workspace_deps.py` instead of redefining it; every existing raise site is unchanged. `pytest`
+(207 passed) and `ruff` stayed green with no behavior change. Not yet re-reviewed by `/audit`.
 
-### F-31 [P2] fixed - No test proves a WorkspaceMember grant to one workspace doesn't leak access to a sibling workspace
+### F-31 [P2] closed - No test proves a WorkspaceMember grant to one workspace doesn't leak access to a sibling workspace
 
 **File:** apps/api/tests/test_workspaces.py
 **Found:** 2026-08-27 by /audit (scope: apps/api item-6 files; lens: tests)
@@ -128,5 +133,44 @@ already use, since 6a has no member-add endpoint yet) and asserts that member ge
 **Resolution:** Fixed. Added `test_member_access_to_one_workspace_does_not_reach_a_sibling` to
 `test_workspaces.py`, verified it actually catches the regression by temporarily dropping the
 `workspace_id` filter in `workspace_member_repo.get` (the test failed as expected: 200 instead
-of 404), then reverted that change cleanly. Not yet re-reviewed by `/audit`, so this stays
-`fixed` rather than `closed`.
+of 404), then reverted that change cleanly. Re-reviewed 2026-08-27 (scope: current, feature 6b;
+lens: tests): `workspace_member_repo.get`'s body is unchanged since the fix (confirmed via diff),
+the test still passes in the full suite, and 6b's own new `get_by_id`/`list_for_workspace` follow
+the identical workspace-scoping discipline (verified `remove_member`'s cross-workspace 404 test
+exercises it too). No new defect introduced. Closed.
+
+### F-32 [P2] open - Permission module's extension-point docstring still names the abandoned CRM/RAG entities
+
+**File:** apps/api/app/core/permissions.py:4-5
+**Found:** 2026-08-27 by /audit (scope: full; lens: quality)
+**Why it matters:** The module docstring instructing future features how to extend
+`ROLE_PERMISSIONS` still lists the abandoned direction's entities ("companies, contacts,
+opportunities, tasks, notes, documents, conversations, prompts, audit logs") instead of the
+current AI-phone-assistant ones. CLAUDE.md section 1 explicitly says to flag this class of
+leftover rather than let it stand. Elevated above a cosmetic P3 because this is a high-visibility,
+load-bearing extensibility point - every future feature adding a permission reads this docstring
+as its usage example, and a wrong entity list could steer a real design decision, not just read
+as outdated.
+**Suggested fix:** Update the parenthetical to name real upcoming entities (assistants, phone
+numbers, calls, knowledge sources, campaigns, workspaces, etc.), or drop the specific list and
+just say "every later feature that adds a protected mutation."
+**Resolution:**
+
+### F-33 [P3] fixed - "Member not found" is defined twice, byte-identical, across organizations.py and workspaces.py
+
+**File:** apps/api/app/api/v1/workspaces.py:30
+**Found:** 2026-08-27 by /audit (scope: current, feature 6b; lens: quality)
+**Why it matters:** `organizations.py` already has its own `_MEMBER_NOT_FOUND` (status 404,
+detail "Member not found") for `change_member_role`/`remove_member`. `workspaces.py`'s new
+`add_workspace_member` route needed the identical "the given member_id doesn't resolve" case
+and redefined an identical constant rather than reusing one. Same class of risk F-30 already
+flagged for "Workspace not found" (workspace_deps.py vs. workspaces.py) - harmless today since
+both say the same thing, but two independent copies can drift silently if one is edited without
+the other.
+**Suggested fix:** Same remedy as F-30: have `workspaces.py` reuse `organizations.py`'s
+`_MEMBER_NOT_FOUND`, or hoist a small set of shared "not found" constants both route files
+import. Worth doing F-30 and F-33 together in one pass rather than separately. Small, low-risk,
+not urgent.
+**Resolution:** Fixed alongside F-30. `workspaces.py` now imports `_MEMBER_NOT_FOUND` directly
+from `organizations.py` instead of redefining it. `pytest` (207 passed) and `ruff` stayed green
+with no behavior change. Not yet re-reviewed by `/audit`.

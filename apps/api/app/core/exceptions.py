@@ -107,3 +107,15 @@ class WorkspaceNotFound(WorkspaceError):
     """
     No such workspace in this organization.
     """
+
+
+class WorkspaceMemberNotFound(WorkspaceError):
+    """
+    No such membership of this workspace.
+    """
+
+
+class WorkspaceMemberAlreadyExists(WorkspaceError):
+    """
+    The target user already has access to the workspace.
+    """
