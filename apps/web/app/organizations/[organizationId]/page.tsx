@@ -153,9 +153,15 @@ export default function OrganizationDetailPage() {
       title={organization.name}
       description={`/${organization.slug}`}
       action={
-        <Link href="/organizations">
-          <Button variant="secondary">All organizations</Button>
-        </Link>
+        <div className="flex gap-3">
+          <Link href={`/organizations/${organizationId}/workspaces`}>
+            <Button variant="secondary">Workspaces</Button>
+          </Link>
+
+          <Link href="/organizations">
+            <Button variant="secondary">All organizations</Button>
+          </Link>
+        </div>
       }
     >
       {actionError && (
