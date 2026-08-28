@@ -23,6 +23,10 @@ LOGIN_RATE_LIMIT = RateLimitRule(limit=10, window_seconds=900)
 
 REGISTER_RATE_LIMIT = RateLimitRule(limit=5, window_seconds=3600)
 
+# Keyed on the authenticated user id, not the IP - a wrong-current-password
+# guess is the attack this guards against, same spirit as LOGIN_RATE_LIMIT.
+PASSWORD_CHANGE_RATE_LIMIT = RateLimitRule(limit=10, window_seconds=900)
+
 
 class RateLimitExceeded(Exception):
     """

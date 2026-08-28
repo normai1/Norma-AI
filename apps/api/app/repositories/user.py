@@ -1,4 +1,5 @@
 import uuid
+from typing import Any
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -40,6 +41,23 @@ async def create(
     )
 
     db.add(user)
+    await db.flush()
+
+    return user
+
+
+async def update(db: AsyncSession, user: User, **fields: Any) -> User:
+    """
+    Apply a partial update from already-filtered fields - only the keys the
+    caller wants to change. Unlike organization/workspace update(), an omitted
+    field is left alone by omitting it from the call, not by passing None:
+    full_name and avatar_url are nullable columns, so an explicit None is a
+    legitimate "clear this field" request, not "leave it alone".
+    """
+
+    for key, value in fields.items():
+        setattr(user, key, value)
+
     await db.flush()
 
     return user

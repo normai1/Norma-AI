@@ -31,6 +31,18 @@ class InvalidRefreshToken(AuthError):
     """
 
 
+class InvalidCurrentPassword(AuthError):
+    """
+    A password-change request's current_password did not match the account.
+    """
+
+
+class PasswordUnchanged(AuthError):
+    """
+    A password-change request's new_password is identical to the current one.
+    """
+
+
 class OrganizationError(Exception):
     """
     Base class for organization and membership failures.

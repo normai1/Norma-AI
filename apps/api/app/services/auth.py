@@ -8,7 +8,9 @@ from app.core.exceptions import (
     EmailAlreadyRegistered,
     InactiveAccount,
     InvalidCredentials,
+    InvalidCurrentPassword,
     InvalidRefreshToken,
+    PasswordUnchanged,
 )
 from app.core.security import (
     generate_refresh_token,
@@ -176,6 +178,44 @@ async def logout(db: AsyncSession, *, refresh_token: str) -> None:
 
     if session is not None:
         await session_repo.revoke(db, session)
+
+
+async def change_password(
+    db: AsyncSession,
+    *,
+    user: User,
+    current_password: str,
+    new_password: str,
+    user_agent: str | None,
+    ip_address: str | None,
+) -> IssuedTokens:
+    """
+    Verify the current password, reject a no-op change, replace the password,
+    revoke every existing session for the user, and issue a fresh pair.
+
+    Revoking everything (rather than sparing the caller's own session) is
+    deliberate: the access token carries no session identifier, so there is
+    no way to tell which session is "this one". Issuing a fresh pair here
+    keeps the caller signed in while every other device is signed out.
+    """
+
+    if not verify_password(current_password, user.password_hash):
+        raise InvalidCurrentPassword
+
+    if verify_password(new_password, user.password_hash):
+        raise PasswordUnchanged
+
+    user.password_hash = hash_password(new_password)
+    await db.flush()
+
+    await session_repo.revoke_all_for_user(db, user.id)
+
+    return await issue_tokens(
+        db,
+        user=user,
+        user_agent=user_agent,
+        ip_address=ip_address,
+    )
 
 
 async def get_active_user(db: AsyncSession, user_id: uuid.UUID) -> User | None:

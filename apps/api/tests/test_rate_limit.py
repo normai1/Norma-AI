@@ -5,6 +5,7 @@ from redis.asyncio import Redis
 from app.core.config import settings
 from app.core.rate_limit import (
     LOGIN_RATE_LIMIT,
+    PASSWORD_CHANGE_RATE_LIMIT,
     REGISTER_RATE_LIMIT,
     RateLimitExceeded,
     RateLimitRule,
@@ -13,6 +14,7 @@ from app.core.rate_limit import (
 
 REGISTER = "/api/v1/auth/register"
 LOGIN = "/api/v1/auth/login"
+CHANGE_PASSWORD = "/api/v1/auth/me/password"
 
 CREDENTIALS = {"email": "limited@example.com", "password": "a-strong-password"}
 
@@ -191,3 +193,76 @@ async def test_register_blocks_after_repeated_signups(client: AsyncClient) -> No
     )
 
     assert blocked.status_code == 429
+
+
+async def _password_change_headers(client: AsyncClient, email: str) -> dict:
+    response = await client.post(
+        REGISTER,
+        json={"email": email, "password": "a-strong-password"},
+    )
+
+    return {"Authorization": f"Bearer {response.json()['access_token']}"}
+
+
+async def test_password_change_allows_a_successful_change_within_the_limit(
+    client: AsyncClient,
+) -> None:
+    headers = await _password_change_headers(client, "pwlimit-ok@example.com")
+
+    response = await client.post(
+        CHANGE_PASSWORD,
+        json={
+            "current_password": "a-strong-password",
+            "new_password": "a-new-strong-password",
+        },
+        headers=headers,
+    )
+
+    assert response.status_code == 200
+
+
+async def test_password_change_blocks_after_repeated_attempts(
+    client: AsyncClient,
+) -> None:
+    headers = await _password_change_headers(client, "pwlimit-block@example.com")
+
+    wrong = {
+        "current_password": "not-the-real-password",
+        "new_password": "a-new-strong-password",
+    }
+
+    for _ in range(PASSWORD_CHANGE_RATE_LIMIT.limit):
+        await client.post(CHANGE_PASSWORD, json=wrong, headers=headers)
+
+    blocked = await client.post(CHANGE_PASSWORD, json=wrong, headers=headers)
+
+    assert blocked.status_code == 429
+    assert int(blocked.headers["Retry-After"]) > 0
+
+
+async def test_password_change_limit_is_scoped_per_user(client: AsyncClient) -> None:
+    headers = await _password_change_headers(client, "pwlimit-scope-a@example.com")
+    other_headers = await _password_change_headers(
+        client,
+        "pwlimit-scope-b@example.com",
+    )
+
+    wrong = {
+        "current_password": "not-the-real-password",
+        "new_password": "a-new-strong-password",
+    }
+
+    for _ in range(PASSWORD_CHANGE_RATE_LIMIT.limit + 1):
+        await client.post(CHANGE_PASSWORD, json=wrong, headers=headers)
+
+    # Attempts against one user must not lock a different one out.
+    other = await client.post(
+        CHANGE_PASSWORD,
+        json={
+            "current_password": "a-strong-password",
+            "new_password": "a-new-strong-password",
+        },
+        headers=other_headers,
+    )
+
+    assert other.status_code == 200

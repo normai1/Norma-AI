@@ -6,19 +6,25 @@ from app.core.exceptions import (
     EmailAlreadyRegistered,
     InactiveAccount,
     InvalidCredentials,
+    InvalidCurrentPassword,
     InvalidRefreshToken,
+    PasswordUnchanged,
 )
 from app.core.rate_limit import (
     LOGIN_RATE_LIMIT,
+    PASSWORD_CHANGE_RATE_LIMIT,
     REGISTER_RATE_LIMIT,
     RateLimitExceeded,
     RateLimitRule,
     enforce,
 )
 from app.core.security import normalize_email
+from app.repositories import user as user_repo
 from app.schemas.auth import (
     AuthResponse,
     LoginRequest,
+    PasswordChangeRequest,
+    ProfileUpdate,
     RefreshRequest,
     RegisterRequest,
     UserResponse,
@@ -35,6 +41,16 @@ _INVALID_CREDENTIALS = HTTPException(
 _INVALID_REFRESH = HTTPException(
     status_code=status.HTTP_401_UNAUTHORIZED,
     detail="Invalid or expired refresh token",
+)
+
+_INVALID_CURRENT_PASSWORD = HTTPException(
+    status_code=status.HTTP_401_UNAUTHORIZED,
+    detail="Current password is incorrect",
+)
+
+_PASSWORD_UNCHANGED = HTTPException(
+    status_code=status.HTTP_400_BAD_REQUEST,
+    detail="New password must be different from the current password",
 )
 
 
@@ -212,3 +228,73 @@ async def read_current_user(
     """
 
     return UserResponse.model_validate(current_user)
+
+
+@router.patch("/me", response_model=UserResponse)
+async def update_current_user(
+    payload: ProfileUpdate,
+    current_user: CurrentUser,
+    db: DbSession,
+) -> UserResponse:
+    """
+    Update the signed-in user's own name and/or avatar.
+
+    Only fields present in the request body are touched - an explicit null
+    clears that field, an omitted field is left untouched.
+    """
+
+    fields = payload.model_dump(exclude_unset=True)
+
+    if fields.get("avatar_url") is not None:
+        fields["avatar_url"] = str(fields["avatar_url"])
+
+    current_user = await user_repo.update(db, current_user, **fields)
+    await db.commit()
+
+    return UserResponse.model_validate(current_user)
+
+
+@router.post("/me/password", response_model=AuthResponse)
+async def change_current_user_password(
+    payload: PasswordChangeRequest,
+    current_user: CurrentUser,
+    request: Request,
+    db: DbSession,
+    redis: RedisClient,
+) -> AuthResponse:
+    """
+    Change the signed-in user's own password.
+
+    Revokes every existing session and returns a fresh token pair - the
+    caller stays signed in with the new tokens, every other device is
+    signed out.
+    """
+
+    await _rate_limit(
+        redis,
+        f"password_change:{current_user.id}",
+        PASSWORD_CHANGE_RATE_LIMIT,
+    )
+
+    try:
+        tokens = await auth_service.change_password(
+            db,
+            user=current_user,
+            current_password=payload.current_password,
+            new_password=payload.new_password,
+            user_agent=client_user_agent(request),
+            ip_address=client_ip(request),
+        )
+    except InvalidCurrentPassword as exc:
+        raise _INVALID_CURRENT_PASSWORD from exc
+    except PasswordUnchanged as exc:
+        raise _PASSWORD_UNCHANGED from exc
+
+    await db.commit()
+
+    return AuthResponse(
+        access_token=tokens.access_token,
+        refresh_token=tokens.refresh_token,
+        expires_in=tokens.expires_in,
+        user=UserResponse.model_validate(current_user),
+    )
