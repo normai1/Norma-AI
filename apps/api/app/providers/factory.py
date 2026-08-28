@@ -7,8 +7,11 @@ either - that would be a circular import.
 """
 
 from app.core.config import settings
+from app.providers.elevenlabs_speech import ElevenLabsSTT, ElevenLabsTTS
 from app.providers.mock_speech import MockSTT, MockTTS
 from app.providers.speech import SpeechToTextProvider, TextToSpeechProvider
+
+_VALID_PROVIDER_NAMES = "'mock', 'elevenlabs'"
 
 
 class UnknownSpeechProviderError(ValueError):
@@ -17,6 +20,24 @@ class UnknownSpeechProviderError(ValueError):
     implementation. A misconfiguration, not a runtime provider failure -
     deliberately not part of the SpeechProviderError hierarchy.
     """
+
+
+class MissingElevenLabsApiKeyError(ValueError):
+    """
+    The "elevenlabs" provider was selected but ELEVENLABS_API_KEY is unset. A
+    misconfigured deploy must fail here, at construction, rather than
+    discovering the missing key mid-call (CLAUDE.md section 9).
+    """
+
+
+def _require_elevenlabs_api_key() -> str:
+    if not settings.elevenlabs_api_key:
+        raise MissingElevenLabsApiKeyError(
+            "ELEVENLABS_API_KEY is not set. The 'elevenlabs' speech "
+            "provider requires it.",
+        )
+
+    return settings.elevenlabs_api_key
 
 
 def get_stt_provider(name: str | None = None) -> SpeechToTextProvider:
@@ -29,8 +50,12 @@ def get_stt_provider(name: str | None = None) -> SpeechToTextProvider:
     if provider_name == "mock":
         return MockSTT()
 
+    if provider_name == "elevenlabs":
+        return ElevenLabsSTT(api_key=_require_elevenlabs_api_key())
+
     raise UnknownSpeechProviderError(
-        f"Unknown STT_PROVIDER {provider_name!r}. Valid options: 'mock'.",
+        f"Unknown STT_PROVIDER {provider_name!r}. Valid options: "
+        f"{_VALID_PROVIDER_NAMES}.",
     )
 
 
@@ -44,6 +69,10 @@ def get_tts_provider(name: str | None = None) -> TextToSpeechProvider:
     if provider_name == "mock":
         return MockTTS()
 
+    if provider_name == "elevenlabs":
+        return ElevenLabsTTS(api_key=_require_elevenlabs_api_key())
+
     raise UnknownSpeechProviderError(
-        f"Unknown TTS_PROVIDER {provider_name!r}. Valid options: 'mock'.",
+        f"Unknown TTS_PROVIDER {provider_name!r}. Valid options: "
+        f"{_VALID_PROVIDER_NAMES}.",
     )

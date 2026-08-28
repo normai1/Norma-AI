@@ -14,6 +14,7 @@ pydantic-settings
 python-dotenv
 
 httpx
+websockets
 
 pytest
 pytest-asyncio

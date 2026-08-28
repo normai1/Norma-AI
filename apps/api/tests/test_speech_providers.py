@@ -3,7 +3,9 @@ from collections.abc import AsyncIterator
 import pytest
 
 from app.core.config import settings
+from app.providers.elevenlabs_speech import ElevenLabsSTT, ElevenLabsTTS
 from app.providers.factory import (
+    MissingElevenLabsApiKeyError,
     UnknownSpeechProviderError,
     get_stt_provider,
     get_tts_provider,
@@ -176,3 +178,37 @@ def test_factory_falls_back_to_configured_settings_by_default() -> None:
     assert settings.tts_provider == "mock"
     assert isinstance(get_stt_provider(), MockSTT)
     assert isinstance(get_tts_provider(), MockTTS)
+
+
+def test_factory_resolves_elevenlabs_stt_when_key_is_configured(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(settings, "elevenlabs_api_key", "a-real-key")
+
+    assert isinstance(get_stt_provider("elevenlabs"), ElevenLabsSTT)
+
+
+def test_factory_resolves_elevenlabs_tts_when_key_is_configured(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(settings, "elevenlabs_api_key", "a-real-key")
+
+    assert isinstance(get_tts_provider("elevenlabs"), ElevenLabsTTS)
+
+
+def test_factory_rejects_elevenlabs_stt_without_a_key(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(settings, "elevenlabs_api_key", "")
+
+    with pytest.raises(MissingElevenLabsApiKeyError):
+        get_stt_provider("elevenlabs")
+
+
+def test_factory_rejects_elevenlabs_tts_without_a_key(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(settings, "elevenlabs_api_key", "")
+
+    with pytest.raises(MissingElevenLabsApiKeyError):
+        get_tts_provider("elevenlabs")

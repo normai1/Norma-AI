@@ -117,6 +117,10 @@ class Settings(BaseSettings):
     stt_provider: str = "mock"
     tts_provider: str = "mock"
 
+    # Empty by default; the "elevenlabs" provider branch refuses to construct
+    # without a real key rather than failing mid-call.
+    elevenlabs_api_key: str = ""
+
     @model_validator(mode="after")
     def _reject_insecure_secret_key(self) -> "Settings":
         """
