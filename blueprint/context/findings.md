@@ -174,3 +174,116 @@ not urgent.
 **Resolution:** Fixed alongside F-30. `workspaces.py` now imports `_MEMBER_NOT_FOUND` directly
 from `organizations.py` instead of redefining it. `pytest` (207 passed) and `ruff` stayed green
 with no behavior change. Not yet re-reviewed by `/audit`.
+
+### F-34 [P2] fixed - `SessionProvider`'s `refreshUser` and its mount effect duplicate the identical fetch-and-set-session logic, with drift
+
+**File:** apps/web/components/app/session-provider.tsx:29-64
+**Found:** 2026-08-28 by /audit (scope: build-plan item 8; lens: quality)
+**Why it matters:** `refreshUser` (added in 8c so the settings page can reflect a saved
+profile) and the mount `useEffect`'s inner `load()` function both do exactly the same
+thing - call `fetchCurrentUser()`, catch to `null`, call `setUser`/`setStatus` - written
+out twice rather than the effect calling `refreshUser()`. The two copies have already
+drifted: the effect guards against the unmount race with a `cancelled` flag,
+`refreshUser` does not. A future edit to the fetch/error-handling logic (e.g. adding
+retry, adding a log line) made to one copy and not the other would silently reintroduce
+a bug the other copy already avoids.
+**Suggested fix:** Have the mount effect call `refreshUser()` and just handle the
+`cancelled` guard around that call, rather than reimplementing the fetch inline.
+**Resolution:** Fixed. Split into `fetchUser()` (fetch + error-to-null) and `applyUser()`
+(set state); both `refreshUser` and the mount effect now compose these two shared pieces
+instead of duplicating the logic, and the effect's `cancelled` guard wraps `applyUser`
+exactly as before - no behavior change. `npm run build` and `npm run test` (13/13) pass;
+a temporary Playwright spec re-proved session-load-on-mount and profile-save-reflects
+both still work. Not yet re-reviewed by `/audit`.
+
+### F-35 [P2] fixed - `businessHoursFromApi`/`businessHoursToApi` are untested pure conversion logic, unlike the project's own established pattern for this class of function
+
+**File:** apps/web/app/(app)/settings/page.tsx:47-90
+**Found:** 2026-08-28 by /audit (scope: build-plan item 8; lens: tests)
+**Why it matters:** These two functions convert between the API's `business_hours`
+shape and the settings form's local per-day state - real, non-trivial logic with a
+reachable wrong-answer surface (a day silently dropped, an open/closed flag inverted,
+a key typo'd), which is exactly the "parsers, formatters... assertable inputs and
+outputs" class `coding-standards.md`'s Testing gate calls out for a unit test when a
+test command is configured, as `npm run test` is here. `lib/tenant-selection.ts`'s
+`resolveActiveId` - the closest analogous pure-logic function shipped this session -
+got exactly this treatment (13 unit tests). These two did not, and are not even
+exported from the page module, so they cannot be unit-tested without extraction.
+Coverage today is indirect only, via a temporary (now-deleted) Playwright round-trip.
+**Suggested fix:** Extract both functions (and `emptyBusinessHoursForm`) to a small
+`lib/` module (e.g. `lib/business-hours.ts`) with a colocated `*.test.ts`, matching the
+`tenant-selection.ts` pattern; import them back into the page.
+**Resolution:** Fixed. Extracted `emptyBusinessHoursForm`, `businessHoursFromApi`,
+`businessHoursToApi`, and their types to `lib/business-hours.ts`, with 8 unit tests in
+`lib/business-hours.test.ts` (default shape, null/absent/present/explicit-null day
+handling, always-emits-all-7-keys, and a round-trip). `settings/page.tsx` now imports
+from the module; no behavior change. `npm run test` (21/21) and `npm run build` pass; a
+temporary Playwright spec re-proved the actual save/reload/clear round-trip through the
+extracted functions. Not yet re-reviewed by `/audit`.
+
+### F-36 [P2] fixed - `user_repo.update`'s `**fields: Any` has no field allowlist of its own; it is safe today only because its one caller is schema-constrained
+
+**File:** apps/api/app/repositories/user.py:47-60
+**Found:** 2026-08-28 by /audit (scope: build-plan item 8; lens: security)
+**Why it matters:** `organization_repo.update`/`workspace_repo.update` take explicit
+named parameters - a closed contract that cannot be asked to write a column outside
+`name`/`settings` no matter what a caller passes. `user_repo.update(db, user, **fields)`
+instead does `setattr(user, key, value)` for every key in `fields`, so it will happily
+set `password_hash`, `is_active`, `email`, or `id` if ever called with such a key. The
+one existing caller (`PATCH /me`) is safe only because `ProfileUpdate` is a Pydantic
+schema declaring solely `full_name`/`avatar_url` - the safety lives entirely in the
+caller, not in this function. A later feature adding a second call site (e.g. an admin
+user-management endpoint) that builds `fields` from anything less strictly typed than a
+dedicated Pydantic model would silently reopen mass-assignment risk on the `User` row.
+**Suggested fix:** Constrain `update()` to named optional parameters for the columns it
+is actually meant to touch (`full_name`, `avatar_url`), matching the org/workspace
+repos' convention, rather than an open `**fields: Any`. If the exclude-unset semantics
+genuinely need to stay generic, at minimum allowlist the accepted keys inside the
+function itself so the safety does not depend entirely on every future caller getting
+it right.
+**Resolution:** Fixed. `update()` now takes explicit `full_name`/`avatar_url` named
+parameters, each defaulting to a module-level `_UNSET` sentinel so "omitted" (leave
+untouched) stays distinguishable from an explicit `None` (clear the field) - the
+distinction the old `**fields` signature existed to preserve. An unexpected key now
+raises `TypeError` at the call boundary instead of being silently `setattr`'d. The one
+call site (`PATCH /me`) needed no change - `**fields` unpacking against the new closed
+signature already maps correctly since `ProfileUpdate` only ever produces
+`full_name`/`avatar_url` keys. `pytest tests/test_auth_profile.py` (14/14 unchanged),
+full suite (237/237), and `ruff check apps/api` (clean) all pass. Not yet re-reviewed by
+`/audit`.
+
+### F-37 [unverified] open - Business hours cannot represent a window crossing midnight
+
+**File:** apps/api/app/schemas/settings.py:94-100
+**Found:** 2026-08-28 by /audit (scope: build-plan item 8; lens: quality)
+**Why it matters:** `BusinessHoursWindow._close_after_open` requires `close > open` as a
+plain string/lexicographic comparison, so a business open e.g. 18:00-02:00 (a bar,
+late-night service - both plausible for this product's target segments) cannot be
+stored; the validator rejects it as `close` not being "after" `open`. No feature reads
+`business_hours` yet (items 11b and 29 are unbuilt), so there is no confirmed
+consequence today - recorded as a lead for whoever builds those, not a defect to fix
+now.
+**Suggested fix:** When item 11b or 29 consumes `business_hours`, either decide
+cross-midnight is out of scope for that feature and document it, or extend the window
+validation to allow `close < open` to mean "past midnight" and adjust every consumer's
+interpretation accordingly.
+**Resolution:**
+
+### F-38 [unverified] open - `business_hours: {}` (explicit empty object) and `business_hours: null` are distinct, valid API states with no clear semantic difference
+
+**File:** apps/api/app/schemas/settings.py:113-136
+**Found:** 2026-08-28 by /audit (scope: build-plan item 8; lens: quality)
+**Why it matters:** The locked contract says `business_hours: null` means "not
+configured yet." `WorkspaceSettingsUpdate.business_hours` also accepts `{}` (a
+dict with zero day keys) as a distinct valid value, which the merge-then-validate
+service logic would store as `{}`, not `null` - a second, undocumented "no hours
+configured" representation. The current settings-UI never produces `{}` (it always
+sends all seven day keys or omits the field), so this is unreached by any known
+caller today; recorded as a lead in case a future client (or a differently-behaved
+future settings UI) sends it and something downstream treats `{}` and `null`
+differently.
+**Suggested fix:** Either treat an empty-dict `business_hours` as equivalent to `null`
+in the validator (normalize `{}` to `None`), or explicitly document that `{}` and
+`null` are both valid "nothing configured" spellings if the distinction is genuinely
+never meant to matter.
+**Resolution:**

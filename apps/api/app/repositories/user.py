@@ -6,6 +6,11 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.user import User
 
+# Sentinel distinguishing "argument omitted" from an explicit None, so update()
+# can tell "leave this nullable column alone" from "clear it" without callers
+# needing a second signaling mechanism.
+_UNSET: Any = object()
+
 
 async def get_by_email(db: AsyncSession, email: str) -> User | None:
     """
@@ -46,17 +51,27 @@ async def create(
     return user
 
 
-async def update(db: AsyncSession, user: User, **fields: Any) -> User:
+async def update(
+    db: AsyncSession,
+    user: User,
+    *,
+    full_name: str | None = _UNSET,
+    avatar_url: str | None = _UNSET,
+) -> User:
     """
-    Apply a partial update from already-filtered fields - only the keys the
-    caller wants to change. Unlike organization/workspace update(), an omitted
-    field is left alone by omitting it from the call, not by passing None:
-    full_name and avatar_url are nullable columns, so an explicit None is a
-    legitimate "clear this field" request, not "leave it alone".
+    Apply a partial update. Only full_name and avatar_url are settable here -
+    an omitted argument leaves that column untouched; an explicit None clears
+    it. Unlike organization/workspace update(), "leave alone" cannot be
+    spelled as None, because full_name and avatar_url are themselves nullable
+    columns: an explicit None is a legitimate "clear this field" request, not
+    "leave it alone", so a separate sentinel marks "omitted".
     """
 
-    for key, value in fields.items():
-        setattr(user, key, value)
+    if full_name is not _UNSET:
+        user.full_name = full_name
+
+    if avatar_url is not _UNSET:
+        user.avatar_url = avatar_url
 
     await db.flush()
 

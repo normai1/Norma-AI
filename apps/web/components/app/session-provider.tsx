@@ -26,45 +26,36 @@ export function SessionProvider({ children }: { children: ReactNode }) {
   const [user, setUser] = useState<AuthUser | null>(null);
   const [status, setStatus] = useState<SessionStatus>("loading");
 
-  const refreshUser = useCallback(async () => {
-    let current: AuthUser | null = null;
-
+  const fetchUser = useCallback(async (): Promise<AuthUser | null> => {
     try {
-      current = await fetchCurrentUser();
+      return await fetchCurrentUser();
     } catch {
-      current = null;
+      return null;
     }
+  }, []);
 
+  const applyUser = useCallback((current: AuthUser | null) => {
     setUser(current);
     setStatus(current ? "authenticated" : "unauthenticated");
   }, []);
 
+  const refreshUser = useCallback(async () => {
+    applyUser(await fetchUser());
+  }, [fetchUser, applyUser]);
+
   useEffect(() => {
     let cancelled = false;
 
-    async function load() {
-      let current: AuthUser | null = null;
-
-      try {
-        current = await fetchCurrentUser();
-      } catch {
-        current = null;
+    fetchUser().then((current) => {
+      if (!cancelled) {
+        applyUser(current);
       }
-
-      if (cancelled) {
-        return;
-      }
-
-      setUser(current);
-      setStatus(current ? "authenticated" : "unauthenticated");
-    }
-
-    load();
+    });
 
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [fetchUser, applyUser]);
 
   const signOut = useCallback(async () => {
     await logout();
