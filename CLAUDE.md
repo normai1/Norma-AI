@@ -346,8 +346,8 @@ Keep provider-specific code behind interfaces. The application must be able to s
 ```text
 LLMProvider              — realtime and post-call tiers
 EmbeddingProvider        — OpenAI text-embedding-3-small, Mock
-SpeechToTextProvider     — Deepgram, AssemblyAI, Mock
-TextToSpeechProvider     — ElevenLabs, Cartesia, Azure Neural, Mock
+SpeechToTextProvider     — ElevenLabs, Mock
+TextToSpeechProvider     — ElevenLabs, Mock
 TelephonyProvider        — Twilio, Telnyx, SIP trunk, Mock
 StorageProvider          — S3, local (dev only)
 MessagingProvider        — email, SMS
@@ -805,7 +805,6 @@ EMBEDDING_DIMENSION
 
 # Speech
 STT_PROVIDER
-DEEPGRAM_API_KEY
 TTS_PROVIDER
 ELEVENLABS_API_KEY
 

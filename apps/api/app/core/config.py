@@ -107,6 +107,16 @@ class Settings(BaseSettings):
     # client spoofing its own address by sending a prefilled header.
     trusted_proxy_count: int = 0
 
+    # ------------------------------------------------------------------
+    # Speech
+    # ------------------------------------------------------------------
+
+    # "mock" so the test suite and a fresh checkout can never reach a paid
+    # provider without deliberately configuring one. Feature 9b adds
+    # "elevenlabs" as a valid value.
+    stt_provider: str = "mock"
+    tts_provider: str = "mock"
+
     @model_validator(mode="after")
     def _reject_insecure_secret_key(self) -> "Settings":
         """

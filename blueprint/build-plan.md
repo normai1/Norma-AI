@@ -39,6 +39,8 @@
 ### Assistant configuration
 
 - [ ] 9. **Speech provider abstractions** - `SpeechToTextProvider` and `TextToSpeechProvider` interfaces with one real implementation each plus deterministic mocks
+  - [x] 9a. **Speech provider contracts and mocks** - the two streaming interfaces, their shared value types and error hierarchy, deterministic `MockSTT`/`MockTTS` with latency and failure injection, and config-driven provider selection; no network, no new dependencies
+  - [ ] 9b. **ElevenLabs speech adapters** - `ElevenLabsSTT` and `ElevenLabsTTS` implementing 9a's contracts, with the transport dependency they need and adapter tests against a stubbed transport
 - [ ] 10. **Voice and language catalogue** - browsable voice list with language and gender metadata, and in-browser voice preview
 - [ ] 11. **Assistant foundation** - Assistant and AssistantVersion tables, CRUD, immutable configuration snapshots, and version pinning per call
   - [ ] 11a. **Assistant model and CRUD** - create, list, update, archive assistants within a workspace
@@ -161,8 +163,7 @@
 - **Realtime LLM:** a latency-optimized small model (claude-haiku-4-5 class). A frontier model in the per-turn loop is explicitly rejected on first-token latency grounds.
 - **Post-call LLM:** a higher-quality latency-tolerant model (claude-sonnet-5 class) for summaries, extraction, and learning candidates.
 - **LLM environment variables:** `LLM_PROVIDER`, `LLM_REALTIME_MODEL`, `LLM_POSTCALL_MODEL`, `ANTHROPIC_API_KEY`, configurable `ANTHROPIC_BASE_URL`.
-- **STT:** Deepgram as the first implementation, behind `SpeechToTextProvider`. AssemblyAI evaluated as alternative.
-- **TTS:** ElevenLabs low-latency streaming as the first implementation, behind `TextToSpeechProvider`. Cartesia and Azure Neural evaluated as alternatives, including for language breadth and EU regions.
+- **Speech:** ElevenLabs serves both directions - `ElevenLabsSTT` behind `SpeechToTextProvider`, `ElevenLabsTTS` (low-latency streaming) behind `TextToSpeechProvider`. Deliberately a single vendor: one contract, one key, one integration surface, accepting a shared failure domain. No alternative implementation is planned for either direction; a speech-provider outage falls back to forwarding or message-taking, not to a second vendor. The abstractions still exist so a second provider can be added later without touching the application layer.
 - **Turn detection:** VAD plus semantic end-of-turn classification, with operator-configurable sensitivity.
 - **Latency budget:** p50 under 700 ms and p95 under 1,200 ms time-to-first-audio; barge-in within 200 ms. Enforced by CI regression tests, not aspirational.
 - **Telephony:** Twilio as the first provider behind `TelephonyProvider`; Telnyx evaluated for EU number economics; SIP trunk supported for bring-your-own numbers.

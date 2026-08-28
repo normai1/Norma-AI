@@ -513,18 +513,23 @@ Both directions are provider-agnostic behind abstractions:
 
 ```text
 SpeechToTextProvider
-    ├── DeepgramSTT          (streaming, keyword/glossary boosting)
-    ├── ElevenLabsSTT        (alternative)
+    ├── ElevenLabsSTT        (streaming, keyword/glossary boosting)
     └── MockSTT              (deterministic tests, fixture audio)
 
 TextToSpeechProvider
     ├── ElevenLabsTTS        (low-latency streaming model)
-    ├── DeepgramTTS          (alternative)
-    ├── AzureNeuralTTS       (breadth of languages, EU regions)
     └── MockTTS              (deterministic tests, silent audio)
 ```
 
-Selection criteria are streaming latency, language coverage, interruption behaviour, and regional hosting. Voice catalogue breadth is a marketing-relevant number; the abstraction should allow aggregating voices from more than one provider.
+**Single speech vendor, deliberately.** ElevenLabs serves both directions, and no alternative
+implementation is named for either. This trades vendor diversity for one contract, one key, and one
+integration surface. The cost is a shared failure domain: an ElevenLabs outage takes out STT and TTS
+at the same time, so the in-call failure path for a speech outage is forwarding or message-taking
+(§ Real-time voice engine), never a second speech vendor. The abstraction still exists so a second
+provider can be added without touching the application layer, but building one is not planned work
+until an operational need justifies it.
+
+Selection criteria are streaming latency, language coverage, interruption behaviour, and regional hosting. Voice catalogue breadth is a marketing-relevant number; the abstraction should allow aggregating voices from more than one provider if a second one is ever added.
 
 ### Turn detection
 
@@ -944,7 +949,6 @@ Speech:
 
 ```text
 STT_PROVIDER
-DEEPGRAM_API_KEY
 TTS_PROVIDER
 ELEVENLABS_API_KEY
 ```

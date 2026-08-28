@@ -622,14 +622,18 @@ production, `MockEmbeddingProvider` (deterministic) for tests. Configuration:
 ### Speech
 
 ```text
-SpeechToTextProvider  -> DeepgramSTT (primary, streaming + glossary boosting), one alternative
-                          implementation, MockSTT (deterministic, fixture audio)
-TextToSpeechProvider  -> ElevenLabsTTS (primary, low-latency streaming), one or more alternative
-                          implementations, MockTTS (deterministic, silent audio)
+SpeechToTextProvider  -> ElevenLabsSTT (streaming + glossary boosting),
+                          MockSTT (deterministic, fixture audio)
+TextToSpeechProvider  -> ElevenLabsTTS (low-latency streaming),
+                          MockTTS (deterministic, silent audio)
 ```
 
-> The two plans name different alternative vendors for both directions - see Open questions. The
-> primary picks (Deepgram STT, ElevenLabs TTS) agree in both documents and are not in question.
+> **Single speech vendor, deliberately.** ElevenLabs serves both directions and no alternative
+> implementation is planned for either. This trades vendor diversity for one contract, one key, and
+> one integration surface. The cost is a shared failure domain: an ElevenLabs outage takes out STT
+> and TTS together, so the in-call fallback for a speech outage is forwarding or message-taking
+> (item 20g), never a second speech vendor. The abstractions still exist so a second provider can be
+> added later without touching the application layer.
 
 ### Telephony
 
@@ -890,8 +894,7 @@ NEXT_PUBLIC_VOICE_WS_URL
 LLM_PROVIDER  LLM_REALTIME_MODEL  LLM_POSTCALL_MODEL
 ANTHROPIC_API_KEY (already present)  ANTHROPIC_BASE_URL
 
-STT_PROVIDER  DEEPGRAM_API_KEY
-TTS_PROVIDER  ELEVENLABS_API_KEY
+STT_PROVIDER  TTS_PROVIDER  ELEVENLABS_API_KEY  (one key serves both directions)
 
 TELEPHONY_PROVIDER  TWILIO_ACCOUNT_SID  TWILIO_AUTH_TOKEN  TWILIO_WEBHOOK_SIGNING_SECRET
 
@@ -949,22 +952,13 @@ gaps as they are built; this is expected sequencing, not a bug.
 
 > Resolve these in `project-plan.md` / `build-plan.md`, then re-run `/overview`.
 
-1. **STT alternative vendor disagrees between the two plans.** `build-plan.md` -> Planning
-   decisions says "AssemblyAI evaluated as alternative" for STT. `project-plan.md` §5 Speech lists
-   the `SpeechToTextProvider` alternatives as `ElevenLabsSTT` only - AssemblyAI is not mentioned
-   anywhere in `project-plan.md`. Pick one before item 9 scaffolds the interface and its adapters.
-2. **TTS alternative vendors disagree between the two plans.** `build-plan.md` names "Cartesia and
-   Azure Neural" as TTS alternatives. `project-plan.md` §5 Speech lists `DeepgramTTS` and
-   `AzureNeuralTTS` - Cartesia is not mentioned anywhere in `project-plan.md`, and Deepgram is not
-   mentioned in `build-plan.md`'s TTS alternatives. Azure Neural is the one name both documents
-   agree on. Resolve before item 9.
-3. **Stale item-number reference for the realtime-framework decision.** `project-plan.md` §5 Media
+1. **Stale item-number reference for the realtime-framework decision.** `project-plan.md` §5 Media
    plane says the LiveKit Agents vs. Pipecat decision is "selected during item 17 and the decision
    is recorded here." Under the current numbering, item 17 is "Document processing pipeline" (a
    Knowledge item) - the actual framework-selection work is item **20a** ("Framework selection and
    media transport"). Fix the reference in `project-plan.md` so nobody looks for the recorded
    decision in the wrong place.
-4. **Zero data retention mode may need to be in the MVP, not post-MVP.** `project-plan.md` §6's
+2. **Zero data retention mode may need to be in the MVP, not post-MVP.** `project-plan.md` §6's
    plan table lists "No-retention mode" as included on the **Scale** plan - one of the three
    MVP-launch tiers - and §4's sensitive-data policy already describes the capability as part of
    the data model. `build-plan.md` defers "Zero data retention mode" entirely to post-MVP item
