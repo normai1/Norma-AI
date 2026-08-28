@@ -63,12 +63,19 @@ async def create(
     *,
     organization_id: uuid.UUID,
     name: str,
+    settings: dict[str, Any],
 ) -> Workspace:
     """
-    Insert a new workspace.
+    Insert a new workspace. settings is required, not defaulted, so a call
+    site that forgets it fails at review rather than silently falling through
+    to the raw DB-level default.
     """
 
-    workspace = Workspace(organization_id=organization_id, name=name)
+    workspace = Workspace(
+        organization_id=organization_id,
+        name=name,
+        settings=settings,
+    )
 
     db.add(workspace)
     await db.flush()

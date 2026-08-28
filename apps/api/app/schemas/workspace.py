@@ -1,10 +1,10 @@
 import uuid
 from datetime import datetime
-from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field
 
 from app.schemas.organization import MemberUserResponse
+from app.schemas.settings import WorkspaceSettings, WorkspaceSettingsUpdate
 
 
 class WorkspaceCreate(BaseModel):
@@ -13,7 +13,7 @@ class WorkspaceCreate(BaseModel):
 
 class WorkspaceUpdate(BaseModel):
     name: str | None = Field(default=None, min_length=1, max_length=255)
-    settings: dict[str, Any] | None = None
+    settings: WorkspaceSettingsUpdate | None = None
 
 
 class WorkspaceResponse(BaseModel):
@@ -22,7 +22,7 @@ class WorkspaceResponse(BaseModel):
     id: uuid.UUID
     organization_id: uuid.UUID
     name: str
-    settings: dict[str, Any]
+    settings: WorkspaceSettings
     created_at: datetime
 
 

@@ -99,7 +99,11 @@ async def test_create_succeeds_for_an_admin(client: AsyncClient) -> None:
 
     assert body["name"] == "Downtown Clinic"
     assert body["organization_id"] == organization_id
-    assert body["settings"] == {}
+    assert body["settings"] == {
+        "timezone": "UTC",
+        "locale": "en-US",
+        "business_hours": None,
+    }
 
 
 async def test_create_is_denied_for_a_member(client: AsyncClient) -> None:
@@ -373,7 +377,11 @@ async def test_update_settings_without_touching_name(client: AsyncClient) -> Non
     )
 
     assert response.status_code == 200
-    assert response.json()["settings"] == {"timezone": "Asia/Kolkata"}
+    assert response.json()["settings"] == {
+        "timezone": "Asia/Kolkata",
+        "locale": "en-US",
+        "business_hours": None,
+    }
     assert response.json()["name"] == "Keep My Name"
 
 
@@ -403,7 +411,11 @@ async def test_update_name_without_touching_settings(client: AsyncClient) -> Non
 
     assert response.status_code == 200
     assert response.json()["name"] == "Renamed Only"
-    assert response.json()["settings"] == {"timezone": "Asia/Kolkata"}
+    assert response.json()["settings"] == {
+        "timezone": "Asia/Kolkata",
+        "locale": "en-US",
+        "business_hours": None,
+    }
 
 
 async def test_update_is_denied_for_a_member(client: AsyncClient) -> None:

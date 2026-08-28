@@ -26,12 +26,12 @@ async def test_update_settings_without_touching_name(client: AsyncClient) -> Non
 
     response = await client.patch(
         f"{ORGS}/{org_id}",
-        json={"settings": {"timezone": "Asia/Kolkata"}},
+        json={"settings": {"currency": "EUR"}},
         headers=headers,
     )
 
     assert response.status_code == 200
-    assert response.json()["settings"] == {"timezone": "Asia/Kolkata"}
+    assert response.json()["settings"] == {"currency": "EUR"}
     assert response.json()["name"] == "Test Org"
 
 

@@ -1,8 +1,10 @@
 import uuid
 from datetime import datetime
-from typing import Any, Literal
+from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, EmailStr, Field
+
+from app.schemas.settings import OrganizationSettings, OrganizationSettingsUpdate
 
 # Mirrors ORGANIZATION_ROLES in the model. A Literal rather than a regex so
 # matching is exact: an unanchored pattern would let 'xowner' through to the
@@ -16,7 +18,7 @@ class OrganizationCreate(BaseModel):
 
 class OrganizationUpdate(BaseModel):
     name: str | None = Field(default=None, min_length=1, max_length=255)
-    settings: dict[str, Any] | None = None
+    settings: OrganizationSettingsUpdate | None = None
 
 
 class OrganizationResponse(BaseModel):
@@ -25,7 +27,7 @@ class OrganizationResponse(BaseModel):
     id: uuid.UUID
     name: str
     slug: str
-    settings: dict[str, Any]
+    settings: OrganizationSettings
     status: str
     created_at: datetime
 

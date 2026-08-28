@@ -58,12 +58,15 @@ async def create(
     *,
     name: str,
     slug: str,
+    settings: dict[str, Any],
 ) -> Organization:
     """
-    Insert a new organization.
+    Insert a new organization. settings is required, not defaulted, so a call
+    site that forgets it fails at review rather than silently falling through
+    to the raw DB-level default.
     """
 
-    organization = Organization(name=name, slug=slug)
+    organization = Organization(name=name, slug=slug, settings=settings)
 
     db.add(organization)
     await db.flush()

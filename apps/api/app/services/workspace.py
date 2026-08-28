@@ -1,5 +1,4 @@
 import uuid
-from typing import Any
 
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -18,6 +17,7 @@ from app.models.workspace_member import WorkspaceMember
 from app.repositories import organization_member as organization_member_repo
 from app.repositories import workspace as workspace_repo
 from app.repositories import workspace_member as workspace_member_repo
+from app.schemas.settings import WorkspaceSettings, WorkspaceSettingsUpdate
 
 
 async def create_workspace(
@@ -30,7 +30,12 @@ async def create_workspace(
     Create a workspace in an organization.
     """
 
-    return await workspace_repo.create(db, organization_id=organization_id, name=name)
+    return await workspace_repo.create(
+        db,
+        organization_id=organization_id,
+        name=name,
+        settings=WorkspaceSettings().model_dump(mode="json"),
+    )
 
 
 async def list_workspaces(
@@ -79,10 +84,13 @@ async def update_workspace(
     organization_id: uuid.UUID,
     workspace_id: uuid.UUID,
     name: str | None,
-    settings: dict[str, Any] | None,
+    settings: WorkspaceSettingsUpdate | None,
 ) -> Workspace:
     """
     Apply a partial update, refusing a workspace outside the caller's organization.
+
+    A provided settings only merges the fields the caller actually sent,
+    leaving the rest of the stored settings untouched.
     """
 
     workspace = await _resolve_workspace(
@@ -91,7 +99,20 @@ async def update_workspace(
         workspace_id=workspace_id,
     )
 
-    return await workspace_repo.update(db, workspace, name=name, settings=settings)
+    merged_settings = None
+
+    if settings is not None:
+        merged = {**workspace.settings, **settings.model_dump(exclude_unset=True)}
+        merged_settings = WorkspaceSettings.model_validate(merged).model_dump(
+            mode="json",
+        )
+
+    return await workspace_repo.update(
+        db,
+        workspace,
+        name=name,
+        settings=merged_settings,
+    )
 
 
 async def add_member(

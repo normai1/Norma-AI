@@ -149,7 +149,7 @@ async def update_organization(
         membership.organization_id,
     )
 
-    await organization_repo.update(
+    await organization_service.update_organization(
         db,
         organization,
         name=payload.name,

@@ -21,7 +21,7 @@ async def test_create_returns_201_with_owner_role(client: AsyncClient) -> None:
     assert body["slug"] == "acme-corp"
     assert body["role"] == "owner"
     assert body["status"] == "active"
-    assert body["settings"] == {}
+    assert body["settings"] == {"currency": "USD"}
 
 
 async def test_create_rejects_missing_name(client: AsyncClient) -> None:

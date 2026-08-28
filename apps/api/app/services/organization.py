@@ -15,6 +15,7 @@ from app.models.organization_member import OrganizationMember, outranks
 from app.models.user import User
 from app.repositories import organization as organization_repo
 from app.repositories import organization_member as member_repo
+from app.schemas.settings import OrganizationSettings, OrganizationSettingsUpdate
 
 OWNER_ROLE = "owner"
 
@@ -45,6 +46,7 @@ async def create_organization(
                     db,
                     name=name,
                     slug=slug,
+                    settings=OrganizationSettings().model_dump(mode="json"),
                 )
         except IntegrityError:
             # Two concurrent creates can both pass the check above; the unique
@@ -61,6 +63,34 @@ async def create_organization(
         return organization, member
 
     raise SlugGenerationFailed
+
+
+async def update_organization(
+    db: AsyncSession,
+    organization: Organization,
+    *,
+    name: str | None,
+    settings: OrganizationSettingsUpdate | None,
+) -> Organization:
+    """
+    Apply a partial update. A provided settings only merges the fields the
+    caller actually sent, leaving the rest of the stored settings untouched.
+    """
+
+    merged_settings = None
+
+    if settings is not None:
+        merged = {**organization.settings, **settings.model_dump(exclude_unset=True)}
+        merged_settings = OrganizationSettings.model_validate(merged).model_dump(
+            mode="json",
+        )
+
+    return await organization_repo.update(
+        db,
+        organization,
+        name=name,
+        settings=merged_settings,
+    )
 
 
 async def get_membership(

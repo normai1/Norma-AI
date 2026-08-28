@@ -33,7 +33,7 @@ async def test_create_organization_returns_slugged_organization(
     assert organization.name == "Acme Corp"
     assert organization.slug == "acme-corp"
     assert organization.status == "active"
-    assert organization.settings == {}
+    assert organization.settings == {"currency": "USD"}
 
     assert member.organization_id == organization.id
     assert member.user_id == owner.id
