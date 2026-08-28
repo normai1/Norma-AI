@@ -5,12 +5,14 @@ from collections.abc import AsyncIterator
 
 import httpx
 import pytest
+import websockets.exceptions
 
 from app.providers.elevenlabs_speech import (
     _MAX_VOICE_PAGES,
     ElevenLabsSTT,
     ElevenLabsTTS,
     _map_realtime_message,
+    _send_audio_chunks,
 )
 from app.providers.speech import (
     SpeechProviderError,
@@ -37,11 +39,17 @@ class _FakeConnection:
     closed - by us (audio exhausted) or by the caller abandoning the stream.
     """
 
-    def __init__(self, server_messages: list[str] | None = None) -> None:
+    def __init__(
+        self,
+        server_messages: list[str] | None = None,
+        *,
+        raise_after: Exception | None = None,
+    ) -> None:
         self.sent: list[str] = []
         self.closed = False
         self._server_messages = list(server_messages or [])
         self._index = 0
+        self._raise_after = raise_after
 
     async def send(self, message: str) -> None:
         self.sent.append(message)
@@ -66,6 +74,9 @@ class _FakeConnection:
         # responses and silently drop them - exactly the bug this comment
         # replaced.
         if self._index >= len(self._server_messages):
+            if self._raise_after is not None:
+                raise self._raise_after
+
             raise StopAsyncIteration
 
         message = self._server_messages[self._index]
@@ -163,6 +174,20 @@ async def test_synthesize_maps_a_transport_timeout() -> None:
     tts = ElevenLabsTTS(api_key="key", client=client)
 
     with pytest.raises(SpeechProviderTimeout):
+        async for _ in tts.synthesize("hi", voice_id="v1"):
+            pass
+
+    await client.aclose()
+
+
+async def test_synthesize_maps_a_connect_error() -> None:
+    async def handler(request: httpx.Request) -> httpx.Response:
+        raise httpx.ConnectError("connection refused", request=request)
+
+    client = _client(handler)
+    tts = ElevenLabsTTS(api_key="key", client=client)
+
+    with pytest.raises(SpeechProviderUnavailable):
         async for _ in tts.synthesize("hi", voice_id="v1"):
             pass
 
@@ -325,6 +350,19 @@ async def test_list_voices_stops_at_the_page_cap_and_logs(
     await client.aclose()
 
 
+async def test_list_voices_maps_a_connect_error() -> None:
+    async def handler(request: httpx.Request) -> httpx.Response:
+        raise httpx.ConnectError("connection refused", request=request)
+
+    client = _client(handler)
+    tts = ElevenLabsTTS(api_key="key", client=client)
+
+    with pytest.raises(SpeechProviderUnavailable):
+        await tts.list_voices()
+
+    await client.aclose()
+
+
 async def test_list_voices_maps_error_status() -> None:
     async def handler(request: httpx.Request) -> httpx.Response:
         return httpx.Response(500, content=b"error")
@@ -422,7 +460,45 @@ async def test_stt_stream_sends_audio_as_base64_input_audio_chunks() -> None:
     sent = json.loads(connection.sent[0])
     assert sent["message_type"] == "input_audio_chunk"
     assert base64.b64decode(sent["audio_base_64"]) == b"hello-audio"
-    assert sent["commit"] is False
+    assert sent["commit"] is True
+
+
+async def test_stt_stream_marks_only_the_final_chunk_committed() -> None:
+    server_messages = [
+        json.dumps({"message_type": "committed_transcript", "text": "done"}),
+    ]
+    connection = _FakeConnection(server_messages)
+    stt = ElevenLabsSTT(api_key="key", connect=lambda url, **kwargs: connection)
+
+    async for _ in stt.stream(
+        _audio_chunks([b"one", b"two", b"three"]),
+        language="en",
+    ):
+        pass
+
+    sent = [json.loads(message) for message in connection.sent]
+    assert [base64.b64decode(s["audio_base_64"]) for s in sent] == [
+        b"one",
+        b"two",
+        b"three",
+    ]
+    assert [s["commit"] for s in sent] == [False, False, True]
+
+
+async def test_send_audio_chunks_does_not_close_after_real_audio() -> None:
+    connection = _FakeConnection()
+
+    await _send_audio_chunks(connection, _audio_chunks([b"hello"]))
+
+    assert connection.closed is False
+
+
+async def test_send_audio_chunks_closes_immediately_for_empty_audio() -> None:
+    connection = _FakeConnection()
+
+    await _send_audio_chunks(connection, _audio_chunks([]))
+
+    assert connection.closed is True
 
 
 async def test_stt_stream_sends_keywords_as_repeated_keyterms() -> None:
@@ -477,6 +553,28 @@ async def test_stt_stream_abandoning_the_iterator_closes_the_connection() -> Non
 async def test_stt_stream_server_error_message_raises_mapped_error() -> None:
     server_messages = [json.dumps({"message_type": "auth_error", "error": "bad key"})]
     connection = _FakeConnection(server_messages)
+    stt = ElevenLabsSTT(api_key="key", connect=lambda url, **kwargs: connection)
+
+    with pytest.raises(SpeechProviderUnavailable):
+        async for _ in stt.stream(_audio_chunks([b"audio"]), language="en"):
+            pass
+
+
+async def test_stt_stream_maps_a_rejected_handshake_to_unavailable() -> None:
+    def fake_connect(url: str, **kwargs: object) -> _FakeConnection:
+        raise websockets.exceptions.WebSocketException("handshake rejected")
+
+    stt = ElevenLabsSTT(api_key="key", connect=fake_connect)
+
+    with pytest.raises(SpeechProviderUnavailable):
+        async for _ in stt.stream(_audio_chunks([b"audio"]), language="en"):
+            pass
+
+
+async def test_stt_stream_maps_connection_closed_mid_stream_to_unavailable() -> None:
+    connection = _FakeConnection(
+        raise_after=websockets.exceptions.ConnectionClosedError(None, None),
+    )
     stt = ElevenLabsSTT(api_key="key", connect=lambda url, **kwargs: connection)
 
     with pytest.raises(SpeechProviderUnavailable):

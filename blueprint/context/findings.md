@@ -287,3 +287,23 @@ in the validator (normalize `{}` to `None`), or explicitly document that `{}` an
 `null` are both valid "nothing configured" spellings if the distinction is genuinely
 never meant to matter.
 **Resolution:**
+
+### F-40 [unverified] open - `MockSTT.stream()` fully drains the audio iterator before yielding any transcript event, so it cannot express a partial transcript arriving while audio is still being sent
+
+**File:** apps/api/app/providers/mock_speech.py:40-47
+**Found:** 2026-08-28 by /audit (scope: build-plan item 9; lens: quality)
+**Why it matters:** `ElevenLabsSTT.stream` (9b) is deliberately built around genuine
+concurrency - sending audio and receiving transcripts happen at the same time on the wire,
+called out explicitly in 9b's own spec notes as required for the latency budget. `MockSTT`
+(9a), which item 20's replay harness and later turn-detection/barge-in tests (items 20c/20e)
+are expected to build on, does the opposite: it drains the entire `audio` iterator to
+completion first, then yields the whole scripted transcript afterward, so it cannot express
+"a partial transcript arrives before the caller has finished speaking" - the exact behavior
+turn detection depends on. Nothing consumes `MockSTT` for that purpose yet (item 20 is
+unbuilt), so this has no reachable consequence today; recorded as a lead for whoever builds
+item 20, matching the pattern of F-37/F-38.
+**Suggested fix:** When item 20 needs it, give `MockSTT` an interleaving mode (e.g. yield
+script event N after consuming audio chunk N) rather than drain-then-yield, or add a second
+scripting parameter that pairs each transcript event with how many audio chunks to consume
+first.
+**Resolution:**

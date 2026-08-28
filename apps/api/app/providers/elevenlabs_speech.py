@@ -17,6 +17,7 @@ from urllib.parse import urlencode
 
 import httpx
 import websockets
+import websockets.exceptions
 
 from app.providers.speech import (
     SpeechProviderError,
@@ -180,6 +181,10 @@ class ElevenLabsTTS:
             raise SpeechProviderTimeout(
                 "ElevenLabs text-to-speech request timed out",
             ) from exc
+        except httpx.TransportError as exc:
+            raise SpeechProviderUnavailable(
+                "ElevenLabs text-to-speech connection failed",
+            ) from exc
         finally:
             if owns_client:
                 await client.aclose()
@@ -209,6 +214,10 @@ class ElevenLabsTTS:
                 except httpx.TimeoutException as exc:
                     raise SpeechProviderTimeout(
                         "ElevenLabs list voices request timed out",
+                    ) from exc
+                except httpx.TransportError as exc:
+                    raise SpeechProviderUnavailable(
+                        "ElevenLabs list voices connection failed",
                     ) from exc
 
                 _raise_for_http_status(response.status_code)
@@ -263,26 +272,51 @@ def _build_realtime_url(
     return f"{base_url}/v1/speech-to-text/realtime?{urlencode(params)}"
 
 
+def _input_audio_chunk_message(chunk: bytes, *, commit: bool) -> str:
+    return json.dumps(
+        {
+            "message_type": "input_audio_chunk",
+            "audio_base_64": base64.b64encode(chunk).decode("ascii"),
+            "commit": commit,
+        },
+    )
+
+
 async def _send_audio_chunks(connection: Any, audio: AsyncIterator[bytes]) -> None:
     """
-    Upload every audio chunk as it arrives, then close the connection once
-    the caller's audio stream is exhausted - this is what lets an empty
-    audio stream terminate the whole call cleanly instead of waiting forever
-    for a server message that will never come.
+    Upload every audio chunk as it arrives, marking the final one
+    commit=true. An async iterator has no length or peek, so a one-item
+    lookahead holds each chunk back until the next `async for` iteration
+    proves whether it was the last one.
+
+    Confirmed live against the real API: the server only closes the
+    connection itself once it has finished processing the final commit and
+    sent its response. If there was any real audio, this function does not
+    close the connection - the caller's `async with` on the connection
+    closes it once the receive loop ends, whether that is the server's own
+    close after the final transcript or the caller abandoning the stream
+    early. Closing here ourselves would race that response and discard it,
+    exactly as the pre-fix version of this function did.
+
+    An empty audio stream is different: nothing was ever sent, so there is
+    no response to wait for and no reason for the server to ever close on
+    its own - closing here is what lets an empty stream terminate cleanly
+    instead of hanging forever.
     """
 
-    async for chunk in audio:
-        await connection.send(
-            json.dumps(
-                {
-                    "message_type": "input_audio_chunk",
-                    "audio_base_64": base64.b64encode(chunk).decode("ascii"),
-                    "commit": False,
-                },
-            ),
-        )
+    pending: bytes | None = None
 
-    await connection.close()
+    async for chunk in audio:
+        if pending is not None:
+            await connection.send(_input_audio_chunk_message(pending, commit=False))
+
+        pending = chunk
+
+    if pending is None:
+        await connection.close()
+        return
+
+    await connection.send(_input_audio_chunk_message(pending, commit=True))
 
 
 class ElevenLabsSTT:
@@ -345,4 +379,8 @@ class ElevenLabsSTT:
         except TimeoutError as exc:
             raise SpeechProviderTimeout(
                 "ElevenLabs realtime STT connection timed out",
+            ) from exc
+        except websockets.exceptions.WebSocketException as exc:
+            raise SpeechProviderUnavailable(
+                "ElevenLabs realtime STT connection failed",
             ) from exc

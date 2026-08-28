@@ -173,9 +173,12 @@ def test_factory_rejects_an_unknown_tts_provider_name() -> None:
         get_tts_provider("not-a-real-provider")
 
 
-def test_factory_falls_back_to_configured_settings_by_default() -> None:
-    assert settings.stt_provider == "mock"
-    assert settings.tts_provider == "mock"
+def test_factory_falls_back_to_configured_settings_by_default(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(settings, "stt_provider", "mock")
+    monkeypatch.setattr(settings, "tts_provider", "mock")
+
     assert isinstance(get_stt_provider(), MockSTT)
     assert isinstance(get_tts_provider(), MockTTS)
 
