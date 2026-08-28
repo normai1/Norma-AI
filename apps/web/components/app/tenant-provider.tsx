@@ -69,10 +69,8 @@ export function TenantProvider({ children }: { children: ReactNode }) {
     }
   }, []);
 
-  const load = useCallback(async () => {
-    try {
-      const loaded = await listOrganizations();
-
+  const applyOrganizations = useCallback(
+    async (loaded: Organization[]) => {
       setOrganizations(loaded);
 
       const resolved = resolveActiveId(
@@ -91,17 +89,44 @@ export function TenantProvider({ children }: { children: ReactNode }) {
         setStoredActiveWorkspaceId(null);
         setStatus("ready");
       }
+    },
+    [loadWorkspaces],
+  );
+
+  const applyLoadError = useCallback((err: unknown) => {
+    setError(
+      err instanceof Error ? err.message : "Could not load organizations.",
+    );
+    setStatus("error");
+  }, []);
+
+  const load = useCallback(async () => {
+    try {
+      await applyOrganizations(await listOrganizations());
     } catch (err) {
-      setError(
-        err instanceof Error ? err.message : "Could not load organizations.",
-      );
-      setStatus("error");
+      applyLoadError(err);
     }
-  }, [loadWorkspaces]);
+  }, [applyOrganizations, applyLoadError]);
 
   useEffect(() => {
-    load();
-  }, [load]);
+    let cancelled = false;
+
+    listOrganizations()
+      .then((loaded) => {
+        if (!cancelled) {
+          return applyOrganizations(loaded);
+        }
+      })
+      .catch((err) => {
+        if (!cancelled) {
+          applyLoadError(err);
+        }
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [applyOrganizations, applyLoadError]);
 
   const setActiveOrganization = useCallback(
     (id: string) => {

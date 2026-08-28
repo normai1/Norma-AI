@@ -42,27 +42,60 @@ export default function WorkspaceMembersPage() {
   const [selectedMemberId, setSelectedMemberId] = useState("");
   const [adding, setAdding] = useState(false);
 
-  const load = useCallback(async () => {
-    try {
-      const org = await getOrganization(organizationId);
+  const fetchWorkspaceDetail = useCallback(async () => {
+    const org = await getOrganization(organizationId);
+    const workspace = await getWorkspace(organizationId, workspaceId);
+    const members = await listWorkspaceMembers(organizationId, workspaceId);
+    const orgMembers = canManage(org.role)
+      ? await listMembers(organizationId)
+      : [];
 
-      setOrganization(org);
-      setWorkspace(await getWorkspace(organizationId, workspaceId));
-      setMembers(await listWorkspaceMembers(organizationId, workspaceId));
-
-      if (canManage(org.role)) {
-        setOrgMembers(await listMembers(organizationId));
-      }
-    } catch (err) {
-      setError(
-        err instanceof Error ? err.message : "Could not load this workspace.",
-      );
-    }
+    return { org, workspace, members, orgMembers };
   }, [organizationId, workspaceId]);
 
+  const applyWorkspaceDetail = useCallback(
+    (detail: Awaited<ReturnType<typeof fetchWorkspaceDetail>>) => {
+      setOrganization(detail.org);
+      setWorkspace(detail.workspace);
+      setMembers(detail.members);
+      setOrgMembers(detail.orgMembers);
+    },
+    [],
+  );
+
+  const applyLoadError = useCallback((err: unknown) => {
+    setError(
+      err instanceof Error ? err.message : "Could not load this workspace.",
+    );
+  }, []);
+
+  const load = useCallback(async () => {
+    try {
+      applyWorkspaceDetail(await fetchWorkspaceDetail());
+    } catch (err) {
+      applyLoadError(err);
+    }
+  }, [fetchWorkspaceDetail, applyWorkspaceDetail, applyLoadError]);
+
   useEffect(() => {
-    load();
-  }, [load]);
+    let cancelled = false;
+
+    fetchWorkspaceDetail()
+      .then((detail) => {
+        if (!cancelled) {
+          applyWorkspaceDetail(detail);
+        }
+      })
+      .catch((err) => {
+        if (!cancelled) {
+          applyLoadError(err);
+        }
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [fetchWorkspaceDetail, applyWorkspaceDetail, applyLoadError]);
 
   async function run(action: () => Promise<unknown>) {
     setActionError(null);

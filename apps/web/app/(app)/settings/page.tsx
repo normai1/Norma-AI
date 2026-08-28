@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState, type FormEvent } from "react";
+import { useState, type FormEvent } from "react";
 
 import { useSession } from "@/components/app/session-provider";
 import { useTenant } from "@/components/app/tenant-provider";
@@ -50,11 +50,19 @@ export default function SettingsPage() {
   const [orgSettingsError, setOrgSettingsError] = useState<string | null>(null);
   const [orgSettingsSaved, setOrgSettingsSaved] = useState(false);
 
-  useEffect(() => {
+  // Adjusted during rendering rather than in a useEffect (react.dev/learn/you-might-not-need-an-effect#adjusting-some-state-when-a-prop-changes):
+  // re-syncs whenever activeOrganization's reference changes, matching the
+  // previous effect's [activeOrganization] dependency exactly.
+  const [prevActiveOrganization, setPrevActiveOrganization] =
+    useState(activeOrganization);
+
+  if (activeOrganization !== prevActiveOrganization) {
+    setPrevActiveOrganization(activeOrganization);
+
     if (activeOrganization) {
       setCurrency(activeOrganization.settings.currency);
     }
-  }, [activeOrganization]);
+  }
 
   const [timezone, setTimezone] = useState("UTC");
   const [locale, setLocale] = useState("en-US");
@@ -67,13 +75,17 @@ export default function SettingsPage() {
   >(null);
   const [workspaceSettingsSaved, setWorkspaceSettingsSaved] = useState(false);
 
-  useEffect(() => {
+  const [prevActiveWorkspace, setPrevActiveWorkspace] = useState(activeWorkspace);
+
+  if (activeWorkspace !== prevActiveWorkspace) {
+    setPrevActiveWorkspace(activeWorkspace);
+
     if (activeWorkspace) {
       setTimezone(activeWorkspace.settings.timezone);
       setLocale(activeWorkspace.settings.locale);
       setBusinessHours(businessHoursFromApi(activeWorkspace.settings.business_hours));
     }
-  }, [activeWorkspace]);
+  }
 
   function updateDay(day: BusinessHoursDay, patch: Partial<DayRowState>) {
     setBusinessHours((prev) => ({ ...prev, [day]: { ...prev[day], ...patch } }));

@@ -52,26 +52,58 @@ export default function OrganizationDetailPage() {
   const [inviting, setInviting] = useState(false);
   const [lastInvite, setLastInvite] = useState<CreatedInvitation | null>(null);
 
-  const load = useCallback(async () => {
-    try {
-      const loaded = await getOrganization(organizationId);
+  const fetchOrganizationDetail = useCallback(async () => {
+    const loaded = await getOrganization(organizationId);
+    const members = await listMembers(organizationId);
+    const invitations = canManage(loaded.role)
+      ? await listInvitations(organizationId)
+      : [];
 
-      setOrganization(loaded);
-      setMembers(await listMembers(organizationId));
-
-      if (canManage(loaded.role)) {
-        setInvitations(await listInvitations(organizationId));
-      }
-    } catch (err) {
-      setError(
-        err instanceof Error ? err.message : "Could not load this organization.",
-      );
-    }
+    return { loaded, members, invitations };
   }, [organizationId]);
 
+  const applyOrganizationDetail = useCallback(
+    (detail: Awaited<ReturnType<typeof fetchOrganizationDetail>>) => {
+      setOrganization(detail.loaded);
+      setMembers(detail.members);
+      setInvitations(detail.invitations);
+    },
+    [],
+  );
+
+  const applyLoadError = useCallback((err: unknown) => {
+    setError(
+      err instanceof Error ? err.message : "Could not load this organization.",
+    );
+  }, []);
+
+  const load = useCallback(async () => {
+    try {
+      applyOrganizationDetail(await fetchOrganizationDetail());
+    } catch (err) {
+      applyLoadError(err);
+    }
+  }, [fetchOrganizationDetail, applyOrganizationDetail, applyLoadError]);
+
   useEffect(() => {
-    load();
-  }, [load]);
+    let cancelled = false;
+
+    fetchOrganizationDetail()
+      .then((detail) => {
+        if (!cancelled) {
+          applyOrganizationDetail(detail);
+        }
+      })
+      .catch((err) => {
+        if (!cancelled) {
+          applyLoadError(err);
+        }
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [fetchOrganizationDetail, applyOrganizationDetail, applyLoadError]);
 
   async function run(action: () => Promise<unknown>) {
     setActionError(null);
