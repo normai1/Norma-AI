@@ -31,10 +31,10 @@
   - [x] 7a. **Session and tenant context** - a session provider that resolves the signed-in user once, an active organization/workspace context persisted and validated against real membership, and an authenticated route group whose layout guards every page inside it
   - [x] 7b. **Application shell and navigation** - sidebar navigation showing only built features, a top bar with the organization and workspace switchers and a user menu with sign-out, and the existing organization/workspace pages moved onto the shell
   - [x] 7c. **Overview home and global states** - the `/overview` authenticated landing page, shared loading/empty/error primitives with a route error boundary applied shell-wide, and post-authentication redirect wiring
-- [ ] 8. **User and organization settings** - profile and password management, and validated organization/workspace settings (timezone, locale, business hours, currency) in place of an unvalidated JSON blob
+- [x] 8. **User and organization settings** - profile and password management, and validated organization/workspace settings (timezone, locale, business hours, currency) in place of an unvalidated JSON blob
   - [x] 8a. **Profile and password management** - update your own name and avatar, and change your own password with current-password verification, full session revocation, and a fresh token pair; backend only
   - [x] 8b. **Validated organization and workspace settings** - replace the unvalidated `settings` JSONB blob with a validated shape (timezone, locale, currency, business hours), decide organization-versus-workspace ownership and inheritance, and backfill existing rows; backend only
-  - [ ] 8c. **Settings UI** - a `/settings` area covering the account screen (profile and password) and the organization/workspace settings forms
+  - [x] 8c. **Settings UI** - a `/settings` area covering the account screen (profile and password) and the organization/workspace settings forms
 
 ### Assistant configuration
 

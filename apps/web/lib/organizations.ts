@@ -2,11 +2,18 @@ import { authorizedEmpty, authorizedJson } from "./auth";
 
 export type OrganizationRole = "owner" | "admin" | "member" | "viewer";
 
+// Mirrors SUPPORTED_CURRENCIES in apps/api/app/schemas/settings.py.
+export const SUPPORTED_CURRENCIES = ["USD", "EUR", "GBP", "CAD", "AUD"] as const;
+
+export interface OrganizationSettings {
+  currency: string;
+}
+
 export interface Organization {
   id: string;
   name: string;
   slug: string;
-  settings: Record<string, unknown>;
+  settings: OrganizationSettings;
   status: string;
   created_at: string;
   role: OrganizationRole;
@@ -62,6 +69,16 @@ export async function createOrganization(
   return authorizedJson<Organization>("/api/v1/organizations", {
     method: "POST",
     body: JSON.stringify({ name }),
+  });
+}
+
+export async function updateOrganization(
+  id: string,
+  input: { name?: string; settings?: OrganizationSettings },
+): Promise<Organization> {
+  return authorizedJson<Organization>(`/api/v1/organizations/${id}`, {
+    method: "PATCH",
+    body: JSON.stringify(input),
   });
 }
 

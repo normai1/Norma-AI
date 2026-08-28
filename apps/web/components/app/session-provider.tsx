@@ -17,6 +17,7 @@ interface SessionContextValue {
   user: AuthUser | null;
   status: SessionStatus;
   signOut: () => Promise<void>;
+  refreshUser: () => Promise<void>;
 }
 
 const SessionContext = createContext<SessionContextValue | null>(null);
@@ -24,6 +25,19 @@ const SessionContext = createContext<SessionContextValue | null>(null);
 export function SessionProvider({ children }: { children: ReactNode }) {
   const [user, setUser] = useState<AuthUser | null>(null);
   const [status, setStatus] = useState<SessionStatus>("loading");
+
+  const refreshUser = useCallback(async () => {
+    let current: AuthUser | null = null;
+
+    try {
+      current = await fetchCurrentUser();
+    } catch {
+      current = null;
+    }
+
+    setUser(current);
+    setStatus(current ? "authenticated" : "unauthenticated");
+  }, []);
 
   useEffect(() => {
     let cancelled = false;
@@ -60,7 +74,7 @@ export function SessionProvider({ children }: { children: ReactNode }) {
   }, []);
 
   return (
-    <SessionContext.Provider value={{ user, status, signOut }}>
+    <SessionContext.Provider value={{ user, status, signOut, refreshUser }}>
       {children}
     </SessionContext.Provider>
   );

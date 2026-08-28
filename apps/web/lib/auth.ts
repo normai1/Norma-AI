@@ -214,4 +214,41 @@ export async function fetchCurrentUser(): Promise<AuthUser | null> {
   return response.json() as Promise<AuthUser>;
 }
 
+/** Update the signed-in user's own name and/or avatar. */
+export async function updateProfile(input: {
+  fullName: string;
+  avatarUrl: string;
+}): Promise<AuthUser> {
+  return authorizedJson<AuthUser>("/api/v1/auth/me", {
+    method: "PATCH",
+    body: JSON.stringify({
+      full_name: input.fullName.trim() || null,
+      avatar_url: input.avatarUrl.trim() || null,
+    }),
+  });
+}
+
+/**
+ * Change the signed-in user's own password. The backend revokes every
+ * session and returns a fresh pair, so this stores the new tokens itself -
+ * a caller that forgot to would silently sign the user out on their next
+ * request.
+ */
+export async function changePassword(input: {
+  currentPassword: string;
+  newPassword: string;
+}): Promise<AuthResponse> {
+  const auth = await authorizedJson<AuthResponse>("/api/v1/auth/me/password", {
+    method: "POST",
+    body: JSON.stringify({
+      current_password: input.currentPassword,
+      new_password: input.newPassword,
+    }),
+  });
+
+  storeTokens(auth);
+
+  return auth;
+}
+
 export { ApiError };
