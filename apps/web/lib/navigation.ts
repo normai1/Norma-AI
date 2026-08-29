@@ -8,5 +8,6 @@ export interface NavItem {
 export const NAV_ITEMS: NavItem[] = [
   { href: "/organizations", label: "Organizations" },
   { href: "/assistants", label: "Assistants" },
+  { href: "/prompt-templates", label: "Prompt Templates" },
   { href: "/settings", label: "Settings" },
 ];
