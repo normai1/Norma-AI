@@ -6,6 +6,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from app.api.v1.assistant_versions import router as assistant_versions_router
 from app.api.v1.assistants import router as assistants_router
 from app.api.v1.auth import router as auth_router
+from app.api.v1.glossary_entries import router as glossary_entries_router
 from app.api.v1.health import router as health_router
 from app.api.v1.invitations import router as invitations_router
 from app.api.v1.organizations import router as organizations_router
@@ -85,6 +86,11 @@ app.include_router(
 
 app.include_router(
     assistant_versions_router,
+    prefix=settings.api_v1_prefix,
+)
+
+app.include_router(
+    glossary_entries_router,
     prefix=settings.api_v1_prefix,
 )
 

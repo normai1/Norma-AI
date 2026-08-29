@@ -208,3 +208,21 @@ class PromptRenderError(Exception):
     field the rendering context did not provide - a typo'd variable name in
     the template, not a value to silently blank out.
     """
+
+
+class GlossaryEntryError(Exception):
+    """
+    Base class for glossary entry failures.
+    """
+
+
+class GlossaryEntryNotFound(GlossaryEntryError):
+    """
+    No such glossary entry on this assistant.
+    """
+
+
+class GlossaryEntryAlreadyExists(GlossaryEntryError):
+    """
+    This assistant already has a glossary entry for this term.
+    """

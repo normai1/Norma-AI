@@ -52,7 +52,7 @@
   - [x] 12b. **Variable interpolation and assistant wiring** - a pure `{{namespace.field}}` renderer over assistant/workspace/caller context, plus the additive `prompt_template_id`/`prompt_version` columns on `AssistantVersion`
   - [x] 12c. **Prompt template editor UI** - list, editor, version history, publish/rollback, and diff, mirroring 11d
 - [ ] 13. **Glossary and pronunciation** - per-assistant terms, abbreviations, and phonetic overrides, applied as STT biasing and TTS pronunciation
-  - [ ] 13a. **Glossary backend** - GlossaryEntry model and CRUD, scoped to organization, workspace, and assistant
+  - [x] 13a. **Glossary backend** - GlossaryEntry model and CRUD, scoped to organization, workspace, and assistant
   - [ ] 13b. **Glossary UI** - a glossary section on the assistant editor page (list, add, edit, delete)
 
 ### Knowledge

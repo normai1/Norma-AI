@@ -9,6 +9,7 @@ autogenerate reads. A model that is not imported here is invisible to migrations
 from app.db.base_class import Base
 from app.models.assistant import Assistant
 from app.models.assistant_version import AssistantVersion
+from app.models.glossary_entry import GlossaryEntry
 from app.models.invitation import Invitation
 from app.models.organization import Organization
 from app.models.organization_member import OrganizationMember
@@ -23,6 +24,7 @@ __all__ = [
     "Assistant",
     "AssistantVersion",
     "Base",
+    "GlossaryEntry",
     "Invitation",
     "Organization",
     "OrganizationMember",
