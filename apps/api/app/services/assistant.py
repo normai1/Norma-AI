@@ -27,7 +27,7 @@ async def _resolve_workspace_id(
     return workspace.id
 
 
-async def _resolve_assistant(
+async def resolve_assistant(
     db: AsyncSession,
     *,
     organization_id: uuid.UUID,
@@ -109,7 +109,7 @@ async def get_assistant(
     Fetch one assistant the caller may access.
     """
 
-    return await _resolve_assistant(
+    return await resolve_assistant(
         db,
         organization_id=organization_id,
         workspace_id=workspace_id,
@@ -129,7 +129,7 @@ async def rename_assistant(
     Rename an assistant the caller may manage.
     """
 
-    assistant = await _resolve_assistant(
+    assistant = await resolve_assistant(
         db,
         organization_id=organization_id,
         workspace_id=workspace_id,
@@ -150,7 +150,7 @@ async def archive_assistant(
     Archive an assistant the caller may manage. Idempotent.
     """
 
-    assistant = await _resolve_assistant(
+    assistant = await resolve_assistant(
         db,
         organization_id=organization_id,
         workspace_id=workspace_id,

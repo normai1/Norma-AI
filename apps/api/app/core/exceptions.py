@@ -143,3 +143,9 @@ class AssistantNotFound(AssistantError):
     """
     No such assistant in this workspace.
     """
+
+
+class AssistantVersionNotFound(AssistantError):
+    """
+    No such version of this assistant.
+    """

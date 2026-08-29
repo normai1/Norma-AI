@@ -1,0 +1,55 @@
+import uuid
+
+from sqlalchemy import ForeignKey, Numeric, String, Text, UniqueConstraint
+from sqlalchemy.dialects.postgresql import UUID
+from sqlalchemy.orm import Mapped, mapped_column
+
+from app.db.base_class import Base
+from app.models.mixins import TimestampMixin, UUIDPrimaryKeyMixin
+
+
+class AssistantVersion(UUIDPrimaryKeyMixin, TimestampMixin, Base):
+    """
+    An immutable configuration snapshot for an assistant. Nothing in this
+    codebase updates an existing row yet - 11c is where that guarantee gets
+    enforced in code, not just by convention.
+    """
+
+    __tablename__ = "assistant_versions"
+
+    __table_args__ = (
+        UniqueConstraint(
+            "assistant_id",
+            "version",
+            name="uq_assistant_versions_assistant_version",
+        ),
+    )
+
+    assistant_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("assistants.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+
+    version: Mapped[int] = mapped_column(nullable=False)
+
+    voice_id: Mapped[str] = mapped_column(String(255), nullable=False)
+    language: Mapped[str] = mapped_column(String(32), nullable=False)
+    greeting: Mapped[str] = mapped_column(Text, nullable=False)
+    persona: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+    speech_rate: Mapped[float] = mapped_column(
+        Numeric(3, 2, asdecimal=False),
+        nullable=False,
+    )
+    turn_sensitivity: Mapped[float] = mapped_column(
+        Numeric(3, 2, asdecimal=False),
+        nullable=False,
+    )
+    creativity: Mapped[float] = mapped_column(
+        Numeric(3, 2, asdecimal=False),
+        nullable=False,
+    )
+
+    ambient_sound: Mapped[str | None] = mapped_column(String(255), nullable=True)

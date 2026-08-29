@@ -44,7 +44,7 @@
 - [x] 10. **Voice and language catalogue** - browsable voice list with language and gender metadata, and in-browser voice preview
 - [ ] 11. **Assistant foundation** - Assistant and AssistantVersion tables, CRUD, immutable configuration snapshots, and version pinning per call
   - [x] 11a. **Assistant model and CRUD** - create, list, update, archive assistants within a workspace
-  - [ ] 11b. **Configuration schema** - validated voice, language, greeting, persona, speech rate, sensitivity, creativity, and ambience settings
+  - [x] 11b. **Configuration schema** - validated voice, language, greeting, persona, speech rate, sensitivity, creativity, and ambience settings
   - [ ] 11c. **Versioning** - immutable version snapshots, diffing, and rollback
   - [ ] 11d. **Assistant editor UI** - simple and advanced modes over the same configuration
 - [ ] 12. **Prompt templates and versioning** - reusable use-case templates (receptionist, support, scheduling, answering machine, field service, order intake) with versions, variable interpolation, and rollback
