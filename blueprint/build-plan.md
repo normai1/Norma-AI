@@ -58,7 +58,7 @@
 ### Knowledge
 
 - [x] 14. **Knowledge source foundation** - KnowledgeSource model, upload of PDF/DOCX/Markdown/TXT, S3-backed storage, and processing status/error surfacing
-- [ ] 15. **Website ingestion** - crawl a supplied domain, extract page content, handle recrawl and content-hash deduplication
+- [x] 15. **Website ingestion** - crawl a supplied domain, extract page content, handle recrawl and content-hash deduplication
 - [ ] 16. **Manual FAQ entries** - operator-authored question/answer pairs treated as a first-class knowledge source
 - [ ] 17. **Document processing pipeline** - parse, normalize, and chunk all source types with status tracking and retryable failures
 - [ ] 18. **Vector knowledge indexing** - OpenAI `text-embedding-3-small` embeddings at 1536 dimensions stored in pgvector, scoped by organization, workspace, and assistant

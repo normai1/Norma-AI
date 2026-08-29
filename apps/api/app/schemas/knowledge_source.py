@@ -1,7 +1,7 @@
 import uuid
 from datetime import datetime
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, HttpUrl
 
 
 class DocumentResponse(BaseModel):
@@ -15,6 +15,19 @@ class DocumentResponse(BaseModel):
     created_at: datetime
 
 
+class CrawledPageResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: uuid.UUID
+    url: str
+    fetched_at: datetime
+    content_hash: str
+
+
+class WebsiteKnowledgeSourceCreate(BaseModel):
+    url: HttpUrl
+
+
 class KnowledgeSourceResponse(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
@@ -25,5 +38,7 @@ class KnowledgeSourceResponse(BaseModel):
     status: str
     error_message: str | None
     owner_user_id: uuid.UUID | None
+    source_url: str | None = None
     created_at: datetime
     document: DocumentResponse | None = None
+    crawled_pages: list[CrawledPageResponse] | None = None

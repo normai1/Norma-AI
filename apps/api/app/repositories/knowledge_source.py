@@ -7,6 +7,7 @@ from app.models.document import Document
 from app.models.knowledge_source import KnowledgeSource
 
 FILE_TYPE = "file"
+WEBSITE_TYPE = "website"
 
 
 async def get_by_id(

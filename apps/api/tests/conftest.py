@@ -17,7 +17,9 @@ from app.core.redis import get_redis
 from app.db.base import Base
 from app.main import app
 from app.providers.factory import get_storage_provider_dependency
+from app.providers.httpx_web_crawler import get_page_fetcher_dependency
 from app.providers.mock_storage import MockStorage
+from app.providers.mock_web_crawler import MockPageFetcher
 
 _REGISTER = "/api/v1/auth/register"
 _ORGANIZATIONS = "/api/v1/organizations"
@@ -152,10 +154,21 @@ async def storage() -> MockStorage:
 
 
 @pytest_asyncio.fixture(loop_scope="session")
+async def page_fetcher() -> MockPageFetcher:
+    """
+    The scripted page fetcher a test populates with its own URL -> HTML
+    graph, injected in place of a real network fetch.
+    """
+
+    return MockPageFetcher()
+
+
+@pytest_asyncio.fixture(loop_scope="session")
 async def client(
     db: AsyncSession,
     redis_client: Redis,
     storage: MockStorage,
+    page_fetcher: MockPageFetcher,
 ) -> AsyncGenerator[AsyncClient, None]:
     """
     HTTP client whose requests run inside the per-test transaction.
@@ -173,11 +186,15 @@ async def client(
     def override_get_storage_provider() -> MockStorage:
         return storage
 
+    def override_get_page_fetcher() -> MockPageFetcher:
+        return page_fetcher
+
     app.dependency_overrides[get_db] = override_get_db
     app.dependency_overrides[get_redis] = override_get_redis
     app.dependency_overrides[get_storage_provider_dependency] = (
         override_get_storage_provider
     )
+    app.dependency_overrides[get_page_fetcher_dependency] = override_get_page_fetcher
 
     async with AsyncClient(
         transport=ASGITransport(app=app),

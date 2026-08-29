@@ -67,3 +67,10 @@ class KnowledgeSource(UUIDPrimaryKeyMixin, TimestampMixin, Base):
         nullable=True,
         index=True,
     )
+
+    # Only ever set for type='website' rows - the domain/page a crawl
+    # started from, remembered so a recrawl doesn't need it re-supplied.
+    # Not in project-overview.md's original locked schema (written before
+    # this feature's detailed design); reconciled here as an additive column
+    # rather than silently guessed at (feature 15's own spec note).
+    source_url: Mapped[str | None] = mapped_column(String(2048), nullable=True)
