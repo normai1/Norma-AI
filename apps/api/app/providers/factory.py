@@ -8,10 +8,15 @@ either - that would be a circular import.
 
 from app.core.config import settings
 from app.providers.elevenlabs_speech import ElevenLabsSTT, ElevenLabsTTS
+from app.providers.local_storage import LocalStorage
 from app.providers.mock_speech import MockSTT, MockTTS
+from app.providers.mock_storage import MockStorage
+from app.providers.s3_storage import S3Storage
 from app.providers.speech import SpeechToTextProvider, TextToSpeechProvider
+from app.providers.storage import StorageProvider
 
 _VALID_PROVIDER_NAMES = "'mock', 'elevenlabs'"
+_VALID_STORAGE_PROVIDER_NAMES = "'mock', 'local', 's3'"
 
 
 class UnknownSpeechProviderError(ValueError):
@@ -27,6 +32,20 @@ class MissingElevenLabsApiKeyError(ValueError):
     The "elevenlabs" provider was selected but ELEVENLABS_API_KEY is unset. A
     misconfigured deploy must fail here, at construction, rather than
     discovering the missing key mid-call (CLAUDE.md section 9).
+    """
+
+
+class UnknownStorageProviderError(ValueError):
+    """
+    A configured STORAGE_PROVIDER name has no known implementation.
+    """
+
+
+class MissingS3ConfigError(ValueError):
+    """
+    The "s3" storage provider was selected but AWS credentials/bucket are
+    unset. Fails at construction, not on the first upload attempt - the same
+    reasoning MissingElevenLabsApiKeyError already established.
     """
 
 
@@ -89,3 +108,50 @@ def get_tts_provider_dependency() -> TextToSpeechProvider:
     """
 
     return get_tts_provider()
+
+
+def get_storage_provider(name: str | None = None) -> StorageProvider:
+    """
+    Resolve a storage provider by name, defaulting to STORAGE_PROVIDER.
+    """
+
+    provider_name = name if name is not None else settings.storage_provider
+
+    if provider_name == "mock":
+        return MockStorage()
+
+    if provider_name == "local":
+        return LocalStorage(base_dir=settings.local_storage_dir)
+
+    if provider_name == "s3":
+        if not (
+            settings.aws_s3_bucket
+            and settings.aws_region
+            and settings.aws_access_key_id
+            and settings.aws_secret_access_key
+        ):
+            raise MissingS3ConfigError(
+                "STORAGE_PROVIDER=s3 requires AWS_S3_BUCKET, AWS_REGION, "
+                "AWS_ACCESS_KEY_ID, and AWS_SECRET_ACCESS_KEY to all be set.",
+            )
+
+        return S3Storage(
+            bucket=settings.aws_s3_bucket,
+            region=settings.aws_region,
+            access_key_id=settings.aws_access_key_id,
+            secret_access_key=settings.aws_secret_access_key,
+        )
+
+    raise UnknownStorageProviderError(
+        f"Unknown STORAGE_PROVIDER {provider_name!r}. Valid options: "
+        f"{_VALID_STORAGE_PROVIDER_NAMES}.",
+    )
+
+
+def get_storage_provider_dependency() -> StorageProvider:
+    """
+    FastAPI dependency entry point for the configured storage provider. Takes
+    no arguments for the same reason get_tts_provider_dependency does not.
+    """
+
+    return get_storage_provider()

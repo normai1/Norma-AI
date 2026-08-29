@@ -9,8 +9,10 @@ autogenerate reads. A model that is not imported here is invisible to migrations
 from app.db.base_class import Base
 from app.models.assistant import Assistant
 from app.models.assistant_version import AssistantVersion
+from app.models.document import Document
 from app.models.glossary_entry import GlossaryEntry
 from app.models.invitation import Invitation
+from app.models.knowledge_source import KnowledgeSource
 from app.models.organization import Organization
 from app.models.organization_member import OrganizationMember
 from app.models.prompt_template import PromptTemplate
@@ -24,8 +26,10 @@ __all__ = [
     "Assistant",
     "AssistantVersion",
     "Base",
+    "Document",
     "GlossaryEntry",
     "Invitation",
+    "KnowledgeSource",
     "Organization",
     "OrganizationMember",
     "PromptTemplate",

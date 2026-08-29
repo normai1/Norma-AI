@@ -121,6 +121,28 @@ class Settings(BaseSettings):
     # without a real key rather than failing mid-call.
     elevenlabs_api_key: str = ""
 
+    # ------------------------------------------------------------------
+    # Storage
+    # ------------------------------------------------------------------
+
+    # "local" (not "mock") is the default: unlike speech, local disk storage
+    # is free and needs no credentials, so a fresh checkout can exercise real
+    # file storage end to end. The test suite gets "mock" via a dependency
+    # override in conftest.py, not by changing this default.
+    storage_provider: str = "local"
+
+    # Resolved under the API's working directory - already visible on the
+    # host via the existing ./apps/api:/app bind mount, so no separate Docker
+    # volume is needed for local development persistence.
+    local_storage_dir: str = "data/uploads"
+
+    # Empty by default; the "s3" provider branch refuses to construct without
+    # all four set, rather than failing mid-upload.
+    aws_region: str = ""
+    aws_s3_bucket: str = ""
+    aws_access_key_id: str = ""
+    aws_secret_access_key: str = ""
+
     @model_validator(mode="after")
     def _reject_insecure_secret_key(self) -> "Settings":
         """

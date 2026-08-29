@@ -8,6 +8,7 @@ from app.api.deps import CurrentUser, DbSession
 from app.core.permissions import (
     CREATE_INVITATIONS,
     MANAGE_ASSISTANTS,
+    MANAGE_KNOWLEDGE,
     MANAGE_MEMBERS,
     MANAGE_ORGANIZATION,
     MANAGE_PROMPT_TEMPLATES,
@@ -108,4 +109,9 @@ CanManageAssistants = Annotated[
 CanManagePromptTemplates = Annotated[
     OrganizationMember,
     Depends(require_permission(MANAGE_PROMPT_TEMPLATES)),
+]
+
+CanManageKnowledge = Annotated[
+    OrganizationMember,
+    Depends(require_permission(MANAGE_KNOWLEDGE)),
 ]

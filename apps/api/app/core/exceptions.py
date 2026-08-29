@@ -226,3 +226,27 @@ class GlossaryEntryAlreadyExists(GlossaryEntryError):
     """
     This assistant already has a glossary entry for this term.
     """
+
+
+class KnowledgeSourceError(Exception):
+    """
+    Base class for knowledge source failures.
+    """
+
+
+class KnowledgeSourceNotFound(KnowledgeSourceError):
+    """
+    No such knowledge source in this workspace.
+    """
+
+
+class UnsupportedFileType(KnowledgeSourceError):
+    """
+    The uploaded file's extension is not one this codebase parses.
+    """
+
+
+class FileTooLarge(KnowledgeSourceError):
+    """
+    The uploaded file exceeds the size cap.
+    """

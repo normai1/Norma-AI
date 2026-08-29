@@ -16,6 +16,8 @@ from app.core.database import get_db
 from app.core.redis import get_redis
 from app.db.base import Base
 from app.main import app
+from app.providers.factory import get_storage_provider_dependency
+from app.providers.mock_storage import MockStorage
 
 _REGISTER = "/api/v1/auth/register"
 _ORGANIZATIONS = "/api/v1/organizations"
@@ -140,9 +142,20 @@ async def redis_client() -> AsyncGenerator[Redis, None]:
 
 
 @pytest_asyncio.fixture(loop_scope="session")
+async def storage() -> MockStorage:
+    """
+    The in-memory storage double a test can inspect directly to prove a real
+    upload/download round-trip happened, not just a DB write.
+    """
+
+    return MockStorage()
+
+
+@pytest_asyncio.fixture(loop_scope="session")
 async def client(
     db: AsyncSession,
     redis_client: Redis,
+    storage: MockStorage,
 ) -> AsyncGenerator[AsyncClient, None]:
     """
     HTTP client whose requests run inside the per-test transaction.
@@ -157,8 +170,14 @@ async def client(
     async def override_get_redis() -> Redis:
         return redis_client
 
+    def override_get_storage_provider() -> MockStorage:
+        return storage
+
     app.dependency_overrides[get_db] = override_get_db
     app.dependency_overrides[get_redis] = override_get_redis
+    app.dependency_overrides[get_storage_provider_dependency] = (
+        override_get_storage_provider
+    )
 
     async with AsyncClient(
         transport=ASGITransport(app=app),

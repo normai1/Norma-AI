@@ -24,3 +24,5 @@ ruff
 PyJWT>=2.10
 pwdlib[argon2]>=0.2
 email-validator>=2.2
+python-multipart>=0.0.20
+boto3>=1.35
