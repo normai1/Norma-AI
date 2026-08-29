@@ -1,8 +1,8 @@
 import uuid
 from datetime import datetime
-from typing import Any
+from typing import Any, Self
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 
 class AssistantVersionCreate(BaseModel):
@@ -14,6 +14,18 @@ class AssistantVersionCreate(BaseModel):
     turn_sensitivity: float = Field(default=0.5, ge=0.0, le=1.0)
     creativity: float = Field(default=0.3, ge=0.0, le=1.0)
     ambient_sound: str | None = Field(default=None, max_length=255)
+    prompt_template_id: uuid.UUID | None = None
+    prompt_version: int | None = Field(default=None, ge=1)
+
+    @model_validator(mode="after")
+    def _prompt_reference_is_both_or_neither(self) -> Self:
+        if (self.prompt_template_id is None) != (self.prompt_version is None):
+            raise ValueError(
+                "prompt_template_id and prompt_version must both be set,"
+                " or both omitted",
+            )
+
+        return self
 
 
 class AssistantVersionResponse(BaseModel):
@@ -30,6 +42,8 @@ class AssistantVersionResponse(BaseModel):
     turn_sensitivity: float
     creativity: float
     ambient_sound: str | None
+    prompt_template_id: uuid.UUID | None
+    prompt_version: int | None
     created_at: datetime
 
 

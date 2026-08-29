@@ -141,6 +141,8 @@ async def test_create_succeeds_and_assigns_version_one(client: AsyncClient) -> N
     assert body["version"] == 1
     assert body["voice_id"] == "v1"
     assert body["speech_rate"] == 1.1
+    assert body["prompt_template_id"] is None
+    assert body["prompt_version"] is None
 
 
 async def test_second_create_assigns_version_two(client: AsyncClient) -> None:
@@ -490,3 +492,159 @@ async def test_diff_is_reachable_by_a_member(client: AsyncClient) -> None:
     )
 
     assert response.status_code == 200
+
+
+def _prompt_templates_url(organization_id: str, workspace_id: str) -> str:
+    return f"{ORGS}/{organization_id}/workspaces/{workspace_id}/prompt-templates"
+
+
+async def _create_prompt_template_with_version(
+    client: AsyncClient,
+    organization_id: str,
+    workspace_id: str,
+    headers: dict[str, str],
+) -> tuple[str, int]:
+    """
+    Create a prompt template and one version of it. Returns the template id
+    and the version number.
+    """
+
+    template_response = await client.post(
+        _prompt_templates_url(organization_id, workspace_id),
+        json={"name": "Front Desk Receptionist", "use_case": "receptionist"},
+        headers=headers,
+    )
+    template = template_response.json()
+
+    base_url = _prompt_templates_url(organization_id, workspace_id)
+    version_response = await client.post(
+        f"{base_url}/{template['id']}/versions",
+        json={"content": "Thanks for calling!"},
+        headers=headers,
+    )
+    version = version_response.json()
+
+    return template["id"], version["version"]
+
+
+async def test_create_with_a_prompt_reference_succeeds_and_echoes_it_back(
+    client: AsyncClient,
+) -> None:
+    organization_id, workspace_id, assistant_id, owner_headers = await _setup_assistant(
+        client,
+        "asstver-promptref",
+    )
+    prompt_template_id, prompt_version = await _create_prompt_template_with_version(
+        client, organization_id, workspace_id, owner_headers
+    )
+
+    response = await client.post(
+        _versions_url(organization_id, workspace_id, assistant_id),
+        json={
+            **_VALID_PAYLOAD,
+            "prompt_template_id": prompt_template_id,
+            "prompt_version": prompt_version,
+        },
+        headers=owner_headers,
+    )
+
+    assert response.status_code == 201
+    body = response.json()
+    assert body["prompt_template_id"] == prompt_template_id
+    assert body["prompt_version"] == prompt_version
+
+
+async def test_create_rejects_prompt_version_without_prompt_template_id(
+    client: AsyncClient,
+) -> None:
+    organization_id, workspace_id, assistant_id, owner_headers = await _setup_assistant(
+        client,
+        "asstver-promptref-partial",
+    )
+
+    response = await client.post(
+        _versions_url(organization_id, workspace_id, assistant_id),
+        json={**_VALID_PAYLOAD, "prompt_version": 1},
+        headers=owner_headers,
+    )
+
+    assert response.status_code == 422
+
+
+async def test_create_rejects_prompt_template_id_without_prompt_version(
+    client: AsyncClient,
+) -> None:
+    organization_id, workspace_id, assistant_id, owner_headers = await _setup_assistant(
+        client,
+        "asstver-promptref-partial-b",
+    )
+    prompt_template_id, _ = await _create_prompt_template_with_version(
+        client, organization_id, workspace_id, owner_headers
+    )
+
+    response = await client.post(
+        _versions_url(organization_id, workspace_id, assistant_id),
+        json={**_VALID_PAYLOAD, "prompt_template_id": prompt_template_id},
+        headers=owner_headers,
+    )
+
+    assert response.status_code == 422
+
+
+async def test_create_rejects_a_nonexistent_prompt_version(client: AsyncClient) -> None:
+    organization_id, workspace_id, assistant_id, owner_headers = await _setup_assistant(
+        client,
+        "asstver-promptref-badversion",
+    )
+    prompt_template_id, _ = await _create_prompt_template_with_version(
+        client, organization_id, workspace_id, owner_headers
+    )
+
+    response = await client.post(
+        _versions_url(organization_id, workspace_id, assistant_id),
+        json={
+            **_VALID_PAYLOAD,
+            "prompt_template_id": prompt_template_id,
+            "prompt_version": 99,
+        },
+        headers=owner_headers,
+    )
+
+    assert response.status_code == 404
+
+
+async def test_create_rejects_a_prompt_template_from_a_sibling_workspace(
+    client: AsyncClient,
+) -> None:
+    owner_headers, organization_id = await _org_with_owner(
+        client,
+        "asstver-promptref-sibling@example.com",
+    )
+    workspace_a = await _create_workspace(
+        client, organization_id, owner_headers, "Clinic A"
+    )
+    workspace_b = await _create_workspace(
+        client, organization_id, owner_headers, "Clinic B"
+    )
+    assistant = await _create_assistant(
+        client,
+        organization_id,
+        workspace_a["id"],
+        owner_headers,
+        "Front Desk",
+    )
+    prompt_template_id, prompt_version = await _create_prompt_template_with_version(
+        client, organization_id, workspace_b["id"], owner_headers
+    )
+
+    response = await client.post(
+        _versions_url(organization_id, workspace_a["id"], assistant["id"]),
+        json={
+            **_VALID_PAYLOAD,
+            "prompt_template_id": prompt_template_id,
+            "prompt_version": prompt_version,
+        },
+        headers=owner_headers,
+    )
+
+    assert response.status_code == 404

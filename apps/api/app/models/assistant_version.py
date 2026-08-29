@@ -55,6 +55,22 @@ class AssistantVersion(UUIDPrimaryKeyMixin, TimestampMixin, Base):
 
     ambient_sound: Mapped[str | None] = mapped_column(String(255), nullable=True)
 
+    # Which prompt template (and which version of it) this configuration
+    # snapshot was based on - both nullable, both-or-neither (enforced in
+    # the schema, not here). No ondelete cascade: deleting a prompt template
+    # is not a capability that exists yet, and must never cascade-delete an
+    # assistant version that references it.
+    prompt_template_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey(
+            "prompt_templates.id",
+            name="fk_assistant_versions_prompt_template_id",
+        ),
+        nullable=True,
+    )
+
+    prompt_version: Mapped[int | None] = mapped_column(nullable=True)
+
 
 @event.listens_for(AssistantVersion, "before_update")
 def _reject_update(mapper, connection, target: AssistantVersion) -> None:

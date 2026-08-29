@@ -68,6 +68,8 @@ async def create(
     turn_sensitivity: float,
     creativity: float,
     ambient_sound: str | None,
+    prompt_template_id: uuid.UUID | None = None,
+    prompt_version: int | None = None,
 ) -> AssistantVersion:
     """
     Insert a new, immutable version snapshot.
@@ -84,6 +86,8 @@ async def create(
         turn_sensitivity=turn_sensitivity,
         creativity=creativity,
         ambient_sound=ambient_sound,
+        prompt_template_id=prompt_template_id,
+        prompt_version=prompt_version,
     )
 
     db.add(assistant_version)

@@ -200,3 +200,11 @@ class PromptTemplateArchived(PromptTemplateError):
     codebase (no restore/un-archive path exists yet), so it cannot be
     published.
     """
+
+
+class PromptRenderError(Exception):
+    """
+    A `{{namespace.field}}` placeholder in a prompt named a namespace or
+    field the rendering context did not provide - a typo'd variable name in
+    the template, not a value to silently blank out.
+    """

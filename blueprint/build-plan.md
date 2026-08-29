@@ -49,7 +49,7 @@
   - [x] 11d. **Assistant editor UI** - simple and advanced modes over the same configuration
 - [ ] 12. **Prompt templates and versioning** - reusable use-case templates (receptionist, support, scheduling, answering machine, field service, order intake) with versions, variable interpolation, and rollback
   - [x] 12a. **Prompt template backend** - PromptTemplate and PromptVersion tables, CRUD, immutable versioning, publish/rollback, and diff, mirroring item 11's proven Assistant/AssistantVersion pattern
-  - [ ] 12b. **Variable interpolation and assistant wiring** - a pure `{{namespace.field}}` renderer over assistant/workspace/caller context, plus the additive `prompt_template_id`/`prompt_version` columns on `AssistantVersion`
+  - [x] 12b. **Variable interpolation and assistant wiring** - a pure `{{namespace.field}}` renderer over assistant/workspace/caller context, plus the additive `prompt_template_id`/`prompt_version` columns on `AssistantVersion`
   - [ ] 12c. **Prompt template editor UI** - list, editor, version history, publish/rollback, and diff, mirroring 11d
 - [ ] 13. **Glossary and pronunciation** - per-assistant terms, abbreviations, and phonetic overrides, applied as STT biasing and TTS pronunciation
   - [ ] 13a. **Glossary backend** - GlossaryEntry model and CRUD, scoped to organization, workspace, and assistant

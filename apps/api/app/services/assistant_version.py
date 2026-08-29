@@ -6,6 +6,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.exceptions import AssistantVersionNotFound
 from app.models.assistant_version import AssistantVersion
 from app.repositories import assistant_version as assistant_version_repo
+from app.services import prompt_version as prompt_version_service
 from app.services.assistant import resolve_assistant
 
 # The eight config fields 11b defined - the only ones a version "diff" means
@@ -37,10 +38,15 @@ async def create_version(
     turn_sensitivity: float,
     creativity: float,
     ambient_sound: str | None,
+    prompt_template_id: uuid.UUID | None = None,
+    prompt_version: int | None = None,
 ) -> AssistantVersion:
     """
     Save a new, immutable configuration snapshot for an assistant, refusing
-    one outside the caller's workspace.
+    one outside the caller's workspace. When a prompt template reference is
+    given, it is resolved through the same workspace before saving, so an
+    assistant version can never silently point at another workspace's
+    prompt template.
     """
 
     assistant = await resolve_assistant(
@@ -49,6 +55,15 @@ async def create_version(
         workspace_id=workspace_id,
         assistant_id=assistant_id,
     )
+
+    if prompt_template_id is not None and prompt_version is not None:
+        await prompt_version_service.get_version(
+            db,
+            organization_id=organization_id,
+            workspace_id=workspace_id,
+            prompt_template_id=prompt_template_id,
+            version=prompt_version,
+        )
 
     version = await assistant_version_repo.next_version_number(db, assistant.id)
 
@@ -64,6 +79,8 @@ async def create_version(
         turn_sensitivity=turn_sensitivity,
         creativity=creativity,
         ambient_sound=ambient_sound,
+        prompt_template_id=prompt_template_id,
+        prompt_version=prompt_version,
     )
 
 
