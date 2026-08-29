@@ -7,6 +7,7 @@ from fastapi import Depends, HTTPException, status
 from app.api.deps import CurrentUser, DbSession
 from app.core.permissions import (
     CREATE_INVITATIONS,
+    MANAGE_ASSISTANTS,
     MANAGE_MEMBERS,
     MANAGE_ORGANIZATION,
     MANAGE_WORKSPACES,
@@ -96,4 +97,9 @@ CanRevokeInvitations = Annotated[
 CanManageWorkspaces = Annotated[
     OrganizationMember,
     Depends(require_permission(MANAGE_WORKSPACES)),
+]
+
+CanManageAssistants = Annotated[
+    OrganizationMember,
+    Depends(require_permission(MANAGE_ASSISTANTS)),
 ]

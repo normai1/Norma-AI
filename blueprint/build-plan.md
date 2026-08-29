@@ -43,7 +43,7 @@
   - [x] 9b. **ElevenLabs speech adapters** - `ElevenLabsSTT` and `ElevenLabsTTS` implementing 9a's contracts, with the transport dependency they need and adapter tests against a stubbed transport
 - [x] 10. **Voice and language catalogue** - browsable voice list with language and gender metadata, and in-browser voice preview
 - [ ] 11. **Assistant foundation** - Assistant and AssistantVersion tables, CRUD, immutable configuration snapshots, and version pinning per call
-  - [ ] 11a. **Assistant model and CRUD** - create, list, update, archive assistants within a workspace
+  - [x] 11a. **Assistant model and CRUD** - create, list, update, archive assistants within a workspace
   - [ ] 11b. **Configuration schema** - validated voice, language, greeting, persona, speech rate, sensitivity, creativity, and ambience settings
   - [ ] 11c. **Versioning** - immutable version snapshots, diffing, and rollback
   - [ ] 11d. **Assistant editor UI** - simple and advanced modes over the same configuration

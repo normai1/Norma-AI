@@ -131,3 +131,15 @@ class WorkspaceMemberAlreadyExists(WorkspaceError):
     """
     The target user already has access to the workspace.
     """
+
+
+class AssistantError(Exception):
+    """
+    Base class for assistant failures.
+    """
+
+
+class AssistantNotFound(AssistantError):
+    """
+    No such assistant in this workspace.
+    """
