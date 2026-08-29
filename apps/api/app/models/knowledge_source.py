@@ -74,3 +74,9 @@ class KnowledgeSource(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     # this feature's detailed design); reconciled here as an additive column
     # rather than silently guessed at (feature 15's own spec note).
     source_url: Mapped[str | None] = mapped_column(String(2048), nullable=True)
+
+    # Only ever set for type='manual_faq' rows - the operator-facing label
+    # distinguishing one FAQ set from another (e.g. "General FAQ" vs.
+    # "Billing Questions"), the same class of reconciliation as source_url
+    # above (feature 16's own spec note).
+    name: Mapped[str | None] = mapped_column(String(255), nullable=True)

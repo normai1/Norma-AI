@@ -250,3 +250,10 @@ class FileTooLarge(KnowledgeSourceError):
     """
     The uploaded file exceeds the size cap.
     """
+
+
+class FaqEntryNotFound(KnowledgeSourceError):
+    """
+    No such FAQ entry on this knowledge source - including when the source
+    exists but is not type='manual_faq'.
+    """

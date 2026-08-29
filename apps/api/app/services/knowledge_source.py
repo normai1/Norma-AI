@@ -85,6 +85,39 @@ async def resolve_knowledge_source(
     return knowledge_source
 
 
+async def create_manual_faq_knowledge_source(
+    db: AsyncSession,
+    *,
+    organization_id: uuid.UUID,
+    workspace_id: uuid.UUID,
+    owner_user_id: uuid.UUID,
+    name: str,
+) -> KnowledgeSource:
+    """
+    Create a new manual-FAQ-type knowledge source. Status stays 'pending' -
+    unlike a crawl, there is no operation here that can genuinely succeed or
+    fail, so there is nothing to transition it to.
+    """
+
+    await _resolve_workspace_id(
+        db,
+        organization_id=organization_id,
+        workspace_id=workspace_id,
+    )
+
+    knowledge_source = KnowledgeSource(
+        organization_id=organization_id,
+        workspace_id=workspace_id,
+        type=knowledge_source_repo.MANUAL_FAQ_TYPE,
+        owner_user_id=owner_user_id,
+        name=name,
+    )
+    db.add(knowledge_source)
+    await db.flush()
+
+    return knowledge_source
+
+
 async def upload_knowledge_source(
     db: AsyncSession,
     storage: StorageProvider,

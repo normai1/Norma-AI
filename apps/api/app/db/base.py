@@ -11,6 +11,7 @@ from app.models.assistant import Assistant
 from app.models.assistant_version import AssistantVersion
 from app.models.crawled_page import CrawledPage
 from app.models.document import Document
+from app.models.faq_entry import FaqEntry
 from app.models.glossary_entry import GlossaryEntry
 from app.models.invitation import Invitation
 from app.models.knowledge_source import KnowledgeSource
@@ -29,6 +30,7 @@ __all__ = [
     "Base",
     "CrawledPage",
     "Document",
+    "FaqEntry",
     "GlossaryEntry",
     "Invitation",
     "KnowledgeSource",

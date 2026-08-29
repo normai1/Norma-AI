@@ -19,6 +19,7 @@ from app.schemas.knowledge_source import (
     CrawledPageResponse,
     DocumentResponse,
     KnowledgeSourceResponse,
+    ManualFaqKnowledgeSourceCreate,
     WebsiteKnowledgeSourceCreate,
 )
 from app.services import knowledge_source as knowledge_source_service
@@ -62,6 +63,7 @@ def _to_response(
         error_message=knowledge_source.error_message,
         owner_user_id=knowledge_source.owner_user_id,
         source_url=knowledge_source.source_url,
+        name=knowledge_source.name,
         created_at=knowledge_source.created_at,
         document=DocumentResponse.model_validate(document) if document else None,
         crawled_pages=(
@@ -189,6 +191,39 @@ async def recrawl_knowledge_source(
     await db.commit()
 
     return _to_response(knowledge_source, None, crawled_pages)
+
+
+@router.post(
+    f"{_PREFIX}/manual-faq",
+    response_model=KnowledgeSourceResponse,
+    status_code=status.HTTP_201_CREATED,
+)
+async def create_manual_faq_knowledge_source(
+    workspace_id: uuid.UUID,
+    payload: ManualFaqKnowledgeSourceCreate,
+    membership: CanManageKnowledge,
+    db: DbSession,
+) -> KnowledgeSourceResponse:
+    """
+    Create a new manual-FAQ knowledge source. Owners and admins only.
+    """
+
+    try:
+        knowledge_source = (
+            await knowledge_source_service.create_manual_faq_knowledge_source(
+                db,
+                organization_id=membership.organization_id,
+                workspace_id=workspace_id,
+                owner_user_id=membership.user_id,
+                name=payload.name,
+            )
+        )
+    except WorkspaceNotFound as exc:
+        raise _WORKSPACE_NOT_FOUND from exc
+
+    await db.commit()
+
+    return _to_response(knowledge_source, None)
 
 
 @router.get(_PREFIX, response_model=list[KnowledgeSourceResponse])

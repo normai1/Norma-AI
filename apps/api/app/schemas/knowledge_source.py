@@ -1,7 +1,7 @@
 import uuid
 from datetime import datetime
 
-from pydantic import BaseModel, ConfigDict, HttpUrl
+from pydantic import BaseModel, ConfigDict, Field, HttpUrl
 
 
 class DocumentResponse(BaseModel):
@@ -28,6 +28,10 @@ class WebsiteKnowledgeSourceCreate(BaseModel):
     url: HttpUrl
 
 
+class ManualFaqKnowledgeSourceCreate(BaseModel):
+    name: str = Field(min_length=1, max_length=255)
+
+
 class KnowledgeSourceResponse(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
@@ -39,6 +43,7 @@ class KnowledgeSourceResponse(BaseModel):
     error_message: str | None
     owner_user_id: uuid.UUID | None
     source_url: str | None = None
+    name: str | None = None
     created_at: datetime
     document: DocumentResponse | None = None
     crawled_pages: list[CrawledPageResponse] | None = None

@@ -8,6 +8,7 @@ from app.models.knowledge_source import KnowledgeSource
 
 FILE_TYPE = "file"
 WEBSITE_TYPE = "website"
+MANUAL_FAQ_TYPE = "manual_faq"
 
 
 async def get_by_id(
