@@ -42,11 +42,11 @@
   - [x] 9a. **Speech provider contracts and mocks** - the two streaming interfaces, their shared value types and error hierarchy, deterministic `MockSTT`/`MockTTS` with latency and failure injection, and config-driven provider selection; no network, no new dependencies
   - [x] 9b. **ElevenLabs speech adapters** - `ElevenLabsSTT` and `ElevenLabsTTS` implementing 9a's contracts, with the transport dependency they need and adapter tests against a stubbed transport
 - [x] 10. **Voice and language catalogue** - browsable voice list with language and gender metadata, and in-browser voice preview
-- [ ] 11. **Assistant foundation** - Assistant and AssistantVersion tables, CRUD, immutable configuration snapshots, and version pinning per call
+- [x] 11. **Assistant foundation** - Assistant and AssistantVersion tables, CRUD, immutable configuration snapshots, and version pinning per call
   - [x] 11a. **Assistant model and CRUD** - create, list, update, archive assistants within a workspace
   - [x] 11b. **Configuration schema** - validated voice, language, greeting, persona, speech rate, sensitivity, creativity, and ambience settings
   - [x] 11c. **Versioning** - immutable version snapshots, diffing, and rollback
-  - [ ] 11d. **Assistant editor UI** - simple and advanced modes over the same configuration
+  - [x] 11d. **Assistant editor UI** - simple and advanced modes over the same configuration
 - [ ] 12. **Prompt templates and versioning** - reusable use-case templates (receptionist, support, scheduling, answering machine, field service, order intake) with versions, variable interpolation, and rollback
 - [ ] 13. **Glossary and pronunciation** - per-assistant terms, abbreviations, and phonetic overrides, applied as STT biasing and TTS pronunciation
 

@@ -7,5 +7,6 @@ export interface NavItem {
 // (see project-overview.md's core navigation list for the eventual target).
 export const NAV_ITEMS: NavItem[] = [
   { href: "/organizations", label: "Organizations" },
+  { href: "/assistants", label: "Assistants" },
   { href: "/settings", label: "Settings" },
 ];
