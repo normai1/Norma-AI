@@ -12,6 +12,8 @@ from app.core.exceptions import (
 )
 from app.schemas.assistant_version import (
     AssistantVersionCreate,
+    AssistantVersionDiffResponse,
+    AssistantVersionFieldDiff,
     AssistantVersionResponse,
 )
 from app.services import assistant_version as assistant_version_service
@@ -129,3 +131,43 @@ async def get_assistant_version(
         raise _ASSISTANT_VERSION_NOT_FOUND from exc
 
     return AssistantVersionResponse.model_validate(assistant_version)
+
+
+@router.get(
+    f"{_PREFIX}/{{from_version}}/diff/{{to_version}}",
+    response_model=AssistantVersionDiffResponse,
+)
+async def diff_assistant_versions(
+    assistant_id: uuid.UUID,
+    from_version: int,
+    to_version: int,
+    workspace: CurrentWorkspace,
+    db: DbSession,
+) -> AssistantVersionDiffResponse:
+    """
+    The config fields that differ between two versions. Any workspace
+    member may see it.
+    """
+
+    try:
+        changes = await assistant_version_service.diff_versions(
+            db,
+            organization_id=workspace.organization_id,
+            workspace_id=workspace.id,
+            assistant_id=assistant_id,
+            from_version=from_version,
+            to_version=to_version,
+        )
+    except AssistantNotFound as exc:
+        raise _ASSISTANT_NOT_FOUND from exc
+    except AssistantVersionNotFound as exc:
+        raise _ASSISTANT_VERSION_NOT_FOUND from exc
+
+    return AssistantVersionDiffResponse(
+        from_version=from_version,
+        to_version=to_version,
+        changes={
+            field: AssistantVersionFieldDiff(previous=previous, current=current)
+            for field, (previous, current) in changes.items()
+        },
+    )

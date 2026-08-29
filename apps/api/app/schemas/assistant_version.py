@@ -1,5 +1,6 @@
 import uuid
 from datetime import datetime
+from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -30,3 +31,14 @@ class AssistantVersionResponse(BaseModel):
     creativity: float
     ambient_sound: str | None
     created_at: datetime
+
+
+class AssistantVersionFieldDiff(BaseModel):
+    previous: Any
+    current: Any
+
+
+class AssistantVersionDiffResponse(BaseModel):
+    from_version: int
+    to_version: int
+    changes: dict[str, AssistantVersionFieldDiff]

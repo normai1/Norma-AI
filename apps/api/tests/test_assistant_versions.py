@@ -1,5 +1,10 @@
+import pytest
 from httpx import AsyncClient
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.exceptions import AssistantVersionImmutable
+from app.models.assistant_version import AssistantVersion
 from tests.conftest import _org_with_owner, _signed_in
 
 ORGS = "/api/v1/organizations"
@@ -341,3 +346,147 @@ async def test_version_in_one_assistant_is_not_reachable_through_a_sibling_assis
     )
 
     assert response.status_code == 404
+
+
+async def test_updating_a_version_row_directly_is_rejected(
+    client: AsyncClient,
+    db: AsyncSession,
+) -> None:
+    """
+    Proves the immutability guard actually fires - not just that no code
+    path currently attempts an update.
+    """
+
+    organization_id, workspace_id, assistant_id, owner_headers = await _setup_assistant(
+        client,
+        "asstver-immutable",
+    )
+    await client.post(
+        _versions_url(organization_id, workspace_id, assistant_id),
+        json=_VALID_PAYLOAD,
+        headers=owner_headers,
+    )
+
+    assistant_version = await db.scalar(
+        select(AssistantVersion).where(AssistantVersion.assistant_id == assistant_id),
+    )
+    assistant_version.greeting = "Mutated"
+
+    with pytest.raises(AssistantVersionImmutable):
+        await db.flush()
+
+
+def _diff_url(
+    organization_id: str,
+    workspace_id: str,
+    assistant_id: str,
+    from_version: int,
+    to_version: int,
+) -> str:
+    base = _versions_url(organization_id, workspace_id, assistant_id)
+
+    return f"{base}/{from_version}/diff/{to_version}"
+
+
+async def test_diff_returns_only_the_fields_that_changed(client: AsyncClient) -> None:
+    organization_id, workspace_id, assistant_id, owner_headers = await _setup_assistant(
+        client,
+        "asstver-diff",
+    )
+    url = _versions_url(organization_id, workspace_id, assistant_id)
+
+    await client.post(url, json=_VALID_PAYLOAD, headers=owner_headers)
+    await client.post(
+        url,
+        json={**_VALID_PAYLOAD, "greeting": "Hello there!", "speech_rate": 1.5},
+        headers=owner_headers,
+    )
+
+    response = await client.get(
+        _diff_url(organization_id, workspace_id, assistant_id, 1, 2),
+        headers=owner_headers,
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["from_version"] == 1
+    assert body["to_version"] == 2
+    assert set(body["changes"].keys()) == {"greeting", "speech_rate"}
+    assert body["changes"]["greeting"] == {
+        "previous": "Thanks for calling!",
+        "current": "Hello there!",
+    }
+    assert body["changes"]["speech_rate"] == {"previous": 1.1, "current": 1.5}
+
+
+async def test_diff_between_a_version_and_itself_is_empty(client: AsyncClient) -> None:
+    organization_id, workspace_id, assistant_id, owner_headers = await _setup_assistant(
+        client,
+        "asstver-diffsame",
+    )
+    url = _versions_url(organization_id, workspace_id, assistant_id)
+    await client.post(url, json=_VALID_PAYLOAD, headers=owner_headers)
+
+    response = await client.get(
+        _diff_url(organization_id, workspace_id, assistant_id, 1, 1),
+        headers=owner_headers,
+    )
+
+    assert response.status_code == 200
+    assert response.json()["changes"] == {}
+
+
+async def test_diff_is_not_found_when_a_version_is_missing(client: AsyncClient) -> None:
+    organization_id, workspace_id, assistant_id, owner_headers = await _setup_assistant(
+        client,
+        "asstver-diffmissing",
+    )
+    url = _versions_url(organization_id, workspace_id, assistant_id)
+    await client.post(url, json=_VALID_PAYLOAD, headers=owner_headers)
+
+    response = await client.get(
+        _diff_url(organization_id, workspace_id, assistant_id, 1, 99),
+        headers=owner_headers,
+    )
+
+    assert response.status_code == 404
+
+
+async def test_diff_is_reachable_by_a_member(client: AsyncClient) -> None:
+    organization_id, owner_headers, member_headers = await _org_with_member(
+        client,
+        "asstver-diffmember",
+        "member",
+    )
+    workspace = await _create_workspace(
+        client, organization_id, owner_headers, "Clinic"
+    )
+    roster = await client.get(
+        f"{ORGS}/{organization_id}/members", headers=owner_headers
+    )
+    member_id = next(
+        m["id"]
+        for m in roster.json()
+        if m["user"]["email"] == "asstver-diffmember-member@example.com"
+    )
+    await client.post(
+        f"{ORGS}/{organization_id}/workspaces/{workspace['id']}/members",
+        json={"member_id": member_id},
+        headers=owner_headers,
+    )
+    created = await _create_assistant(
+        client,
+        organization_id,
+        workspace["id"],
+        owner_headers,
+        "Front Desk",
+    )
+    url = _versions_url(organization_id, workspace["id"], created["id"])
+    await client.post(url, json=_VALID_PAYLOAD, headers=owner_headers)
+
+    response = await client.get(
+        _diff_url(organization_id, workspace["id"], created["id"], 1, 1),
+        headers=member_headers,
+    )
+
+    assert response.status_code == 200

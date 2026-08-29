@@ -1,9 +1,10 @@
 import uuid
 
-from sqlalchemy import ForeignKey, Numeric, String, Text, UniqueConstraint
+from sqlalchemy import ForeignKey, Numeric, String, Text, UniqueConstraint, event
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
+from app.core.exceptions import AssistantVersionImmutable
 from app.db.base_class import Base
 from app.models.mixins import TimestampMixin, UUIDPrimaryKeyMixin
 
@@ -53,3 +54,17 @@ class AssistantVersion(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     )
 
     ambient_sound: Mapped[str | None] = mapped_column(String(255), nullable=True)
+
+
+@event.listens_for(AssistantVersion, "before_update")
+def _reject_update(mapper, connection, target: AssistantVersion) -> None:
+    """
+    Enforce immutability structurally, not just by never writing an update
+    function - nothing in this codebase attempts one today, so this turns
+    that absence into a guarantee a future call site can't accidentally
+    break.
+    """
+
+    raise AssistantVersionImmutable(
+        f"AssistantVersion {target.id} is immutable and cannot be updated",
+    )

@@ -12,6 +12,10 @@ class AssistantUpdate(BaseModel):
     name: str = Field(min_length=1, max_length=255)
 
 
+class AssistantPublish(BaseModel):
+    version: int = Field(ge=1)
+
+
 class AssistantResponse(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
@@ -20,4 +24,5 @@ class AssistantResponse(BaseModel):
     workspace_id: uuid.UUID
     name: str
     status: str
+    current_version_id: uuid.UUID | None
     created_at: datetime

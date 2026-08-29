@@ -6,6 +6,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.models.assistant import Assistant
 
 ARCHIVED_STATUS = "archived"
+PUBLISHED_STATUS = "published"
 
 
 async def get_by_id(db: AsyncSession, assistant_id: uuid.UUID) -> Assistant | None:
@@ -80,6 +81,26 @@ async def archive(db: AsyncSession, assistant: Assistant) -> Assistant:
     """
 
     assistant.status = ARCHIVED_STATUS
+
+    await db.flush()
+
+    return assistant
+
+
+async def publish(
+    db: AsyncSession,
+    assistant: Assistant,
+    *,
+    version_id: uuid.UUID,
+) -> Assistant:
+    """
+    Point an assistant at a version and move it to 'published'. Idempotent:
+    publishing the already-current version, or re-publishing an already-
+    published assistant, is a no-op beyond the (possibly unchanged) pointer.
+    """
+
+    assistant.current_version_id = version_id
+    assistant.status = PUBLISHED_STATUS
 
     await db.flush()
 

@@ -1,4 +1,5 @@
 import uuid
+from typing import Any
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -6,6 +7,20 @@ from app.core.exceptions import AssistantVersionNotFound
 from app.models.assistant_version import AssistantVersion
 from app.repositories import assistant_version as assistant_version_repo
 from app.services.assistant import resolve_assistant
+
+# The eight config fields 11b defined - the only ones a version "diff" means
+# anything for. id/assistant_id/version/timestamps are never meaningfully
+# "what changed" information to an operator.
+_DIFFABLE_FIELDS = (
+    "voice_id",
+    "language",
+    "greeting",
+    "persona",
+    "speech_rate",
+    "turn_sensitivity",
+    "creativity",
+    "ambient_sound",
+)
 
 
 async def create_version(
@@ -102,3 +117,38 @@ async def get_version(
         raise AssistantVersionNotFound
 
     return assistant_version
+
+
+async def diff_versions(
+    db: AsyncSession,
+    *,
+    organization_id: uuid.UUID,
+    workspace_id: uuid.UUID,
+    assistant_id: uuid.UUID,
+    from_version: int,
+    to_version: int,
+) -> dict[str, tuple[Any, Any]]:
+    """
+    The config fields that differ between two versions of an assistant,
+    refusing either version outside the caller's workspace. Only fields
+    that actually differ are included.
+    """
+
+    assistant = await resolve_assistant(
+        db,
+        organization_id=organization_id,
+        workspace_id=workspace_id,
+        assistant_id=assistant_id,
+    )
+
+    older = await assistant_version_repo.get_by_version(db, assistant.id, from_version)
+    newer = await assistant_version_repo.get_by_version(db, assistant.id, to_version)
+
+    if older is None or newer is None:
+        raise AssistantVersionNotFound
+
+    return {
+        field: (getattr(older, field), getattr(newer, field))
+        for field in _DIFFABLE_FIELDS
+        if getattr(older, field) != getattr(newer, field)
+    }

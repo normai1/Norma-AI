@@ -125,6 +125,34 @@ async def _create_assistant(
     return response.json()
 
 
+_VALID_VERSION_PAYLOAD = {
+    "voice_id": "v1",
+    "language": "en-US",
+    "greeting": "Thanks for calling!",
+    "persona": "Warm and efficient.",
+    "speech_rate": 1.1,
+    "turn_sensitivity": 0.6,
+    "creativity": 0.4,
+    "ambient_sound": None,
+}
+
+
+async def _create_version(
+    client: AsyncClient,
+    organization_id: str,
+    workspace_id: str,
+    assistant_id: str,
+    headers: dict[str, str],
+) -> dict:
+    response = await client.post(
+        f"{_assistants_url(organization_id, workspace_id)}/{assistant_id}/versions",
+        json=_VALID_VERSION_PAYLOAD,
+        headers=headers,
+    )
+
+    return response.json()
+
+
 async def test_create_succeeds_for_an_owner(client: AsyncClient) -> None:
     owner_headers, organization_id = await _org_with_owner(
         client,
@@ -146,6 +174,7 @@ async def test_create_succeeds_for_an_owner(client: AsyncClient) -> None:
     assert body["status"] == "draft"
     assert body["organization_id"] == organization_id
     assert body["workspace_id"] == workspace["id"]
+    assert body["current_version_id"] is None
 
 
 async def test_create_requires_authentication(client: AsyncClient) -> None:
@@ -447,6 +476,282 @@ async def test_assistant_in_one_organization_is_not_reachable_through_another(
     response = await client.get(
         f"{_assistants_url(organization_b_id, workspace_a['id'])}/{created['id']}",
         headers=owner_b_headers,
+    )
+
+    assert response.status_code == 404
+
+
+def _publish_url(organization_id: str, workspace_id: str, assistant_id: str) -> str:
+    return f"{_assistants_url(organization_id, workspace_id)}/{assistant_id}/publish"
+
+
+async def test_publish_succeeds_and_flips_status(client: AsyncClient) -> None:
+    owner_headers, organization_id = await _org_with_owner(
+        client,
+        "asst-publish-owner@example.com",
+    )
+    workspace = await _create_workspace(
+        client, organization_id, owner_headers, "Clinic"
+    )
+    created = await _create_assistant(
+        client,
+        organization_id,
+        workspace["id"],
+        owner_headers,
+        "Front Desk",
+    )
+    version = await _create_version(
+        client,
+        organization_id,
+        workspace["id"],
+        created["id"],
+        owner_headers,
+    )
+
+    response = await client.post(
+        _publish_url(organization_id, workspace["id"], created["id"]),
+        json={"version": version["version"]},
+        headers=owner_headers,
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["status"] == "published"
+    assert body["current_version_id"] == version["id"]
+
+
+async def test_publish_the_same_version_twice_is_idempotent(
+    client: AsyncClient,
+) -> None:
+    owner_headers, organization_id = await _org_with_owner(
+        client,
+        "asst-publish-idempotent@example.com",
+    )
+    workspace = await _create_workspace(
+        client, organization_id, owner_headers, "Clinic"
+    )
+    created = await _create_assistant(
+        client,
+        organization_id,
+        workspace["id"],
+        owner_headers,
+        "Front Desk",
+    )
+    version = await _create_version(
+        client,
+        organization_id,
+        workspace["id"],
+        created["id"],
+        owner_headers,
+    )
+    url = _publish_url(organization_id, workspace["id"], created["id"])
+
+    first = await client.post(
+        url, json={"version": version["version"]}, headers=owner_headers
+    )
+    second = await client.post(
+        url, json={"version": version["version"]}, headers=owner_headers
+    )
+
+    assert first.status_code == 200
+    assert second.status_code == 200
+    assert second.json()["status"] == "published"
+
+
+async def test_publish_can_roll_back_to_an_older_version(client: AsyncClient) -> None:
+    owner_headers, organization_id = await _org_with_owner(
+        client,
+        "asst-publish-rollback@example.com",
+    )
+    workspace = await _create_workspace(
+        client, organization_id, owner_headers, "Clinic"
+    )
+    created = await _create_assistant(
+        client,
+        organization_id,
+        workspace["id"],
+        owner_headers,
+        "Front Desk",
+    )
+    version_one = await _create_version(
+        client,
+        organization_id,
+        workspace["id"],
+        created["id"],
+        owner_headers,
+    )
+    version_two = await _create_version(
+        client,
+        organization_id,
+        workspace["id"],
+        created["id"],
+        owner_headers,
+    )
+    url = _publish_url(organization_id, workspace["id"], created["id"])
+
+    await client.post(
+        url, json={"version": version_two["version"]}, headers=owner_headers
+    )
+    rollback = await client.post(
+        url,
+        json={"version": version_one["version"]},
+        headers=owner_headers,
+    )
+
+    assert rollback.status_code == 200
+    assert rollback.json()["current_version_id"] == version_one["id"]
+
+
+async def test_publish_requires_authentication(client: AsyncClient) -> None:
+    owner_headers, organization_id = await _org_with_owner(
+        client,
+        "asst-publish-anon@example.com",
+    )
+    workspace = await _create_workspace(
+        client, organization_id, owner_headers, "Clinic"
+    )
+    created = await _create_assistant(
+        client,
+        organization_id,
+        workspace["id"],
+        owner_headers,
+        "Front Desk",
+    )
+
+    response = await client.post(
+        _publish_url(organization_id, workspace["id"], created["id"]),
+        json={"version": 1},
+    )
+
+    assert response.status_code == 401
+
+
+async def test_publish_is_forbidden_for_a_member(client: AsyncClient) -> None:
+    organization_id, owner_headers, member_headers = await _org_with_member(
+        client,
+        "asst-publish-member",
+        "member",
+    )
+    workspace = await _create_workspace(
+        client, organization_id, owner_headers, "Clinic"
+    )
+    created = await _create_assistant(
+        client,
+        organization_id,
+        workspace["id"],
+        owner_headers,
+        "Front Desk",
+    )
+    version = await _create_version(
+        client,
+        organization_id,
+        workspace["id"],
+        created["id"],
+        owner_headers,
+    )
+
+    response = await client.post(
+        _publish_url(organization_id, workspace["id"], created["id"]),
+        json={"version": version["version"]},
+        headers=member_headers,
+    )
+
+    assert response.status_code == 403
+
+
+async def test_publish_rejects_a_nonexistent_version(client: AsyncClient) -> None:
+    owner_headers, organization_id = await _org_with_owner(
+        client,
+        "asst-publish-badversion@example.com",
+    )
+    workspace = await _create_workspace(
+        client, organization_id, owner_headers, "Clinic"
+    )
+    created = await _create_assistant(
+        client,
+        organization_id,
+        workspace["id"],
+        owner_headers,
+        "Front Desk",
+    )
+
+    response = await client.post(
+        _publish_url(organization_id, workspace["id"], created["id"]),
+        json={"version": 99},
+        headers=owner_headers,
+    )
+
+    assert response.status_code == 404
+
+
+async def test_publish_rejects_an_archived_assistant(client: AsyncClient) -> None:
+    owner_headers, organization_id = await _org_with_owner(
+        client,
+        "asst-publish-archived@example.com",
+    )
+    workspace = await _create_workspace(
+        client, organization_id, owner_headers, "Clinic"
+    )
+    created = await _create_assistant(
+        client,
+        organization_id,
+        workspace["id"],
+        owner_headers,
+        "Front Desk",
+    )
+    version = await _create_version(
+        client,
+        organization_id,
+        workspace["id"],
+        created["id"],
+        owner_headers,
+    )
+    await client.post(
+        f"{_assistants_url(organization_id, workspace['id'])}/{created['id']}/archive",
+        headers=owner_headers,
+    )
+
+    response = await client.post(
+        _publish_url(organization_id, workspace["id"], created["id"]),
+        json={"version": version["version"]},
+        headers=owner_headers,
+    )
+
+    assert response.status_code == 409
+
+
+async def test_publish_in_one_workspace_is_not_reachable_through_a_sibling_workspace(
+    client: AsyncClient,
+) -> None:
+    owner_headers, organization_id = await _org_with_owner(
+        client,
+        "asst-publish-sibling@example.com",
+    )
+    workspace_a = await _create_workspace(
+        client, organization_id, owner_headers, "Clinic A"
+    )
+    workspace_b = await _create_workspace(
+        client, organization_id, owner_headers, "Clinic B"
+    )
+    created = await _create_assistant(
+        client,
+        organization_id,
+        workspace_a["id"],
+        owner_headers,
+        "Front Desk",
+    )
+    version = await _create_version(
+        client,
+        organization_id,
+        workspace_a["id"],
+        created["id"],
+        owner_headers,
+    )
+
+    response = await client.post(
+        _publish_url(organization_id, workspace_b["id"], created["id"]),
+        json={"version": version["version"]},
+        headers=owner_headers,
     )
 
     assert response.status_code == 404

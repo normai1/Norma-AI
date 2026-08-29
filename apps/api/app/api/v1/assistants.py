@@ -5,8 +5,18 @@ from fastapi import APIRouter, HTTPException, status
 from app.api.deps import DbSession
 from app.api.org_deps import CanManageAssistants
 from app.api.workspace_deps import CurrentWorkspace
-from app.core.exceptions import AssistantNotFound, WorkspaceNotFound
-from app.schemas.assistant import AssistantCreate, AssistantResponse, AssistantUpdate
+from app.core.exceptions import (
+    AssistantArchived,
+    AssistantNotFound,
+    AssistantVersionNotFound,
+    WorkspaceNotFound,
+)
+from app.schemas.assistant import (
+    AssistantCreate,
+    AssistantPublish,
+    AssistantResponse,
+    AssistantUpdate,
+)
 from app.services import assistant as assistant_service
 
 router = APIRouter(tags=["assistants"])
@@ -14,6 +24,16 @@ router = APIRouter(tags=["assistants"])
 _ASSISTANT_NOT_FOUND = HTTPException(
     status_code=status.HTTP_404_NOT_FOUND,
     detail="Assistant not found",
+)
+
+_ASSISTANT_VERSION_NOT_FOUND = HTTPException(
+    status_code=status.HTTP_404_NOT_FOUND,
+    detail="Assistant version not found",
+)
+
+_ASSISTANT_ARCHIVED = HTTPException(
+    status_code=status.HTTP_409_CONFLICT,
+    detail="This assistant is archived and cannot be published",
 )
 
 _WORKSPACE_NOT_FOUND = HTTPException(
@@ -126,6 +146,45 @@ async def rename_assistant(
         raise _WORKSPACE_NOT_FOUND from exc
     except AssistantNotFound as exc:
         raise _ASSISTANT_NOT_FOUND from exc
+
+    await db.commit()
+
+    return AssistantResponse.model_validate(assistant)
+
+
+@router.post(
+    "/organizations/{organization_id}/workspaces/{workspace_id}"
+    "/assistants/{assistant_id}/publish",
+    response_model=AssistantResponse,
+)
+async def publish_assistant(
+    workspace_id: uuid.UUID,
+    assistant_id: uuid.UUID,
+    payload: AssistantPublish,
+    membership: CanManageAssistants,
+    db: DbSession,
+) -> AssistantResponse:
+    """
+    Publish (or roll back to) a version of an assistant. Owners and admins
+    only.
+    """
+
+    try:
+        assistant = await assistant_service.publish_assistant(
+            db,
+            organization_id=membership.organization_id,
+            workspace_id=workspace_id,
+            assistant_id=assistant_id,
+            version=payload.version,
+        )
+    except WorkspaceNotFound as exc:
+        raise _WORKSPACE_NOT_FOUND from exc
+    except AssistantNotFound as exc:
+        raise _ASSISTANT_NOT_FOUND from exc
+    except AssistantArchived as exc:
+        raise _ASSISTANT_ARCHIVED from exc
+    except AssistantVersionNotFound as exc:
+        raise _ASSISTANT_VERSION_NOT_FOUND from exc
 
     await db.commit()
 
