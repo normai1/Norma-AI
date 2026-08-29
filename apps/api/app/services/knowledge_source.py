@@ -4,6 +4,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.exceptions import (
     FileTooLarge,
+    InvalidKnowledgeSourceType,
     KnowledgeSourceNotFound,
     UnsupportedFileType,
     WorkspaceNotFound,
@@ -11,11 +12,14 @@ from app.core.exceptions import (
 from app.models.crawled_page import CrawledPage
 from app.models.document import Document
 from app.models.knowledge_source import KnowledgeSource
-from app.providers.storage import StorageProvider
+from app.providers.storage import StorageObjectNotFound, StorageProvider
 from app.providers.web_crawler import PageFetcher, PageFetchError
+from app.repositories import chunk as chunk_repo
 from app.repositories import crawled_page as crawled_page_repo
 from app.repositories import knowledge_source as knowledge_source_repo
 from app.repositories import workspace as workspace_repo
+from app.services.chunker import chunk_text
+from app.services.document_parser import DocumentParseError, parse_document
 from app.services.web_crawler import crawl_website
 
 FAILED_STATUS = "failed"
@@ -118,6 +122,93 @@ async def create_manual_faq_knowledge_source(
     return knowledge_source
 
 
+async def _parse_and_chunk_document(
+    db: AsyncSession,
+    storage: StorageProvider,
+    knowledge_source: KnowledgeSource,
+    document: Document,
+) -> None:
+    """
+    (Re)parse a file-type source's stored document and (re)chunk it. A
+    failure leaves any chunks from an earlier successful run untouched -
+    replace_for_source is only called after parsing and chunking both
+    succeed. Runs synchronously in the caller's request, the same
+    deliberate, temporary tradeoff item 15's crawl already established;
+    there is no background job queue yet.
+    """
+
+    extension = _extension_of(document.filename)
+
+    try:
+        content = await storage.download(document.storage_key)
+        text = parse_document(content, extension)
+    except (DocumentParseError, StorageObjectNotFound) as exc:
+        message = (
+            str(exc)
+            if isinstance(exc, DocumentParseError)
+            else "Stored file could not be found"
+        )
+        knowledge_source.status = FAILED_STATUS
+        knowledge_source.error_message = message
+        document.processing_status = FAILED_STATUS
+        document.processing_error = message
+        await db.flush()
+
+        return
+
+    spans = chunk_text(text)
+    await chunk_repo.replace_for_source(
+        db,
+        organization_id=knowledge_source.organization_id,
+        workspace_id=knowledge_source.workspace_id,
+        knowledge_source_id=knowledge_source.id,
+        texts=[
+            (span.text, {"char_start": span.char_start, "char_end": span.char_end})
+            for span in spans
+        ],
+    )
+
+    knowledge_source.status = COMPLETED_STATUS
+    knowledge_source.error_message = None
+    document.processing_status = COMPLETED_STATUS
+    document.processing_error = None
+    await db.flush()
+
+
+async def process_knowledge_source(
+    db: AsyncSession,
+    storage: StorageProvider,
+    *,
+    organization_id: uuid.UUID,
+    workspace_id: uuid.UUID,
+    knowledge_source_id: uuid.UUID,
+) -> tuple[KnowledgeSource, Document]:
+    """
+    Retry parsing+chunking a file-type source's already-stored document.
+    """
+
+    knowledge_source = await resolve_knowledge_source(
+        db,
+        organization_id=organization_id,
+        workspace_id=workspace_id,
+        knowledge_source_id=knowledge_source_id,
+    )
+
+    if knowledge_source.type != knowledge_source_repo.FILE_TYPE:
+        raise InvalidKnowledgeSourceType
+
+    document = await knowledge_source_repo.get_document_for_source(
+        db, knowledge_source.id
+    )
+
+    if document is None:
+        raise InvalidKnowledgeSourceType
+
+    await _parse_and_chunk_document(db, storage, knowledge_source, document)
+
+    return knowledge_source, document
+
+
 async def upload_knowledge_source(
     db: AsyncSession,
     storage: StorageProvider,
@@ -170,6 +261,8 @@ async def upload_knowledge_source(
     except Exception:
         await storage.delete(key)
         raise
+
+    await _parse_and_chunk_document(db, storage, knowledge_source, document)
 
     return knowledge_source, document
 
@@ -293,6 +386,28 @@ async def _crawl_and_reconcile(
             content_hash=result.content_hash,
             fetched_at=result.fetched_at,
         )
+
+    texts: list[tuple[str, dict]] = []
+    for result in sorted(crawl_results, key=lambda r: r.url):
+        for span in chunk_text(result.extracted_text):
+            texts.append(
+                (
+                    span.text,
+                    {
+                        "url": result.url,
+                        "char_start": span.char_start,
+                        "char_end": span.char_end,
+                    },
+                )
+            )
+
+    await chunk_repo.replace_for_source(
+        db,
+        organization_id=knowledge_source.organization_id,
+        workspace_id=knowledge_source.workspace_id,
+        knowledge_source_id=knowledge_source.id,
+        texts=texts,
+    )
 
     knowledge_source.status = COMPLETED_STATUS
     knowledge_source.error_message = None

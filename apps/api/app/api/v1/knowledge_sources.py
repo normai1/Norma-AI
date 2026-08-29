@@ -8,6 +8,7 @@ from app.api.org_deps import CanManageKnowledge
 from app.api.workspace_deps import CurrentWorkspace
 from app.core.exceptions import (
     FileTooLarge,
+    InvalidKnowledgeSourceType,
     KnowledgeSourceNotFound,
     UnsupportedFileType,
     WorkspaceNotFound,
@@ -15,6 +16,8 @@ from app.core.exceptions import (
 from app.models.crawled_page import CrawledPage
 from app.models.document import Document
 from app.models.knowledge_source import KnowledgeSource
+from app.repositories import chunk as chunk_repo
+from app.schemas.chunk import ChunkResponse
 from app.schemas.knowledge_source import (
     CrawledPageResponse,
     DocumentResponse,
@@ -44,6 +47,11 @@ _UNSUPPORTED_FILE_TYPE = HTTPException(
 _FILE_TOO_LARGE = HTTPException(
     status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
     detail="File is too large",
+)
+
+_INVALID_SOURCE_TYPE = HTTPException(
+    status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+    detail="This operation only applies to file-type knowledge sources",
 )
 
 _PREFIX = "/organizations/{organization_id}/workspaces/{workspace_id}/knowledge-sources"
@@ -224,6 +232,75 @@ async def create_manual_faq_knowledge_source(
     await db.commit()
 
     return _to_response(knowledge_source, None)
+
+
+@router.post(
+    f"{_PREFIX}/{{knowledge_source_id}}/process",
+    response_model=KnowledgeSourceResponse,
+)
+async def process_knowledge_source(
+    workspace_id: uuid.UUID,
+    knowledge_source_id: uuid.UUID,
+    membership: CanManageKnowledge,
+    db: DbSession,
+    storage: StorageProviderDep,
+) -> KnowledgeSourceResponse:
+    """
+    Retry parsing+chunking a file-type source's already-stored document.
+    Owners and admins only.
+    """
+
+    try:
+        (
+            knowledge_source,
+            document,
+        ) = await knowledge_source_service.process_knowledge_source(
+            db,
+            storage,
+            organization_id=membership.organization_id,
+            workspace_id=workspace_id,
+            knowledge_source_id=knowledge_source_id,
+        )
+    except WorkspaceNotFound as exc:
+        raise _WORKSPACE_NOT_FOUND from exc
+    except KnowledgeSourceNotFound as exc:
+        raise _KNOWLEDGE_SOURCE_NOT_FOUND from exc
+    except InvalidKnowledgeSourceType as exc:
+        raise _INVALID_SOURCE_TYPE from exc
+
+    await db.commit()
+
+    return _to_response(knowledge_source, document)
+
+
+@router.get(
+    f"{_PREFIX}/{{knowledge_source_id}}/chunks",
+    response_model=list[ChunkResponse],
+)
+async def list_chunks(
+    knowledge_source_id: uuid.UUID,
+    workspace: CurrentWorkspace,
+    db: DbSession,
+) -> list[ChunkResponse]:
+    """
+    List a knowledge source's chunks, in order. Any workspace member may
+    see them, but only for a source in their own workspace -
+    resolve_knowledge_source confirms that before any chunk is read.
+    """
+
+    try:
+        knowledge_source = await knowledge_source_service.resolve_knowledge_source(
+            db,
+            organization_id=workspace.organization_id,
+            workspace_id=workspace.id,
+            knowledge_source_id=knowledge_source_id,
+        )
+    except KnowledgeSourceNotFound as exc:
+        raise _KNOWLEDGE_SOURCE_NOT_FOUND from exc
+
+    chunks = await chunk_repo.list_for_source(db, knowledge_source.id)
+
+    return [ChunkResponse.model_validate(chunk) for chunk in chunks]
 
 
 @router.get(_PREFIX, response_model=list[KnowledgeSourceResponse])

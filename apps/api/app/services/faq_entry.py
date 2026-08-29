@@ -4,10 +4,15 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.exceptions import FaqEntryNotFound, KnowledgeSourceNotFound
 from app.models.faq_entry import FaqEntry
+from app.repositories import chunk as chunk_repo
 from app.repositories import faq_entry as faq_entry_repo
 from app.repositories import knowledge_source as knowledge_source_repo
 from app.repositories.faq_entry import _UNSET
 from app.services.knowledge_source import resolve_knowledge_source
+
+
+def _faq_chunk_text(question: str, answer: str) -> str:
+    return f"Q: {question}\nA: {answer}"
 
 
 async def _resolve_manual_faq_source_id(
@@ -89,12 +94,23 @@ async def create_faq_entry(
         knowledge_source_id=knowledge_source_id,
     )
 
-    return await faq_entry_repo.create(
+    faq_entry = await faq_entry_repo.create(
         db,
         knowledge_source_id=source_id,
         question=question,
         answer=answer,
     )
+
+    await chunk_repo.upsert_for_faq_entry(
+        db,
+        organization_id=organization_id,
+        workspace_id=workspace_id,
+        knowledge_source_id=source_id,
+        faq_entry_id=faq_entry.id,
+        text=_faq_chunk_text(faq_entry.question, faq_entry.answer),
+    )
+
+    return faq_entry
 
 
 async def list_faq_entries(
@@ -141,7 +157,20 @@ async def update_faq_entry(
         faq_entry_id=faq_entry_id,
     )
 
-    return await faq_entry_repo.update(db, faq_entry, question=question, answer=answer)
+    faq_entry = await faq_entry_repo.update(
+        db, faq_entry, question=question, answer=answer
+    )
+
+    await chunk_repo.upsert_for_faq_entry(
+        db,
+        organization_id=organization_id,
+        workspace_id=workspace_id,
+        knowledge_source_id=faq_entry.knowledge_source_id,
+        faq_entry_id=faq_entry.id,
+        text=_faq_chunk_text(faq_entry.question, faq_entry.answer),
+    )
+
+    return faq_entry
 
 
 async def delete_faq_entry(
@@ -164,4 +193,9 @@ async def delete_faq_entry(
         faq_entry_id=faq_entry_id,
     )
 
+    await chunk_repo.delete_for_faq_entry(
+        db,
+        knowledge_source_id=faq_entry.knowledge_source_id,
+        faq_entry_id=faq_entry.id,
+    )
     await faq_entry_repo.delete(db, faq_entry)

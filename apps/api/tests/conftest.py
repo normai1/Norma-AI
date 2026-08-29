@@ -80,6 +80,10 @@ async def engine() -> AsyncGenerator:
 
     async with test_engine.begin() as connection:
         await connection.run_sync(Base.metadata.drop_all)
+        # The test schema is created directly from Base.metadata, bypassing
+        # Alembic migrations entirely - so a migration's own
+        # CREATE EXTENSION never runs here and must be repeated.
+        await connection.execute(text("CREATE EXTENSION IF NOT EXISTS vector"))
         await connection.run_sync(Base.metadata.create_all)
 
     yield test_engine

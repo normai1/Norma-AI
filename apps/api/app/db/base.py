@@ -9,6 +9,7 @@ autogenerate reads. A model that is not imported here is invisible to migrations
 from app.db.base_class import Base
 from app.models.assistant import Assistant
 from app.models.assistant_version import AssistantVersion
+from app.models.chunk import Chunk
 from app.models.crawled_page import CrawledPage
 from app.models.document import Document
 from app.models.faq_entry import FaqEntry
@@ -28,6 +29,7 @@ __all__ = [
     "Assistant",
     "AssistantVersion",
     "Base",
+    "Chunk",
     "CrawledPage",
     "Document",
     "FaqEntry",

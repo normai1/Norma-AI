@@ -257,3 +257,10 @@ class FaqEntryNotFound(KnowledgeSourceError):
     No such FAQ entry on this knowledge source - including when the source
     exists but is not type='manual_faq'.
     """
+
+
+class InvalidKnowledgeSourceType(KnowledgeSourceError):
+    """
+    The requested operation does not apply to this knowledge source's type
+    (e.g. manual reprocessing, which only a 'file'-type source supports).
+    """
