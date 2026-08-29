@@ -25,6 +25,13 @@ import {
   type AssistantVersion,
   type AssistantVersionDiff,
 } from "@/lib/assistants";
+import {
+  createGlossaryEntry,
+  deleteGlossaryEntry,
+  listGlossaryEntries,
+  updateGlossaryEntry,
+  type GlossaryEntry,
+} from "@/lib/glossary";
 import { listVoices, type Voice } from "@/lib/voices";
 import { COMMON_LOCALES } from "@/lib/workspaces";
 
@@ -99,6 +106,84 @@ export default function AssistantEditorPage() {
   );
   const [diffError, setDiffError] = useState<string | null>(null);
   const [diffLoading, setDiffLoading] = useState(false);
+
+  const [glossaryEntries, setGlossaryEntries] = useState<GlossaryEntry[] | null>(
+    null,
+  );
+  const [glossaryError, setGlossaryError] = useState<string | null>(null);
+
+  const [newTerm, setNewTerm] = useState("");
+  const [newMeaning, setNewMeaning] = useState("");
+  const [newPhoneticSpelling, setNewPhoneticSpelling] = useState("");
+  const [newBoostWeight, setNewBoostWeight] = useState(0.5);
+  const [creatingEntry, setCreatingEntry] = useState(false);
+  const [createEntryError, setCreateEntryError] = useState<string | null>(null);
+
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const [editTerm, setEditTerm] = useState("");
+  const [editMeaning, setEditMeaning] = useState("");
+  const [editPhoneticSpelling, setEditPhoneticSpelling] = useState("");
+  const [editBoostWeight, setEditBoostWeight] = useState(0.5);
+  const [savingEdit, setSavingEdit] = useState(false);
+  const [editError, setEditError] = useState<string | null>(null);
+
+  const [deletingId, setDeletingId] = useState<string | null>(null);
+  const [deleteError, setDeleteError] = useState<string | null>(null);
+
+  const fetchGlossaryEntries = useCallback(async () => {
+    if (!activeWorkspace) {
+      return null;
+    }
+
+    return listGlossaryEntries(
+      activeWorkspace.organization_id,
+      activeWorkspace.id,
+      assistantId,
+    );
+  }, [activeWorkspace, assistantId]);
+
+  const applyGlossaryEntries = useCallback(
+    (loaded: GlossaryEntry[] | null) => {
+      if (loaded) {
+        setGlossaryEntries(loaded);
+      }
+    },
+    [],
+  );
+
+  const applyGlossaryError = useCallback((err: unknown) => {
+    setGlossaryError(
+      err instanceof Error ? err.message : "Could not load the glossary.",
+    );
+  }, []);
+
+  const loadGlossaryEntries = useCallback(async () => {
+    try {
+      applyGlossaryEntries(await fetchGlossaryEntries());
+    } catch (err) {
+      applyGlossaryError(err);
+    }
+  }, [fetchGlossaryEntries, applyGlossaryEntries, applyGlossaryError]);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    fetchGlossaryEntries()
+      .then((loaded) => {
+        if (!cancelled) {
+          applyGlossaryEntries(loaded);
+        }
+      })
+      .catch((err) => {
+        if (!cancelled) {
+          applyGlossaryError(err);
+        }
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [fetchGlossaryEntries, applyGlossaryEntries, applyGlossaryError]);
 
   const fetchVersions = useCallback(async () => {
     if (!activeWorkspace) {
@@ -390,6 +475,115 @@ export default function AssistantEditorPage() {
       );
     } finally {
       setDiffLoading(false);
+    }
+  }
+
+  async function handleCreateEntry(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+
+    if (!activeWorkspace) {
+      return;
+    }
+
+    setCreateEntryError(null);
+    setCreatingEntry(true);
+
+    try {
+      await createGlossaryEntry(
+        activeWorkspace.organization_id,
+        activeWorkspace.id,
+        assistantId,
+        {
+          term: newTerm,
+          meaning: newMeaning.trim() ? newMeaning : null,
+          phonetic_spelling: newPhoneticSpelling.trim() ? newPhoneticSpelling : null,
+          stt_boost_weight: newBoostWeight,
+        },
+      );
+
+      setNewTerm("");
+      setNewMeaning("");
+      setNewPhoneticSpelling("");
+      setNewBoostWeight(0.5);
+      await loadGlossaryEntries();
+    } catch (err) {
+      setCreateEntryError(
+        err instanceof Error ? err.message : "Could not add this glossary entry.",
+      );
+    } finally {
+      setCreatingEntry(false);
+    }
+  }
+
+  function handleStartEdit(entry: GlossaryEntry) {
+    setEditingId(entry.id);
+    setEditTerm(entry.term);
+    setEditMeaning(entry.meaning ?? "");
+    setEditPhoneticSpelling(entry.phonetic_spelling ?? "");
+    setEditBoostWeight(entry.stt_boost_weight);
+    setEditError(null);
+  }
+
+  function handleCancelEdit() {
+    setEditingId(null);
+    setEditError(null);
+  }
+
+  async function handleSaveEdit(glossaryEntryId: string) {
+    if (!activeWorkspace) {
+      return;
+    }
+
+    setEditError(null);
+    setSavingEdit(true);
+
+    try {
+      await updateGlossaryEntry(
+        activeWorkspace.organization_id,
+        activeWorkspace.id,
+        assistantId,
+        glossaryEntryId,
+        {
+          term: editTerm,
+          meaning: editMeaning.trim() ? editMeaning : null,
+          phonetic_spelling: editPhoneticSpelling.trim() ? editPhoneticSpelling : null,
+          stt_boost_weight: editBoostWeight,
+        },
+      );
+
+      setEditingId(null);
+      await loadGlossaryEntries();
+    } catch (err) {
+      setEditError(
+        err instanceof Error ? err.message : "Could not save this glossary entry.",
+      );
+    } finally {
+      setSavingEdit(false);
+    }
+  }
+
+  async function handleDeleteEntry(glossaryEntryId: string) {
+    if (!activeWorkspace) {
+      return;
+    }
+
+    setDeleteError(null);
+    setDeletingId(glossaryEntryId);
+
+    try {
+      await deleteGlossaryEntry(
+        activeWorkspace.organization_id,
+        activeWorkspace.id,
+        assistantId,
+        glossaryEntryId,
+      );
+      await loadGlossaryEntries();
+    } catch (err) {
+      setDeleteError(
+        err instanceof Error ? err.message : "Could not delete this glossary entry.",
+      );
+    } finally {
+      setDeletingId(null);
     }
   }
 
@@ -891,6 +1085,218 @@ export default function AssistantEditorPage() {
               )}
             </div>
           )}
+        </Card>
+      </div>
+
+      <div className="mt-8">
+        <Card>
+          <h2 className="text-lg font-semibold">Glossary</h2>
+          <p className="mt-1 text-sm text-slate-400">
+            Terms, meanings, and phonetic pronunciation overrides for this assistant.
+          </p>
+
+          {deleteError && (
+            <div className="mt-4">
+              <ErrorText message={deleteError} />
+            </div>
+          )}
+
+          {glossaryError && (
+            <div className="mt-4">
+              <ErrorText message={glossaryError} />
+            </div>
+          )}
+
+          {glossaryEntries === null && !glossaryError && (
+            <div className="mt-4">
+              <LoadingState message="Loading glossary..." />
+            </div>
+          )}
+
+          {glossaryEntries !== null && glossaryEntries.length === 0 && (
+            <div className="mt-4">
+              <EmptyState message="No glossary entries yet. Add one below to get started." />
+            </div>
+          )}
+
+          {glossaryEntries !== null && glossaryEntries.length > 0 && (
+            <ul className="mt-4 space-y-3">
+              {glossaryEntries.map((entry) =>
+                editingId === entry.id ? (
+                  <li
+                    key={entry.id}
+                    className="rounded-xl border border-slate-800 px-4 py-3"
+                  >
+                    {editError && (
+                      <div className="mb-3">
+                        <ErrorText message={editError} />
+                      </div>
+                    )}
+
+                    <div className="flex flex-wrap gap-3">
+                      <input
+                        aria-label="Edit term"
+                        className="min-w-40 flex-1 rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-white focus:border-slate-500 focus:outline-none focus:ring-2 focus:ring-slate-600"
+                        required
+                        disabled={savingEdit}
+                        value={editTerm}
+                        onChange={(event) => setEditTerm(event.target.value)}
+                      />
+
+                      <input
+                        aria-label="Edit meaning"
+                        className="min-w-48 flex-1 rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-white placeholder:text-slate-500 focus:border-slate-500 focus:outline-none focus:ring-2 focus:ring-slate-600"
+                        placeholder="Meaning (optional)"
+                        disabled={savingEdit}
+                        value={editMeaning}
+                        onChange={(event) => setEditMeaning(event.target.value)}
+                      />
+
+                      <input
+                        aria-label="Edit phonetic spelling"
+                        className="min-w-40 flex-1 rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-white placeholder:text-slate-500 focus:border-slate-500 focus:outline-none focus:ring-2 focus:ring-slate-600"
+                        placeholder="Phonetic spelling (optional)"
+                        disabled={savingEdit}
+                        value={editPhoneticSpelling}
+                        onChange={(event) =>
+                          setEditPhoneticSpelling(event.target.value)
+                        }
+                      />
+
+                      <input
+                        aria-label="Edit boost weight"
+                        type="number"
+                        min={0}
+                        max={1}
+                        step={0.05}
+                        className="w-28 rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-white focus:outline-none focus:ring-2 focus:ring-slate-600"
+                        disabled={savingEdit}
+                        value={editBoostWeight}
+                        onChange={(event) =>
+                          setEditBoostWeight(event.target.valueAsNumber)
+                        }
+                      />
+                    </div>
+
+                    <div className="mt-3 flex gap-3">
+                      <Button
+                        disabled={savingEdit || !editTerm.trim()}
+                        onClick={() => handleSaveEdit(entry.id)}
+                      >
+                        {savingEdit ? "Saving..." : "Save"}
+                      </Button>
+                      <Button
+                        variant="secondary"
+                        disabled={savingEdit}
+                        onClick={handleCancelEdit}
+                      >
+                        Cancel
+                      </Button>
+                    </div>
+                  </li>
+                ) : (
+                  <li
+                    key={entry.id}
+                    className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-slate-800 px-4 py-3"
+                  >
+                    <div>
+                      <span className="font-medium">{entry.term}</span>
+                      {entry.meaning && (
+                        <span className="ml-3 text-sm text-slate-400">
+                          {entry.meaning}
+                        </span>
+                      )}
+                      {entry.phonetic_spelling && (
+                        <span className="ml-3 text-sm text-slate-500">
+                          /{entry.phonetic_spelling}/
+                        </span>
+                      )}
+                      <span className="ml-3 text-sm text-slate-500">
+                        boost {entry.stt_boost_weight}
+                      </span>
+                    </div>
+
+                    <div className="flex gap-2">
+                      <Button
+                        variant="secondary"
+                        disabled={deletingId === entry.id}
+                        onClick={() => handleStartEdit(entry)}
+                      >
+                        Edit
+                      </Button>
+                      <Button
+                        variant="secondary"
+                        disabled={deletingId === entry.id}
+                        onClick={() => handleDeleteEntry(entry.id)}
+                      >
+                        {deletingId === entry.id ? "Deleting..." : "Delete"}
+                      </Button>
+                    </div>
+                  </li>
+                ),
+              )}
+            </ul>
+          )}
+
+          <form
+            onSubmit={handleCreateEntry}
+            className="mt-6 border-t border-slate-800 pt-4"
+            noValidate
+          >
+            <h3 className="text-sm font-semibold text-slate-300">Add entry</h3>
+
+            {createEntryError && (
+              <div className="mt-3">
+                <ErrorText message={createEntryError} />
+              </div>
+            )}
+
+            <div className="mt-3 flex flex-wrap gap-3">
+              <input
+                aria-label="Term"
+                className="min-w-40 flex-1 rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-white placeholder:text-slate-500 focus:border-slate-500 focus:outline-none focus:ring-2 focus:ring-slate-600"
+                placeholder="Term"
+                required
+                disabled={creatingEntry}
+                value={newTerm}
+                onChange={(event) => setNewTerm(event.target.value)}
+              />
+
+              <input
+                aria-label="Meaning"
+                className="min-w-48 flex-1 rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-white placeholder:text-slate-500 focus:border-slate-500 focus:outline-none focus:ring-2 focus:ring-slate-600"
+                placeholder="Meaning (optional)"
+                disabled={creatingEntry}
+                value={newMeaning}
+                onChange={(event) => setNewMeaning(event.target.value)}
+              />
+
+              <input
+                aria-label="Phonetic spelling"
+                className="min-w-40 flex-1 rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-white placeholder:text-slate-500 focus:border-slate-500 focus:outline-none focus:ring-2 focus:ring-slate-600"
+                placeholder="Phonetic spelling (optional)"
+                disabled={creatingEntry}
+                value={newPhoneticSpelling}
+                onChange={(event) => setNewPhoneticSpelling(event.target.value)}
+              />
+
+              <input
+                aria-label="Boost weight"
+                type="number"
+                min={0}
+                max={1}
+                step={0.05}
+                className="w-28 rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-white focus:outline-none focus:ring-2 focus:ring-slate-600"
+                disabled={creatingEntry}
+                value={newBoostWeight}
+                onChange={(event) => setNewBoostWeight(event.target.valueAsNumber)}
+              />
+
+              <Button type="submit" disabled={creatingEntry || !newTerm.trim()}>
+                {creatingEntry ? "Adding..." : "Add"}
+              </Button>
+            </div>
+          </form>
         </Card>
       </div>
     </PageShell>
