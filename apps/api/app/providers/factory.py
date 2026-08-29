@@ -76,3 +76,16 @@ def get_tts_provider(name: str | None = None) -> TextToSpeechProvider:
         f"Unknown TTS_PROVIDER {provider_name!r}. Valid options: "
         f"{_VALID_PROVIDER_NAMES}.",
     )
+
+
+def get_tts_provider_dependency() -> TextToSpeechProvider:
+    """
+    FastAPI dependency entry point for the configured TTS provider.
+
+    Deliberately not just `Depends(get_tts_provider)`: that function's
+    optional `name` parameter would resolve as a request query parameter,
+    letting any caller pick which provider serves them with an undocumented
+    `?name=` override. This wrapper takes no arguments, closing that off.
+    """
+
+    return get_tts_provider()

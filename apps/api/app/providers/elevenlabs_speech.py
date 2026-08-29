@@ -62,6 +62,7 @@ def _map_voice(raw: dict[str, Any]) -> Voice:
         name=raw.get("name", ""),
         language=language or "en",
         gender=labels.get("gender"),
+        preview_url=raw.get("preview_url"),
     )
 
 

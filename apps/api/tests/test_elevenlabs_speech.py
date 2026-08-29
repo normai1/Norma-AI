@@ -228,6 +228,35 @@ async def test_list_voices_maps_id_and_name() -> None:
     await client.aclose()
 
 
+async def test_list_voices_reads_preview_url() -> None:
+    async def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            json={
+                "voices": [
+                    {
+                        "voice_id": "v1",
+                        "name": "Alex",
+                        "labels": {},
+                        "preview_url": "https://example.com/preview.mp3",
+                    },
+                    {"voice_id": "v2", "name": "Priya", "labels": {}},
+                ],
+                "has_more": False,
+            },
+        )
+
+    client = _client(handler)
+    tts = ElevenLabsTTS(api_key="key", client=client)
+
+    voices = await tts.list_voices()
+
+    assert voices[0].preview_url == "https://example.com/preview.mp3"
+    assert voices[1].preview_url is None
+
+    await client.aclose()
+
+
 async def test_list_voices_reads_gender_from_labels() -> None:
     async def handler(request: httpx.Request) -> httpx.Response:
         return httpx.Response(

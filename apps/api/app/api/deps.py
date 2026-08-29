@@ -11,6 +11,8 @@ from app.core.database import get_db
 from app.core.redis import get_redis
 from app.core.tokens import decode_access_token
 from app.models.user import User
+from app.providers.factory import get_tts_provider_dependency
+from app.providers.speech import TextToSpeechProvider
 from app.services import auth as auth_service
 
 bearer_scheme = HTTPBearer(auto_error=False)
@@ -18,6 +20,8 @@ bearer_scheme = HTTPBearer(auto_error=False)
 DbSession = Annotated[AsyncSession, Depends(get_db)]
 
 RedisClient = Annotated[Redis, Depends(get_redis)]
+
+TtsProvider = Annotated[TextToSpeechProvider, Depends(get_tts_provider_dependency)]
 
 _CREDENTIALS_ERROR = HTTPException(
     status_code=status.HTTP_401_UNAUTHORIZED,

@@ -86,6 +86,7 @@ class Voice:
     name: str
     language: str
     gender: str | None = None
+    preview_url: str | None = None
 
 
 class TextToSpeechProvider(Protocol):

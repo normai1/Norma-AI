@@ -107,4 +107,7 @@ class MockTTS:
             raise
 
     async def list_voices(self) -> Sequence[Voice]:
+        if self._failure is not None:
+            raise self._failure
+
         return list(self._voices)

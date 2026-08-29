@@ -137,6 +137,15 @@ async def test_tts_list_voices_returns_the_configured_catalogue() -> None:
     assert await tts.list_voices() == voices
 
 
+async def test_tts_list_voices_raises_the_injected_failure() -> None:
+    failure = SpeechProviderError("provider unavailable")
+    voices = [Voice(id="v1", name="Alex", language="en-US")]
+    tts = MockTTS(voices=voices, failure=failure)
+
+    with pytest.raises(SpeechProviderError):
+        await tts.list_voices()
+
+
 async def test_tts_marks_cancelled_when_abandoned_mid_stream() -> None:
     tts = MockTTS(bytes_per_character=100, chunk_size_bytes=50)
 

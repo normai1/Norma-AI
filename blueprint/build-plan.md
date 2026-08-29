@@ -41,7 +41,7 @@
 - [x] 9. **Speech provider abstractions** - `SpeechToTextProvider` and `TextToSpeechProvider` interfaces with one real implementation each plus deterministic mocks
   - [x] 9a. **Speech provider contracts and mocks** - the two streaming interfaces, their shared value types and error hierarchy, deterministic `MockSTT`/`MockTTS` with latency and failure injection, and config-driven provider selection; no network, no new dependencies
   - [x] 9b. **ElevenLabs speech adapters** - `ElevenLabsSTT` and `ElevenLabsTTS` implementing 9a's contracts, with the transport dependency they need and adapter tests against a stubbed transport
-- [ ] 10. **Voice and language catalogue** - browsable voice list with language and gender metadata, and in-browser voice preview
+- [x] 10. **Voice and language catalogue** - browsable voice list with language and gender metadata, and in-browser voice preview
 - [ ] 11. **Assistant foundation** - Assistant and AssistantVersion tables, CRUD, immutable configuration snapshots, and version pinning per call
   - [ ] 11a. **Assistant model and CRUD** - create, list, update, archive assistants within a workspace
   - [ ] 11b. **Configuration schema** - validated voice, language, greeting, persona, speech rate, sensitivity, creativity, and ambience settings
