@@ -9,6 +9,8 @@ from app.api.v1.auth import router as auth_router
 from app.api.v1.health import router as health_router
 from app.api.v1.invitations import router as invitations_router
 from app.api.v1.organizations import router as organizations_router
+from app.api.v1.prompt_templates import router as prompt_templates_router
+from app.api.v1.prompt_versions import router as prompt_versions_router
 from app.api.v1.voices import router as voices_router
 from app.api.v1.workspaces import router as workspaces_router
 from app.core.config import settings
@@ -83,6 +85,16 @@ app.include_router(
 
 app.include_router(
     assistant_versions_router,
+    prefix=settings.api_v1_prefix,
+)
+
+app.include_router(
+    prompt_templates_router,
+    prefix=settings.api_v1_prefix,
+)
+
+app.include_router(
+    prompt_versions_router,
     prefix=settings.api_v1_prefix,
 )
 

@@ -139,7 +139,7 @@ the test still passes in the full suite, and 6b's own new `get_by_id`/`list_for_
 the identical workspace-scoping discipline (verified `remove_member`'s cross-workspace 404 test
 exercises it too). No new defect introduced. Closed.
 
-### F-32 [P2] open - Permission module's extension-point docstring still names the abandoned CRM/RAG entities
+### F-32 [P2] fixed - Permission module's extension-point docstring still names the abandoned CRM/RAG entities
 
 **File:** apps/api/app/core/permissions.py:4-5
 **Found:** 2026-08-27 by /audit (scope: full; lens: quality)
@@ -154,7 +154,11 @@ as outdated.
 **Suggested fix:** Update the parenthetical to name real upcoming entities (assistants, phone
 numbers, calls, knowledge sources, campaigns, workspaces, etc.), or drop the specific list and
 just say "every later feature that adds a protected mutation."
-**Resolution:**
+**Resolution:** Fixed in feature 12a, Step 1 (while already editing this file to add
+`MANAGE_PROMPT_TEMPLATES`). The docstring now names real entities (assistants, prompt
+templates, glossary entries, phone numbers, calls, knowledge sources, contacts, appointments,
+campaigns) instead of the abandoned CRM/RAG list. `ruff check apps/api` and the full backend
+suite (372/372) stayed green. Not yet re-reviewed by `/audit`.
 
 ### F-33 [P3] fixed - "Member not found" is defined twice, byte-identical, across organizations.py and workspaces.py
 

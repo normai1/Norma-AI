@@ -10,6 +10,7 @@ from app.core.permissions import (
     MANAGE_ASSISTANTS,
     MANAGE_MEMBERS,
     MANAGE_ORGANIZATION,
+    MANAGE_PROMPT_TEMPLATES,
     MANAGE_WORKSPACES,
     REVOKE_INVITATIONS,
     has_permission,
@@ -102,4 +103,9 @@ CanManageWorkspaces = Annotated[
 CanManageAssistants = Annotated[
     OrganizationMember,
     Depends(require_permission(MANAGE_ASSISTANTS)),
+]
+
+CanManagePromptTemplates = Annotated[
+    OrganizationMember,
+    Depends(require_permission(MANAGE_PROMPT_TEMPLATES)),
 ]

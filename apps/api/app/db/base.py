@@ -12,6 +12,8 @@ from app.models.assistant_version import AssistantVersion
 from app.models.invitation import Invitation
 from app.models.organization import Organization
 from app.models.organization_member import OrganizationMember
+from app.models.prompt_template import PromptTemplate
+from app.models.prompt_version import PromptVersion
 from app.models.session import UserSession
 from app.models.user import User
 from app.models.workspace import Workspace
@@ -24,6 +26,8 @@ __all__ = [
     "Invitation",
     "Organization",
     "OrganizationMember",
+    "PromptTemplate",
+    "PromptVersion",
     "User",
     "UserSession",
     "Workspace",
