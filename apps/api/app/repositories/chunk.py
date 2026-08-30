@@ -5,6 +5,7 @@ from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.chunk import Chunk
+from app.models.knowledge_source import KnowledgeSource
 
 
 @dataclass(frozen=True)
@@ -147,3 +148,39 @@ async def delete_for_faq_entry(
     if chunk is not None:
         await db.delete(chunk)
         await db.flush()
+
+
+async def search_by_similarity(
+    db: AsyncSession,
+    *,
+    organization_id: uuid.UUID,
+    workspace_id: uuid.UUID,
+    query_vector: list[float],
+    top_k: int,
+) -> list[tuple[Chunk, str, float]]:
+    """
+    The top_k chunks closest to query_vector (cosine distance, ascending -
+    nearest first), scoped to one organization/workspace, excluding chunks
+    with no embedding yet (item 18 leaves embedding NULL until it succeeds).
+    Joins KnowledgeSource for its type, so the caller gets full source
+    attribution without a second query per result.
+    """
+
+    distance = Chunk.embedding.cosine_distance(query_vector)
+
+    result = await db.execute(
+        select(Chunk, KnowledgeSource.type, distance.label("distance"))
+        .join(KnowledgeSource, Chunk.knowledge_source_id == KnowledgeSource.id)
+        .where(
+            Chunk.organization_id == organization_id,
+            Chunk.workspace_id == workspace_id,
+            Chunk.embedding.isnot(None),
+        )
+        .order_by(distance)
+        .limit(top_k)
+    )
+
+    return [
+        (chunk, source_type, chunk_distance)
+        for chunk, source_type, chunk_distance in result.all()
+    ]
