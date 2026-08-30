@@ -1,0 +1,114 @@
+import uuid
+
+from httpx import AsyncClient
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from app.core.config import settings
+from app.models.assistant import Assistant
+from app.models.assistant_version import AssistantVersion
+from app.models.organization import Organization
+from app.models.workspace import Workspace
+
+_TURN_DETECTION_CONFIG_URL = (
+    "/internal/v1/assistants/{assistant_id}/turn-detection-config"
+)
+
+
+async def _make_assistant(db: AsyncSession, slug: str) -> Assistant:
+    organization = Organization(name=slug, slug=slug)
+    db.add(organization)
+    await db.flush()
+
+    workspace = Workspace(organization_id=organization.id, name="Clinic")
+    db.add(workspace)
+    await db.flush()
+
+    assistant = Assistant(
+        organization_id=organization.id,
+        workspace_id=workspace.id,
+        name="Test Assistant",
+    )
+    db.add(assistant)
+    await db.flush()
+
+    return assistant
+
+
+async def test_returns_the_published_versions_sensitivity(
+    client: AsyncClient, db: AsyncSession
+) -> None:
+    assistant = await _make_assistant(db, "internal-turn-detection-ok")
+
+    version = AssistantVersion(
+        assistant_id=assistant.id,
+        version=1,
+        voice_id="voice-1",
+        language="en",
+        greeting="Hello",
+        persona=None,
+        speech_rate=1.0,
+        turn_sensitivity=0.8,
+        creativity=0.3,
+        ambient_sound=None,
+    )
+    db.add(version)
+    await db.flush()
+
+    assistant.current_version_id = version.id
+    await db.flush()
+
+    response = await client.get(
+        _TURN_DETECTION_CONFIG_URL.format(assistant_id=assistant.id),
+        headers={"X-Internal-Secret": settings.internal_api_secret},
+    )
+
+    assert response.status_code == 200
+    assert response.json() == {"sensitivity": 0.8}
+
+
+async def test_returns_the_default_sensitivity_for_an_unpublished_assistant(
+    client: AsyncClient, db: AsyncSession
+) -> None:
+    assistant = await _make_assistant(db, "internal-turn-detection-unpublished")
+
+    response = await client.get(
+        _TURN_DETECTION_CONFIG_URL.format(assistant_id=assistant.id),
+        headers={"X-Internal-Secret": settings.internal_api_secret},
+    )
+
+    assert response.status_code == 200
+    assert response.json() == {"sensitivity": 0.5}
+
+
+async def test_404s_for_an_unknown_assistant(client: AsyncClient) -> None:
+    response = await client.get(
+        _TURN_DETECTION_CONFIG_URL.format(assistant_id=uuid.uuid4()),
+        headers={"X-Internal-Secret": settings.internal_api_secret},
+    )
+
+    assert response.status_code == 404
+
+
+async def test_401s_with_a_missing_secret_header(
+    client: AsyncClient, db: AsyncSession
+) -> None:
+    assistant = await _make_assistant(db, "internal-turn-detection-no-header")
+
+    response = await client.get(
+        _TURN_DETECTION_CONFIG_URL.format(assistant_id=assistant.id)
+    )
+
+    assert response.status_code == 401
+
+
+async def test_401s_with_a_wrong_secret_header(
+    client: AsyncClient, db: AsyncSession
+) -> None:
+    assistant = await _make_assistant(db, "internal-turn-detection-wrong-header")
+
+    response = await client.get(
+        _TURN_DETECTION_CONFIG_URL.format(assistant_id=assistant.id),
+        headers={"X-Internal-Secret": "definitely-not-the-real-secret"},
+    )
+
+    assert response.status_code == 401

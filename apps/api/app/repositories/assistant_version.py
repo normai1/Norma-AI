@@ -6,6 +6,20 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.models.assistant_version import AssistantVersion
 
 
+async def get_by_id(
+    db: AsyncSession,
+    version_id: uuid.UUID,
+) -> AssistantVersion | None:
+    """
+    Look up an assistant version by primary key - what
+    Assistant.current_version_id points at.
+    """
+
+    return await db.scalar(
+        select(AssistantVersion).where(AssistantVersion.id == version_id),
+    )
+
+
 async def get_by_version(
     db: AsyncSession,
     assistant_id: uuid.UUID,

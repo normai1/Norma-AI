@@ -1,9 +1,9 @@
 """
 Norma's own wrapper around Pipecat's transport/pipeline construction (item
 20a's "behind Norma's own interfaces" requirement, CLAUDE.md section 5.5).
-Application code should call build_speech_to_text_pipeline_worker() rather
+Application code should call build_voice_session_pipeline_worker() rather
 than construct Pipecat primitives directly, so a future framework swap -
-or 20c-20g adding real pipeline stages - only touches this module.
+or 20d-20g adding real pipeline stages - only touches this module.
 """
 
 import asyncio
@@ -12,6 +12,7 @@ from collections.abc import AsyncIterator, Sequence
 
 from fastapi import WebSocket
 from norma_shared.speech import SpeechToTextProvider
+from pipecat.audio.vad.vad_analyzer import VADAnalyzer
 from pipecat.frames.frames import (
     CancelFrame,
     EndFrame,
@@ -29,6 +30,8 @@ from pipecat.transports.websocket.fastapi import (
     FastAPIWebsocketParams,
     FastAPIWebsocketTransport,
 )
+
+from app.turn_detection import TurnDetector
 
 # Matches norma_shared/speech.py's canonical internal audio format (item
 # 9a) on the control plane - the media plane should speak the same format
@@ -98,9 +101,11 @@ class SpeechToTextProcessor(FrameProcessor):
     whole-stream provider into the per-chunk base class would be an
     awkward, lossy fit.
 
-    Consumes InputAudioRawFrame itself rather than forwarding it - nothing
-    downstream needs raw audio once STT has it; item 20c's turn detection
-    is the next stage to insert here.
+    Forwards InputAudioRawFrame downstream after queuing it for STT - a
+    deliberate revision of item 20b's original design, which consumed the
+    frame here on the (then true) assumption that nothing downstream needed
+    raw audio once STT had it. Item 20c's TurnDetectionProcessor needs the
+    same audio for VAD, so it no longer holds.
     """
 
     def __init__(
@@ -150,6 +155,7 @@ class SpeechToTextProcessor(FrameProcessor):
             await self.push_frame(frame, direction)
         elif isinstance(frame, InputAudioRawFrame):
             await self._audio_queue.put(frame.audio)
+            await self.push_frame(frame, direction)
         elif isinstance(frame, (EndFrame, CancelFrame)):
             await self._audio_queue.put(None)
             await self.push_frame(frame, direction)
@@ -157,19 +163,79 @@ class SpeechToTextProcessor(FrameProcessor):
             await self.push_frame(frame, direction)
 
 
-def build_speech_to_text_pipeline_worker(
+def _is_transcript_message(message: object) -> bool:
+    return isinstance(message, dict) and message.get("type") == "transcript"
+
+
+class TurnDetectionProcessor(FrameProcessor):
+    """
+    Bridges a TurnDetector (app/turn_detection.py) into Pipecat's frame
+    system. Sits after SpeechToTextProcessor, observing the same
+    InputAudioRawFrames (now forwarded downstream rather than consumed -
+    see SpeechToTextProcessor's docstring) and the {"type": "transcript"}
+    OutputTransportMessageUrgentFrames it emits. Once the detector reports
+    the turn has ended, pushes a {"type": "turn_ended", "text": ...}
+    message exactly once - turn_ended() stays true forever afterward, so
+    this tracks whether it has already emitted to avoid repeating the
+    message on every later frame.
+    """
+
+    def __init__(self, turn_detector: TurnDetector) -> None:
+        super().__init__()
+        self._turn_detector = turn_detector
+        self._turn_ended_emitted = False
+
+    async def process_frame(self, frame: Frame, direction: FrameDirection) -> None:
+        await super().process_frame(frame, direction)
+
+        if isinstance(frame, InputAudioRawFrame):
+            await self._turn_detector.feed_audio(frame.audio)
+        elif isinstance(frame, OutputTransportMessageUrgentFrame) and _is_transcript_message(
+            frame.message
+        ):
+            self._turn_detector.feed_transcript(
+                frame.message["text"], is_final=frame.message["is_final"]
+            )
+
+        await self.push_frame(frame, direction)
+        await self._maybe_emit_turn_ended()
+
+    async def _maybe_emit_turn_ended(self) -> None:
+        if self._turn_ended_emitted or not self._turn_detector.turn_ended():
+            return
+
+        self._turn_ended_emitted = True
+
+        await self.push_frame(
+            OutputTransportMessageUrgentFrame(
+                message={
+                    "type": "turn_ended",
+                    "text": self._turn_detector.last_final_transcript,
+                }
+            )
+        )
+
+
+def build_voice_session_pipeline_worker(
     websocket: WebSocket,
     provider: SpeechToTextProvider,
     *,
     language: str = "en",
     keywords: Sequence[str] = (),
+    sensitivity: float = 0.5,
+    vad_analyzer: VADAnalyzer | None = None,
 ) -> PipelineWorker:
     """
-    Wire one WebSocket connection into a minimal Pipecat pipeline that
-    transcribes incoming audio and emits transcript JSON messages back to
-    the caller. This is the only Pipecat-specific construction in the
-    media plane - later items add real stages to the Pipeline list here,
-    not by reaching into Pipecat from elsewhere in the app.
+    Wire one WebSocket connection into a Pipecat pipeline that transcribes
+    incoming audio and detects when the caller's turn has ended, emitting
+    both as JSON messages back to the caller. This is the only Pipecat-
+    specific construction in the media plane - later items add real stages
+    to the Pipeline list here, not by reaching into Pipecat from elsewhere
+    in the app.
+
+    vad_analyzer is exposed for tests to inject a scripted fake - the real
+    SileroVADAnalyzer loads an ML model and should never run in the test
+    suite (see app/turn_detection.py).
     """
 
     transport = FastAPIWebsocketTransport(
@@ -183,10 +249,17 @@ def build_speech_to_text_pipeline_worker(
         ),
     )
 
+    turn_detector = TurnDetector(
+        sensitivity=sensitivity,
+        sample_rate=AUDIO_SAMPLE_RATE_HZ,
+        vad_analyzer=vad_analyzer,
+    )
+
     pipeline = Pipeline(
         [
             transport.input(),
             SpeechToTextProcessor(provider, language=language, keywords=keywords),
+            TurnDetectionProcessor(turn_detector),
             transport.output(),
         ]
     )

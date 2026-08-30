@@ -69,7 +69,7 @@
 - [ ] 20. **Real-time voice session engine** - the core product. Sub-items are independent build slices but the item is only complete when a full spoken conversation works end to end
   - [x] 20a. **Framework selection and media transport** - evaluate LiveKit Agents against Pipecat, record the decision, and establish bidirectional streaming audio behind Norma's own interfaces
   - [x] 20b. **Streaming STT integration** - partial and final transcripts with glossary biasing
-  - [ ] 20c. **Turn detection** - VAD plus semantic end-of-turn classification with operator-configurable sensitivity
+  - [x] 20c. **Turn detection** - VAD plus semantic end-of-turn classification with operator-configurable sensitivity
   - [ ] 20d. **LLM turn loop** - realtime model streaming, assistant configuration and retrieved context assembly, conversation state
   - [ ] 20e. **Streaming TTS and barge-in** - sentence-chunked playback starting before the LLM finishes, with immediate cancellation on caller speech
   - [ ] 20f. **Latency instrumentation** - per-turn TurnMetric rows across every leg, with a p95 budget enforced in CI
