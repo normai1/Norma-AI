@@ -18,3 +18,18 @@ ELEVENLABS_API_KEY = os.environ.get("ELEVENLABS_API_KEY", "")
 API_INTERNAL_URL = os.environ.get("API_INTERNAL_URL", "http://api:8000")
 
 INTERNAL_API_SECRET = os.environ.get("INTERNAL_API_SECRET", "")
+
+# "mock" for the same reason STT_PROVIDER defaults to it - a fresh checkout
+# and the test suite must never reach a paid provider without deliberately
+# configuring one.
+LLM_PROVIDER = os.environ.get("LLM_PROVIDER", "mock")
+
+# claude-haiku-4-5 class, matching CLAUDE.md section 8.1's explicit
+# rejection of a frontier model in the per-turn conversation loop.
+LLM_REALTIME_MODEL = os.environ.get("LLM_REALTIME_MODEL", "claude-haiku-4-5-20251001")
+
+ANTHROPIC_API_KEY = os.environ.get("ANTHROPIC_API_KEY", "")
+
+# Empty means "use the SDK default" - only set for a proxy or custom
+# endpoint.
+ANTHROPIC_BASE_URL = os.environ.get("ANTHROPIC_BASE_URL", "")

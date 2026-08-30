@@ -4,6 +4,8 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.api.internal.glossary import router as internal_glossary_router
+from app.api.internal.llm_config import router as internal_llm_config_router
+from app.api.internal.retrieval import router as internal_retrieval_router
 from app.api.internal.turn_detection import router as internal_turn_detection_router
 from app.api.v1.assistant_versions import router as assistant_versions_router
 from app.api.v1.assistants import router as assistants_router
@@ -122,6 +124,8 @@ app.include_router(
 # deliberately distinct path from the public /api/v1 surface above.
 app.include_router(internal_glossary_router)
 app.include_router(internal_turn_detection_router)
+app.include_router(internal_llm_config_router)
+app.include_router(internal_retrieval_router)
 
 
 @app.get("/")

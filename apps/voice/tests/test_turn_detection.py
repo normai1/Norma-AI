@@ -149,3 +149,61 @@ async def test_silence_before_any_speech_never_ends_the_turn() -> None:
     await detector.feed_audio(b"still silence")
 
     assert detector.turn_ended() is False
+
+
+async def test_reset_for_next_turn_detects_a_second_independent_turn() -> None:
+    clock = _FakeClock()
+    vad = _ScriptedVADAnalyzer(
+        [VADState.SPEAKING, VADState.QUIET, VADState.SPEAKING, VADState.QUIET]
+    )
+    detector = TurnDetector(sensitivity=0.5, sample_rate=16_000, vad_analyzer=vad, clock=clock)
+
+    await detector.feed_audio(b"speech")
+    clock.value = 0.5
+    await detector.feed_audio(b"silence")
+    detector.feed_transcript("Hello there.", is_final=True)
+    assert detector.turn_ended() is True
+
+    detector.reset_for_next_turn()
+    assert detector.turn_ended() is False
+    assert detector.last_final_transcript == ""
+
+    clock.value = 1.0
+    await detector.feed_audio(b"speech again")
+    clock.value = 1.5
+    await detector.feed_audio(b"silence again")
+    detector.feed_transcript("Book me in for Tuesday.", is_final=True)
+
+    assert detector.turn_ended() is True
+    assert detector.last_final_transcript == "Book me in for Tuesday."
+
+
+async def test_reset_for_next_turn_prevents_stale_text_from_ending_the_next_turn_early() -> None:
+    """
+    Regression guard for a real bug found while designing this reset: if
+    last_final_transcript were not cleared, silence at the very start of
+    the next turn - before any new final transcript arrives - would reuse
+    the previous turn's already-complete sentence and end the new turn
+    instantly.
+    """
+
+    clock = _FakeClock()
+    vad = _ScriptedVADAnalyzer(
+        [VADState.SPEAKING, VADState.QUIET, VADState.SPEAKING, VADState.QUIET]
+    )
+    detector = TurnDetector(sensitivity=0.5, sample_rate=16_000, vad_analyzer=vad, clock=clock)
+
+    await detector.feed_audio(b"speech")
+    clock.value = 0.5
+    await detector.feed_audio(b"silence")
+    detector.feed_transcript("Hello there.", is_final=True)
+    assert detector.turn_ended() is True
+
+    detector.reset_for_next_turn()
+
+    clock.value = 1.0
+    await detector.feed_audio(b"speech again")
+    clock.value = 1.5
+    await detector.feed_audio(b"silence again")
+
+    assert detector.turn_ended() is False

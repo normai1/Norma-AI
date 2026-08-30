@@ -8,6 +8,7 @@ or 20d-20g adding real pipeline stages - only touches this module.
 
 import asyncio
 import json
+import uuid
 from collections.abc import AsyncIterator, Sequence
 
 from fastapi import WebSocket
@@ -31,7 +32,15 @@ from pipecat.transports.websocket.fastapi import (
     FastAPIWebsocketTransport,
 )
 
+from app.conversation import ConversationState, assemble_system_prompt
+from app.llm import LLMProvider, LLMProviderError
+from app.retrieval_client import fetch_retrieved_context
 from app.turn_detection import TurnDetector
+
+# A fixed, generic apology - never str(exception). CLAUDE.md's rule against
+# exposing internal error details to a user applies to this JSON fallback
+# exactly as much as to an HTTP error response.
+_LLM_ERROR_MESSAGE = "Sorry, I'm having trouble responding right now."
 
 # Matches norma_shared/speech.py's canonical internal audio format (item
 # 9a) on the control plane - the media plane should speak the same format
@@ -175,15 +184,22 @@ class TurnDetectionProcessor(FrameProcessor):
     see SpeechToTextProcessor's docstring) and the {"type": "transcript"}
     OutputTransportMessageUrgentFrames it emits. Once the detector reports
     the turn has ended, pushes a {"type": "turn_ended", "text": ...}
-    message exactly once - turn_ended() stays true forever afterward, so
-    this tracks whether it has already emitted to avoid repeating the
-    message on every later frame.
+    message.
+
+    Emits on the False->True edge of turn_ended(), not as a one-shot ever
+    flag - item 20c's original design (a plain "already emitted" latch that
+    never resets) was correct when only one turn ever needed proving, but
+    would permanently block every turn after the first now that item 20d's
+    LLMTurnProcessor calls reset_for_next_turn() between turns. Edge-
+    triggering off the detector's own state re-arms automatically the
+    moment it resets, with no direct reference between the two processors
+    needed. Found while wiring in the multi-turn conversation loop.
     """
 
     def __init__(self, turn_detector: TurnDetector) -> None:
         super().__init__()
         self._turn_detector = turn_detector
-        self._turn_ended_emitted = False
+        self._previously_ended = False
 
     async def process_frame(self, frame: Frame, direction: FrameDirection) -> None:
         await super().process_frame(frame, direction)
@@ -201,10 +217,16 @@ class TurnDetectionProcessor(FrameProcessor):
         await self._maybe_emit_turn_ended()
 
     async def _maybe_emit_turn_ended(self) -> None:
-        if self._turn_ended_emitted or not self._turn_detector.turn_ended():
+        is_ended = self._turn_detector.turn_ended()
+
+        if not is_ended:
+            self._previously_ended = False
             return
 
-        self._turn_ended_emitted = True
+        if self._previously_ended:
+            return
+
+        self._previously_ended = True
 
         await self.push_frame(
             OutputTransportMessageUrgentFrame(
@@ -216,22 +238,124 @@ class TurnDetectionProcessor(FrameProcessor):
         )
 
 
+def _is_turn_ended_message(message: object) -> bool:
+    return isinstance(message, dict) and message.get("type") == "turn_ended"
+
+
+class LLMTurnProcessor(FrameProcessor):
+    """
+    Bridges an LLMProvider (app/llm.py) into Pipecat's frame system. Sits
+    after TurnDetectionProcessor, observing its {"type": "turn_ended"}
+    messages. On one arriving while no LLM call is in flight, fetches this
+    turn's retrieved context, assembles the system prompt, and streams the
+    reply as a tracked background task - never awaited inline, mirroring
+    SpeechToTextProcessor's own precedent, since awaiting here would block
+    all downstream frame processing (including the next turn's audio) for
+    the entire response.
+
+    Only one LLM turn ever runs at a time, by construction rather than a
+    race that needs winning: reset_for_next_turn() runs only in this
+    processor's own finally block once a call finishes (success or error),
+    and TurnDetector.turn_ended() stays latched True - so TurnDetectionProcessor
+    cannot emit a second turn_ended - until that reset happens. The
+    is-a-call-already-running check below is therefore a defensive
+    invariant, not something reachable through the pipeline as currently
+    wired; it costs nothing to keep and protects against a future change
+    (item 20e's barge-in is the likely candidate) altering that sequencing.
+    """
+
+    def __init__(
+        self,
+        llm_provider: LLMProvider,
+        turn_detector: TurnDetector,
+        *,
+        assistant_id: uuid.UUID,
+        system_prompt: str,
+        creativity: float,
+    ) -> None:
+        super().__init__()
+        self._llm_provider = llm_provider
+        self._turn_detector = turn_detector
+        self._assistant_id = assistant_id
+        self._system_prompt = system_prompt
+        self._creativity = creativity
+        self._conversation = ConversationState()
+        self._llm_task: asyncio.Task | None = None
+
+    async def process_frame(self, frame: Frame, direction: FrameDirection) -> None:
+        await super().process_frame(frame, direction)
+
+        if isinstance(frame, OutputTransportMessageUrgentFrame) and _is_turn_ended_message(
+            frame.message
+        ):
+            if self._llm_task is None or self._llm_task.done():
+                self._llm_task = self.create_task(
+                    self._run_llm_turn(frame.message["text"])
+                )
+        elif isinstance(frame, (EndFrame, CancelFrame)) and self._llm_task is not None:
+            self._llm_task.cancel()
+
+        await self.push_frame(frame, direction)
+
+    async def _run_llm_turn(self, caller_text: str) -> None:
+        try:
+            self._conversation.append_user_turn(caller_text)
+            retrieved_context = await fetch_retrieved_context(
+                self._assistant_id, caller_text
+            )
+            system = assemble_system_prompt(
+                base_prompt=self._system_prompt, retrieved_context=retrieved_context
+            )
+
+            reply_parts: list[str] = []
+
+            async for delta in self._llm_provider.stream(
+                self._conversation.messages, system=system, temperature=self._creativity
+            ):
+                reply_parts.append(delta)
+                await self.push_frame(
+                    OutputTransportMessageUrgentFrame(
+                        message={"type": "llm_delta", "text": delta}
+                    )
+                )
+
+            full_reply = "".join(reply_parts)
+            self._conversation.append_assistant_turn(full_reply)
+            await self.push_frame(
+                OutputTransportMessageUrgentFrame(
+                    message={"type": "llm_complete", "text": full_reply}
+                )
+            )
+        except LLMProviderError:
+            await self.push_frame(
+                OutputTransportMessageUrgentFrame(
+                    message={"type": "llm_error", "text": _LLM_ERROR_MESSAGE}
+                )
+            )
+        finally:
+            self._turn_detector.reset_for_next_turn()
+
+
 def build_voice_session_pipeline_worker(
     websocket: WebSocket,
     provider: SpeechToTextProvider,
+    llm_provider: LLMProvider,
     *,
+    assistant_id: uuid.UUID,
     language: str = "en",
     keywords: Sequence[str] = (),
     sensitivity: float = 0.5,
+    system_prompt: str = "",
+    creativity: float = 0.3,
     vad_analyzer: VADAnalyzer | None = None,
 ) -> PipelineWorker:
     """
     Wire one WebSocket connection into a Pipecat pipeline that transcribes
-    incoming audio and detects when the caller's turn has ended, emitting
-    both as JSON messages back to the caller. This is the only Pipecat-
-    specific construction in the media plane - later items add real stages
-    to the Pipeline list here, not by reaching into Pipecat from elsewhere
-    in the app.
+    incoming audio, detects when the caller's turn has ended, and streams
+    an LLM reply - all as JSON messages back to the caller. This is the
+    only Pipecat-specific construction in the media plane - later items add
+    real stages to the Pipeline list here, not by reaching into Pipecat
+    from elsewhere in the app.
 
     vad_analyzer is exposed for tests to inject a scripted fake - the real
     SileroVADAnalyzer loads an ML model and should never run in the test
@@ -260,6 +384,13 @@ def build_voice_session_pipeline_worker(
             transport.input(),
             SpeechToTextProcessor(provider, language=language, keywords=keywords),
             TurnDetectionProcessor(turn_detector),
+            LLMTurnProcessor(
+                llm_provider,
+                turn_detector,
+                assistant_id=assistant_id,
+                system_prompt=system_prompt,
+                creativity=creativity,
+            ),
             transport.output(),
         ]
     )

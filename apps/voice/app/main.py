@@ -4,6 +4,8 @@ from fastapi import FastAPI, WebSocket
 from pipecat.workers.runner import WorkerRunner
 
 from app.glossary_client import fetch_glossary_terms
+from app.llm_config_client import fetch_llm_config
+from app.llm_provider_factory import get_llm_provider
 from app.media_session import build_voice_session_pipeline_worker
 from app.provider_factory import get_stt_provider
 from app.turn_detection_client import fetch_turn_sensitivity
@@ -36,27 +38,33 @@ async def media_session(
     language: str = "en",
 ) -> None:
     """
-    Items 20b-20c's streaming-STT-plus-turn-detection proof: accepts a
-    WebSocket connection, fetches the assistant's glossary terms and turn
-    sensitivity, wires the connection into a Pipecat pipeline that
-    transcribes incoming audio and detects when a turn has ended (see
-    app/media_session.py), and runs it until the caller disconnects. Not a
-    real call - 20d-20g add the LLM loop, TTS/barge-in, latency
-    instrumentation, and resilience; this route exists to prove real
-    streaming transcription and turn detection work.
+    Items 20b-20d's streaming-STT-plus-turn-detection-plus-LLM-reply proof:
+    accepts a WebSocket connection, fetches the assistant's glossary terms,
+    turn sensitivity, and LLM config, wires the connection into a Pipecat
+    pipeline that transcribes incoming audio, detects when a turn has
+    ended, and streams an LLM reply (see app/media_session.py), and runs it
+    until the caller disconnects. Not a real call - 20e-20g add TTS/
+    barge-in, latency instrumentation, and resilience; this route exists to
+    prove the turn loop itself works.
     """
 
     await websocket.accept()
 
     keywords = await fetch_glossary_terms(assistant_id)
     sensitivity = await fetch_turn_sensitivity(assistant_id)
+    llm_config = await fetch_llm_config(assistant_id)
     provider = get_stt_provider()
+    llm_provider = get_llm_provider()
     worker = build_voice_session_pipeline_worker(
         websocket,
         provider,
+        llm_provider,
+        assistant_id=assistant_id,
         language=language,
         keywords=keywords,
         sensitivity=sensitivity,
+        system_prompt=llm_config.system_prompt,
+        creativity=llm_config.creativity,
     )
     runner = WorkerRunner(handle_sigint=False)
     await runner.add_workers(worker)

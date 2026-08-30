@@ -136,6 +136,22 @@ class TurnDetector:
     def last_final_transcript(self) -> str:
         return self._last_final_transcript
 
+    def reset_for_next_turn(self) -> None:
+        """
+        Rearm the detector to find a second, independent turn-ended cycle
+        after this one. Clears last_final_transcript too, not just the
+        ended/silence/speaking state: leaving stale text in place would let
+        a burst of silence at the start of the next turn - before any new
+        final transcript arrives - wrongly reuse the previous turn's
+        already-complete sentence and end the new turn instantly. The
+        caller must read last_final_transcript before calling this.
+        """
+
+        self._ever_spoken = False
+        self._silence_since = None
+        self._last_final_transcript = ""
+        self._turn_ended = False
+
     def _recompute(self) -> None:
         if self._turn_ended or self._silence_since is None:
             return
