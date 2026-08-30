@@ -21,6 +21,7 @@ from app.models.organization_member import OrganizationMember
 from app.models.prompt_template import PromptTemplate
 from app.models.prompt_version import PromptVersion
 from app.models.session import UserSession
+from app.models.turn_metric import TurnMetric
 from app.models.user import User
 from app.models.workspace import Workspace
 from app.models.workspace_member import WorkspaceMember
@@ -40,6 +41,7 @@ __all__ = [
     "OrganizationMember",
     "PromptTemplate",
     "PromptVersion",
+    "TurnMetric",
     "User",
     "UserSession",
     "Workspace",

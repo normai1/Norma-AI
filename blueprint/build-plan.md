@@ -72,7 +72,7 @@
   - [x] 20c. **Turn detection** - VAD plus semantic end-of-turn classification with operator-configurable sensitivity
   - [x] 20d. **LLM turn loop** - realtime model streaming, assistant configuration and retrieved context assembly, conversation state
   - [x] 20e. **Streaming TTS and barge-in** - sentence-chunked playback starting before the LLM finishes, with immediate cancellation on caller speech
-  - [ ] 20f. **Latency instrumentation** - per-turn TurnMetric rows across every leg, with a p95 budget enforced in CI
+  - [x] 20f. **Latency instrumentation** - per-turn TurnMetric rows across every leg, with a p95 budget enforced in CI
   - [ ] 20g. **Session resilience** - provider timeouts, retries, and failover to forwarding or message-taking instead of dead air
 - [ ] 21. **In-browser test call** - operators talk to an assistant from the assistant editor with no phone number required, over WebRTC or WebSocket audio
 - [ ] 22. **Voice pipeline test harness** - fixture-audio conversation replay against the full pipeline with mock providers, plus barge-in and turn-detection behavioural tests

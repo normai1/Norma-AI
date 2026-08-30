@@ -9,95 +9,18 @@ from pipecat.audio.vad.vad_analyzer import VADState
 import app.main as main_module
 import app.media_session as media_session_module
 from app.llm import LLMProviderUnavailable
-from app.llm_config_client import LLMConfig
 from app.main import app
 from app.mock_llm import MockLLM
-from app.tts_config_client import TTSConfig
-
-
-class _ScriptedVADAnalyzer:
-    """
-    Returns one VADState per analyze_audio() call, in order (the last entry
-    repeats once exhausted) - never loads the real Silero model, matching
-    app/turn_detection.py's own test precedent.
-    """
-
-    def __init__(self, states: list[VADState]) -> None:
-        self._states = states
-        self._index = 0
-
-    def set_sample_rate(self, sample_rate: int) -> None:
-        pass
-
-    async def analyze_audio(self, buffer: bytes) -> VADState:
-        state = self._states[min(self._index, len(self._states) - 1)]
-        self._index += 1
-
-        return state
-
-
-def _patch_turn_detector_vad(monkeypatch: pytest.MonkeyPatch, vad_analyzer) -> None:
-    """
-    Substitutes a scripted VAD analyzer into every TurnDetector this test
-    creates, without touching the real pipeline construction otherwise -
-    the real SileroVADAnalyzer must never load in the test suite.
-    """
-
-    real_turn_detector = media_session_module.TurnDetector
-
-    def _fake_turn_detector(**kwargs):
-        return real_turn_detector(**{**kwargs, "vad_analyzer": vad_analyzer})
-
-    monkeypatch.setattr(media_session_module, "TurnDetector", _fake_turn_detector)
-
-
-async def _fake_fetch_glossary_terms(assistant_id) -> list[str]:
-    return ["tinnitus", "otoscopy"]
-
-
-async def _fake_fetch_turn_sensitivity(assistant_id) -> float:
-    return 0.5
-
-
-async def _fake_fetch_llm_config(assistant_id) -> LLMConfig:
-    return LLMConfig(system_prompt="You are a helpful assistant.", creativity=0.3)
-
-
-async def _fake_fetch_retrieved_context(assistant_id, query) -> str:
-    return ""
-
-
-async def _fake_fetch_tts_config(assistant_id) -> TTSConfig:
-    return TTSConfig(voice_id="voice-1", speech_rate=1.0)
-
-
-def _silent_tts() -> MockTTS:
-    """
-    Produces zero audio for any text (bytes_per_character=0 means
-    total_bytes is always 0, MockTTS.synthesize's own early return). The
-    default TTS stand-in for every test that isn't specifically about TTS
-    output - otherwise a background player task's real audio could race a
-    test's fixed-count receive_text() calls, since neither the LLM's own
-    deltas nor MockTTS's own synthesis have any inherent delay to keep
-    them safely behind the text messages a test expects. Tests that do
-    care about TTS output override get_tts_provider explicitly afterward.
-    """
-
-    return MockTTS(bytes_per_character=0)
-
-
-def _patch_session_setup(monkeypatch: pytest.MonkeyPatch) -> None:
-    """
-    Every test that opens /media/session triggers main.py's unconditional
-    fetch_llm_config()/fetch_tts_config()/get_tts_provider() calls - mock
-    them everywhere so no test ever attempts a real network call or
-    produces racy background audio, matching every other session-setup
-    fetch's existing precedent.
-    """
-
-    monkeypatch.setattr(main_module, "fetch_llm_config", _fake_fetch_llm_config)
-    monkeypatch.setattr(main_module, "fetch_tts_config", _fake_fetch_tts_config)
-    monkeypatch.setattr(main_module, "get_tts_provider", _silent_tts)
+from tests.conftest import (
+    _capturing_record_turn_metric,
+    _fake_fetch_glossary_terms,
+    _fake_fetch_retrieved_context,
+    _fake_fetch_turn_sensitivity,
+    _patch_session_setup,
+    _patch_turn_detector_vad,
+    _receive_one,
+    _ScriptedVADAnalyzer,
+)
 
 
 def test_media_session_streams_partial_then_final_transcripts(
@@ -558,25 +481,6 @@ def test_media_session_cancels_an_in_flight_llm_call_on_caller_speech_started(
     assert turn_ended_2 == {"type": "turn_ended", "text": "Second question."}
 
 
-def _receive_one(ws) -> tuple[str, object]:
-    """
-    Reads one raw WebSocket message and returns ("bytes", raw_bytes) or
-    ("text", parsed_json) - the generic Starlette receive(), not
-    receive_text()/receive_bytes(), since this feature's messages mix JSON
-    control messages with binary synthesized audio and exact interleaving
-    between them is not something to assume (verified empirically while
-    designing this feature: receive_text()/receive_bytes() assert their
-    expected type and fail loudly on a mismatch rather than skipping ahead).
-    """
-
-    message = ws.receive()
-
-    if "bytes" in message:
-        return ("bytes", message["bytes"])
-
-    return ("text", json.loads(message["text"]))
-
-
 def test_media_session_streams_sentence_audio_before_the_llm_finishes(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -820,3 +724,308 @@ def test_media_session_barge_in_stops_pending_tts_before_any_audio_and_starts_a_
     } in second_turn_text
     assert {"type": "turn_ended", "text": "Second question."} in second_turn_text
     assert all(kind == "text" for kind, _ in second_turn_messages)
+
+
+def test_media_session_records_turn_metrics_for_a_normal_reply(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """
+    Item 20f's headline claim: a normal, uninterrupted turn posts exactly
+    one TurnMetric record with every leg set, in the causal order the real
+    pipeline actually produces them.
+    """
+
+    final = TranscriptEvent(text="What are your hours?", is_final=True)
+    mock_stt = MockSTT(script=[final], chunks_before_event=[1])
+    mock_llm = MockLLM(response="We open at nine.")
+    mock_tts = MockTTS()
+
+    monkeypatch.setattr(main_module, "get_stt_provider", lambda: mock_stt)
+    monkeypatch.setattr(main_module, "get_llm_provider", lambda: mock_llm)
+    monkeypatch.setattr(main_module, "fetch_glossary_terms", _fake_fetch_glossary_terms)
+    monkeypatch.setattr(main_module, "fetch_turn_sensitivity", _fake_fetch_turn_sensitivity)
+    _patch_session_setup(monkeypatch)
+    monkeypatch.setattr(main_module, "get_tts_provider", lambda: mock_tts)
+    monkeypatch.setattr(
+        media_session_module, "fetch_retrieved_context", _fake_fetch_retrieved_context
+    )
+    _patch_turn_detector_vad(
+        monkeypatch,
+        _ScriptedVADAnalyzer([VADState.SPEAKING, VADState.QUIET, VADState.QUIET]),
+    )
+    calls = _capturing_record_turn_metric(monkeypatch)
+
+    assistant_id = "00000000-0000-0000-0000-00000000000d"
+    chunk = bytes(range(256)) * 5
+
+    with (
+        TestClient(app) as client,
+        client.websocket_connect(f"/media/session?assistant_id={assistant_id}") as ws,
+    ):
+        for _ in range(3):
+            ws.send_bytes(chunk)
+
+        while True:
+            entry = _receive_one(ws)
+
+            if entry[0] == "text" and entry[1]["type"] == "reply_finished":
+                break
+
+    assert len(calls) == 1
+
+    posted_assistant_id, record = calls[0]
+    assert str(posted_assistant_id) == assistant_id
+    assert record.stt_finalized_at is not None
+    assert record.retrieval_done_at is not None
+    assert record.llm_first_token_at is not None
+    assert record.llm_complete_at is not None
+    assert record.tts_first_byte_at is not None
+    assert record.audio_out_at is not None
+
+    assert record.stt_finalized_at <= record.retrieval_done_at
+    assert record.retrieval_done_at <= record.llm_first_token_at
+    assert record.llm_first_token_at <= record.tts_first_byte_at
+    assert record.tts_first_byte_at <= record.audio_out_at
+
+
+def test_media_session_records_a_null_audio_leg_on_tts_failure(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """
+    A TTS-provider failure still writes a row - every LLM leg reached, but
+    tts_first_byte_at/audio_out_at stay None since no audio was ever
+    produced. "Every turn writes a row" tolerates a partial one.
+    """
+
+    final = TranscriptEvent(text="Can you help me?", is_final=True)
+    mock_stt = MockSTT(script=[final], chunks_before_event=[1])
+    mock_llm = MockLLM(response="Sure thing.")
+    mock_tts = MockTTS(failure=SpeechProviderUnavailable("boom"))
+
+    monkeypatch.setattr(main_module, "get_stt_provider", lambda: mock_stt)
+    monkeypatch.setattr(main_module, "get_llm_provider", lambda: mock_llm)
+    monkeypatch.setattr(main_module, "fetch_glossary_terms", _fake_fetch_glossary_terms)
+    monkeypatch.setattr(main_module, "fetch_turn_sensitivity", _fake_fetch_turn_sensitivity)
+    _patch_session_setup(monkeypatch)
+    monkeypatch.setattr(main_module, "get_tts_provider", lambda: mock_tts)
+    monkeypatch.setattr(
+        media_session_module, "fetch_retrieved_context", _fake_fetch_retrieved_context
+    )
+    _patch_turn_detector_vad(
+        monkeypatch,
+        _ScriptedVADAnalyzer([VADState.SPEAKING, VADState.QUIET, VADState.QUIET]),
+    )
+    calls = _capturing_record_turn_metric(monkeypatch)
+
+    assistant_id = "00000000-0000-0000-0000-00000000000b"
+    chunk = bytes(range(256)) * 5
+
+    with (
+        TestClient(app) as client,
+        client.websocket_connect(f"/media/session?assistant_id={assistant_id}") as ws,
+    ):
+        for _ in range(3):
+            ws.send_bytes(chunk)
+
+        while True:
+            entry = _receive_one(ws)
+
+            if entry[0] == "text" and entry[1]["type"] == "reply_finished":
+                break
+
+    assert len(calls) == 1
+
+    _, record = calls[0]
+    assert record.stt_finalized_at is not None
+    assert record.retrieval_done_at is not None
+    assert record.llm_first_token_at is not None
+    assert record.llm_complete_at is not None
+    assert record.tts_first_byte_at is None
+    assert record.audio_out_at is None
+
+
+def test_media_session_barge_in_posts_two_separate_turn_metric_records(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """
+    A barge-in must never merge or corrupt one turn's record with the
+    next's - the interrupted first turn's own (partial: no audio_out_at)
+    record and the interrupting second turn's own (complete) record are
+    posted separately.
+    """
+
+    first_final = TranscriptEvent(text="First question.", is_final=True)
+    second_final = TranscriptEvent(text="Second question.", is_final=True)
+    mock_stt = MockSTT(script=[first_final, second_final], chunks_before_event=[1, 4])
+    mock_llm = MockLLM(response="Sure thing.")
+    mock_tts = MockTTS(time_to_first_byte_seconds=1.0)
+
+    monkeypatch.setattr(main_module, "get_stt_provider", lambda: mock_stt)
+    monkeypatch.setattr(main_module, "get_llm_provider", lambda: mock_llm)
+    monkeypatch.setattr(main_module, "fetch_glossary_terms", _fake_fetch_glossary_terms)
+    monkeypatch.setattr(main_module, "fetch_turn_sensitivity", _fake_fetch_turn_sensitivity)
+    _patch_session_setup(monkeypatch)
+    monkeypatch.setattr(main_module, "get_tts_provider", lambda: mock_tts)
+    monkeypatch.setattr(
+        media_session_module, "fetch_retrieved_context", _fake_fetch_retrieved_context
+    )
+    _patch_turn_detector_vad(
+        monkeypatch,
+        _ScriptedVADAnalyzer(
+            [
+                VADState.SPEAKING,
+                VADState.QUIET,
+                VADState.QUIET,
+                VADState.SPEAKING,
+                VADState.QUIET,
+                VADState.QUIET,
+            ]
+        ),
+    )
+    calls = _capturing_record_turn_metric(monkeypatch)
+
+    assistant_id = "00000000-0000-0000-0000-00000000000c"
+    chunk = bytes(range(256)) * 5
+
+    with (
+        TestClient(app) as client,
+        client.websocket_connect(f"/media/session?assistant_id={assistant_id}") as ws,
+    ):
+        for _ in range(3):
+            ws.send_bytes(chunk)
+
+        while True:
+            entry = _receive_one(ws)
+
+            if entry[0] == "text" and entry[1]["type"] == "llm_complete":
+                break
+
+        # Interrupt before any audio for turn 1 was ever sent.
+        for _ in range(3):
+            ws.send_bytes(chunk)
+
+        # Two reply_finished messages arrive in total: turn 1's own (pushed
+        # by the barge-in reset itself) arrives almost immediately, well
+        # before turn 2 has produced any audio - wait for the *second* one,
+        # which is turn 2's own normal completion.
+        reply_finished_count = 0
+
+        while reply_finished_count < 2:
+            entry = _receive_one(ws)
+
+            if entry[0] == "text" and entry[1]["type"] == "reply_finished":
+                reply_finished_count += 1
+
+    assert len(calls) == 2
+
+    _, first_record = calls[0]
+    _, second_record = calls[1]
+
+    assert first_record.call_id == second_record.call_id
+
+    # Turn 1 was interrupted before any audio ever played.
+    assert first_record.stt_finalized_at is not None
+    assert first_record.llm_complete_at is not None
+    assert first_record.audio_out_at is None
+
+    # Turn 2 completed normally, and is a genuinely distinct turn.
+    assert second_record.stt_finalized_at is not None
+    assert second_record.audio_out_at is not None
+    assert second_record.stt_finalized_at != first_record.stt_finalized_at
+
+
+def test_media_session_disconnecting_mid_reply_still_posts_a_partial_record(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """
+    A real gap found while red-teaming this feature's spec: _reset_turn()
+    is the only normal flush point, but a caller hanging up mid-reply never
+    reaches it. Closing the connection before TTS ever produces audio must
+    still post whatever legs the turn reached, via the EndFrame/CancelFrame
+    path, not silently lose the row.
+    """
+
+    final = TranscriptEvent(text="What are your hours?", is_final=True)
+    mock_stt = MockSTT(script=[final], chunks_before_event=[1])
+    mock_llm = MockLLM(response="We open at nine.")
+    # Long enough that no audio can possibly arrive before the test closes
+    # the connection below.
+    mock_tts = MockTTS(time_to_first_byte_seconds=100.0)
+
+    monkeypatch.setattr(main_module, "get_stt_provider", lambda: mock_stt)
+    monkeypatch.setattr(main_module, "get_llm_provider", lambda: mock_llm)
+    monkeypatch.setattr(main_module, "fetch_glossary_terms", _fake_fetch_glossary_terms)
+    monkeypatch.setattr(main_module, "fetch_turn_sensitivity", _fake_fetch_turn_sensitivity)
+    _patch_session_setup(monkeypatch)
+    monkeypatch.setattr(main_module, "get_tts_provider", lambda: mock_tts)
+    monkeypatch.setattr(
+        media_session_module, "fetch_retrieved_context", _fake_fetch_retrieved_context
+    )
+    _patch_turn_detector_vad(
+        monkeypatch,
+        _ScriptedVADAnalyzer([VADState.SPEAKING, VADState.QUIET, VADState.QUIET]),
+    )
+    calls = _capturing_record_turn_metric(monkeypatch)
+
+    assistant_id = "00000000-0000-0000-0000-00000000000e"
+    chunk = bytes(range(256)) * 5
+
+    with (
+        TestClient(app) as client,
+        client.websocket_connect(f"/media/session?assistant_id={assistant_id}") as ws,
+    ):
+        for _ in range(3):
+            ws.send_bytes(chunk)
+
+        # Read only through llm_complete - TTS is still asleep inside its
+        # own very long time_to_first_byte_seconds. Exiting the `with`
+        # block now closes the connection mid-reply, before reply_finished
+        # (and therefore before _reset_turn()) ever runs.
+        while True:
+            entry = _receive_one(ws)
+
+            if entry[0] == "text" and entry[1]["type"] == "llm_complete":
+                break
+
+    assert len(calls) == 1
+
+    _, record = calls[0]
+    assert record.stt_finalized_at is not None
+    assert record.llm_complete_at is not None
+    assert record.audio_out_at is None
+
+
+def test_media_session_disconnecting_before_any_turn_starts_posts_nothing(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """
+    A session that never has a single turn (the caller connects and hangs
+    up without ever speaking) has nothing worth recording - the
+    EndFrame/CancelFrame flush must not post an entirely empty record.
+    """
+
+    mock_stt = MockSTT(script=[], chunks_before_event=[])
+    mock_llm = MockLLM()
+    mock_tts = MockTTS()
+
+    monkeypatch.setattr(main_module, "get_stt_provider", lambda: mock_stt)
+    monkeypatch.setattr(main_module, "get_llm_provider", lambda: mock_llm)
+    monkeypatch.setattr(main_module, "fetch_glossary_terms", _fake_fetch_glossary_terms)
+    monkeypatch.setattr(main_module, "fetch_turn_sensitivity", _fake_fetch_turn_sensitivity)
+    _patch_session_setup(monkeypatch)
+    monkeypatch.setattr(main_module, "get_tts_provider", lambda: mock_tts)
+    monkeypatch.setattr(
+        media_session_module, "fetch_retrieved_context", _fake_fetch_retrieved_context
+    )
+    _patch_turn_detector_vad(monkeypatch, _ScriptedVADAnalyzer([VADState.QUIET]))
+    calls = _capturing_record_turn_metric(monkeypatch)
+
+    assistant_id = "00000000-0000-0000-0000-00000000000f"
+
+    with (
+        TestClient(app) as client,
+        client.websocket_connect(f"/media/session?assistant_id={assistant_id}") as ws,
+    ):
+        ws.send_bytes(bytes(range(256)) * 5)
+
+    assert calls == []

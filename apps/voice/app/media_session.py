@@ -42,6 +42,8 @@ from app.llm import LLMProvider, LLMProviderError
 from app.retrieval_client import fetch_retrieved_context
 from app.sentence_chunker import SentenceChunker
 from app.turn_detection import TurnDetector
+from app.turn_metrics import TurnMetricsRecorder
+from app.turn_metrics_client import record_turn_metric
 
 # Fixed, generic apologies - never str(exception). CLAUDE.md's rule against
 # exposing internal error details to a user applies to these JSON fallbacks
@@ -203,9 +205,10 @@ class TurnDetectionProcessor(FrameProcessor):
     needed. Found while wiring in the multi-turn conversation loop.
     """
 
-    def __init__(self, turn_detector: TurnDetector) -> None:
+    def __init__(self, turn_detector: TurnDetector, turn_metrics: TurnMetricsRecorder) -> None:
         super().__init__()
         self._turn_detector = turn_detector
+        self._turn_metrics = turn_metrics
         self._previously_ended = False
         self._previously_speaking = False
 
@@ -293,6 +296,7 @@ class TurnDetectionProcessor(FrameProcessor):
             return
 
         self._previously_ended = True
+        self._turn_metrics.mark_stt_finalized(self._turn_metrics.current_generation())
 
         await self.push_frame(
             OutputTransportMessageUrgentFrame(
@@ -344,6 +348,7 @@ class LLMTurnProcessor(FrameProcessor):
         self,
         llm_provider: LLMProvider,
         turn_detector: TurnDetector,
+        turn_metrics: TurnMetricsRecorder,
         *,
         assistant_id: uuid.UUID,
         system_prompt: str,
@@ -352,6 +357,7 @@ class LLMTurnProcessor(FrameProcessor):
         super().__init__()
         self._llm_provider = llm_provider
         self._turn_detector = turn_detector
+        self._turn_metrics = turn_metrics
         self._assistant_id = assistant_id
         self._system_prompt = system_prompt
         self._creativity = creativity
@@ -365,8 +371,13 @@ class LLMTurnProcessor(FrameProcessor):
             frame.message
         ):
             if self._llm_task is None or self._llm_task.done():
+                # Captured once, here, at the moment this processor first
+                # reacts to the turn - never re-read later inside
+                # _run_llm_turn, which would defeat the generation guard
+                # (see TurnMetricsRecorder's own docstring).
+                generation = self._turn_metrics.current_generation()
                 self._llm_task = self.create_task(
-                    self._run_llm_turn(frame.message["text"])
+                    self._run_llm_turn(frame.message["text"], generation)
                 )
         elif isinstance(
             frame, OutputTransportMessageUrgentFrame
@@ -378,21 +389,27 @@ class LLMTurnProcessor(FrameProcessor):
 
         await self.push_frame(frame, direction)
 
-    async def _run_llm_turn(self, caller_text: str) -> None:
+    async def _run_llm_turn(self, caller_text: str, generation: int) -> None:
         try:
             self._conversation.append_user_turn(caller_text)
             retrieved_context = await fetch_retrieved_context(
                 self._assistant_id, caller_text
             )
+            self._turn_metrics.mark_retrieval_done(generation)
             system = assemble_system_prompt(
                 base_prompt=self._system_prompt, retrieved_context=retrieved_context
             )
 
             reply_parts: list[str] = []
+            first_delta = True
 
             async for delta in self._llm_provider.stream(
                 self._conversation.messages, system=system, temperature=self._creativity
             ):
+                if first_delta:
+                    self._turn_metrics.mark_llm_first_token(generation)
+                    first_delta = False
+
                 reply_parts.append(delta)
                 await self.push_frame(
                     OutputTransportMessageUrgentFrame(
@@ -402,6 +419,7 @@ class LLMTurnProcessor(FrameProcessor):
 
             full_reply = "".join(reply_parts)
             self._conversation.append_assistant_turn(full_reply)
+            self._turn_metrics.mark_llm_complete(generation)
             await self.push_frame(
                 OutputTransportMessageUrgentFrame(
                     message={"type": "llm_complete", "text": full_reply}
@@ -501,7 +519,9 @@ class TTSProcessor(FrameProcessor):
         tts_provider: TextToSpeechProvider,
         turn_detector: TurnDetector,
         turn_detection_processor: TurnDetectionProcessor,
+        turn_metrics: TurnMetricsRecorder,
         *,
+        assistant_id: uuid.UUID,
         voice_id: str,
         speech_rate: float,
     ) -> None:
@@ -509,6 +529,8 @@ class TTSProcessor(FrameProcessor):
         self._tts_provider = tts_provider
         self._turn_detector = turn_detector
         self._turn_detection_processor = turn_detection_processor
+        self._turn_metrics = turn_metrics
+        self._assistant_id = assistant_id
         self._voice_id = voice_id
         self._speech_rate = speech_rate
         self._chunker = SentenceChunker()
@@ -517,6 +539,13 @@ class TTSProcessor(FrameProcessor):
         self._current_playback: asyncio.Task | None = None
         self._llm_finished = False
         self._reply_in_progress = False
+        # Captured once, at the moment this processor first reacts to a
+        # turn - see LLMTurnProcessor's identical precedent.
+        self._active_generation = 0
+        # Which generation's audio has already been marked - guards against
+        # a second or later sentence's own first byte overwriting the
+        # turn's true "time to first audio."
+        self._audio_marked_generation: int | None = None
 
     async def process_frame(self, frame: Frame, direction: FrameDirection) -> None:
         await super().process_frame(frame, direction)
@@ -528,6 +557,7 @@ class TTSProcessor(FrameProcessor):
         ):
             self._reply_in_progress = True
             self._llm_finished = False
+            self._active_generation = self._turn_metrics.current_generation()
         elif isinstance(frame, OutputTransportMessageUrgentFrame) and _is_llm_delta_message(
             frame.message
         ):
@@ -540,8 +570,10 @@ class TTSProcessor(FrameProcessor):
             frame, OutputTransportMessageUrgentFrame
         ) and _is_caller_speech_started_message(frame.message):
             await self._handle_barge_in()
-        elif isinstance(frame, (EndFrame, CancelFrame)) and self._player_task is not None:
-            self._player_task.cancel()
+        elif isinstance(frame, (EndFrame, CancelFrame)):
+            if self._player_task is not None:
+                self._player_task.cancel()
+            self._flush_and_post_if_anything_was_marked()
 
         await self.push_frame(frame, direction)
 
@@ -623,11 +655,46 @@ class TTSProcessor(FrameProcessor):
         """
 
         self._turn_detector.reset_for_next_turn()
+        self._finish_turn_and_post()
         await self._turn_detection_processor.recheck()
 
         await self.push_frame(
             OutputTransportMessageUrgentFrame(message={"type": "reply_finished"})
         )
+
+    def _finish_turn_and_post(self) -> None:
+        """
+        Snapshots and clears the accumulated record, then fires a
+        fire-and-forget POST of whatever legs it reached - never awaited
+        inline (CLAUDE.md: "No blocking I/O in the audio path"), and never
+        skipped just because some legs are missing ("every turn writes a
+        row" tolerates a partial one). Uses this processor's own
+        create_task, not raw asyncio.create_task, so Pipecat's task manager
+        holds the strong reference - a plain asyncio.create_task result
+        with nothing else referencing it is eligible for garbage collection
+        mid-flight. Called before recheck() specifically - see the class
+        docstring and TurnMetricsRecorder's own for why a barge-in's second
+        turn must never be handed a stale generation.
+        """
+
+        completed = self._turn_metrics.finish_turn()
+        self.create_task(record_turn_metric(self._assistant_id, completed))
+
+    def _flush_and_post_if_anything_was_marked(self) -> None:
+        """
+        EndFrame/CancelFrame means the connection is closing - possibly
+        mid-reply, the single most realistic way a turn ends abnormally (the
+        caller just hangs up). _reset_turn() is never reached in that case,
+        so without this, that turn's entire timing record would be silently
+        lost rather than written with whatever legs it reached. Skips the
+        post entirely if nothing was ever marked - a session that never
+        started a turn has nothing worth recording.
+        """
+
+        completed = self._turn_metrics.finish_turn()
+
+        if completed.has_any_leg():
+            self.create_task(record_turn_metric(self._assistant_id, completed))
 
     async def _play_sentences(self) -> None:
         while True:
@@ -638,7 +705,21 @@ class TTSProcessor(FrameProcessor):
             try:
                 await self._current_playback
             except asyncio.CancelledError:
-                pass
+                # A real bug found while testing item 20f's mid-reply
+                # disconnect flush: barge-in cancels only _current_playback
+                # (this player task itself keeps running, correctly falling
+                # through to _maybe_reset_after_reply() below), but
+                # EndFrame/CancelFrame cancels this *player task itself* -
+                # and since cancelling a task that is currently awaiting a
+                # child also cancels that child, both land here as the same
+                # CancelledError. Task.cancelling() distinguishes them: it
+                # is only nonzero when this task's own cancellation (not
+                # just the child's) was requested. Re-raising in that case
+                # actually stops this loop, instead of silently swallowing
+                # it and spuriously calling _maybe_reset_after_reply() one
+                # extra time on a connection that is already closing.
+                if asyncio.current_task().cancelling():
+                    raise
             finally:
                 self._current_playback = None
 
@@ -660,6 +741,16 @@ class TTSProcessor(FrameProcessor):
             async for chunk in self._tts_provider.synthesize(
                 sentence, voice_id=self._voice_id, speed=self._speech_rate
             ):
+                # Only the *first* sentence's first chunk of the turn - this
+                # answers "time to first audio," not "time to every
+                # sentence." Guarded on _active_generation (captured once,
+                # at turn_ended) so a stale, already-superseded turn's late
+                # audio can never mark the wrong row.
+                if self._audio_marked_generation != self._active_generation:
+                    self._audio_marked_generation = self._active_generation
+                    self._turn_metrics.mark_tts_first_byte(self._active_generation)
+                    self._turn_metrics.mark_audio_out(self._active_generation)
+
                 await self.push_frame(
                     OutputAudioRawFrame(
                         audio=chunk, sample_rate=AUDIO_SAMPLE_RATE_HZ, num_channels=1
@@ -680,6 +771,7 @@ def build_voice_session_pipeline_worker(
     tts_provider: TextToSpeechProvider,
     *,
     assistant_id: uuid.UUID,
+    call_id: uuid.UUID,
     language: str = "en",
     keywords: Sequence[str] = (),
     sensitivity: float = 0.5,
@@ -701,6 +793,10 @@ def build_voice_session_pipeline_worker(
     vad_analyzer is exposed for tests to inject a scripted fake - the real
     SileroVADAnalyzer loads an ML model and should never run in the test
     suite (see app/turn_detection.py).
+
+    call_id (item 20f) is generated once per session by the caller (see
+    app/main.py) - a session-scoped placeholder identity for TurnMetric
+    rows, since Call (build-plan item 26) doesn't exist yet.
     """
 
     transport = FastAPIWebsocketTransport(
@@ -720,7 +816,8 @@ def build_voice_session_pipeline_worker(
         vad_analyzer=vad_analyzer,
     )
 
-    turn_detection_processor = TurnDetectionProcessor(turn_detector)
+    turn_metrics = TurnMetricsRecorder(call_id=call_id)
+    turn_detection_processor = TurnDetectionProcessor(turn_detector, turn_metrics)
 
     pipeline = Pipeline(
         [
@@ -730,6 +827,7 @@ def build_voice_session_pipeline_worker(
             LLMTurnProcessor(
                 llm_provider,
                 turn_detector,
+                turn_metrics,
                 assistant_id=assistant_id,
                 system_prompt=system_prompt,
                 creativity=creativity,
@@ -738,6 +836,8 @@ def build_voice_session_pipeline_worker(
                 tts_provider,
                 turn_detector,
                 turn_detection_processor,
+                turn_metrics,
+                assistant_id=assistant_id,
                 voice_id=voice_id,
                 speech_rate=speech_rate,
             ),

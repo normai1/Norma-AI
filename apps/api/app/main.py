@@ -8,6 +8,7 @@ from app.api.internal.llm_config import router as internal_llm_config_router
 from app.api.internal.retrieval import router as internal_retrieval_router
 from app.api.internal.tts_config import router as internal_tts_config_router
 from app.api.internal.turn_detection import router as internal_turn_detection_router
+from app.api.internal.turn_metrics import router as internal_turn_metrics_router
 from app.api.v1.assistant_versions import router as assistant_versions_router
 from app.api.v1.assistants import router as assistants_router
 from app.api.v1.auth import router as auth_router
@@ -128,6 +129,7 @@ app.include_router(internal_turn_detection_router)
 app.include_router(internal_llm_config_router)
 app.include_router(internal_retrieval_router)
 app.include_router(internal_tts_config_router)
+app.include_router(internal_turn_metrics_router)
 
 
 @app.get("/")
