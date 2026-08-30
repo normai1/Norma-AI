@@ -504,8 +504,16 @@ Serverless-friendly                  NOT serverless-deployable
 ### Media plane
 
 - Python voice agent workers.
-- **LiveKit Agents** as the primary candidate for the real-time orchestration framework, with **Pipecat** as the evaluated alternative. One is selected during item 17 and the decision is recorded here.
-- Whichever is chosen, the pipeline stages sit behind Norma's own interfaces so the framework itself is replaceable.
+- **Pipecat**, selected during item 20a. LiveKit Agents was the other evaluated candidate; Pipecat
+  won because it needs no separate self-hosted SFU/room-server tier for a phone-only product
+  (Norma's callers arrive via Twilio, not WebRTC browser clients), it treats Twilio as a
+  first-class transport rather than bridging calls into a room abstraction, and it is less
+  tightly coupled to its own vendor's ecosystem - all more consistent with "long-lived Python
+  worker, not serverless" and with keeping providers swappable. See item 20a's archived spec
+  (`blueprint/history/features/20a-framework-selection-and-media-transport.md`) for the full
+  comparison.
+- The pipeline stages sit behind Norma's own interfaces so the framework itself stays
+  replaceable.
 
 ### Speech
 

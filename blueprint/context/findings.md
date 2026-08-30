@@ -58,7 +58,7 @@ also left alone; it builds fixtures directly, not through the API. Re-reviewed
 affected test files are unchanged since the fix, confirmed zero duplicate
 `_signed_in` definitions outside `conftest.py`. Closed.
 
-### F-28 [P3] open - `apps/voice`'s new health endpoint has no test, unlike every other health endpoint in the repo
+### F-28 [P3] fixed - `apps/voice`'s new health endpoint has no test, unlike every other health endpoint in the repo
 
 **File:** apps/voice/app/main.py:11
 **Found:** 2026-08-27 by /audit (scope: current; lens: tests)
@@ -73,7 +73,12 @@ it's a real drift from an established repo-wide pattern.
 likely item 20), set up `pytest` + `httpx` for it the same way `apps/api` did
 and add a smoke test for `/health` at the same time. Not worth standing up a
 whole test suite for one static endpoint in isolation before then.
-**Resolution:**
+**Resolution:** Fixed in feature 20a, Step 2 - `apps/voice` gets its own `pytest.ini`
+(discovered a real bug in doing so: without one, a test run from `apps/voice` walked up
+to the root `pytest.ini` and picked up its `apps/api`-specific `pythonpath`, importing
+the wrong `app.main` entirely), `pytest`/`httpx` added to its `requirements.txt`, and
+`tests/test_health.py` smoke-tests the existing endpoint. `ruff check apps/voice` and
+the new test both pass. Not yet re-reviewed by `/audit`.
 
 ### F-29 [P2] closed - Workspace `settings` update has zero test coverage
 

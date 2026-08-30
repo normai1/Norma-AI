@@ -67,7 +67,7 @@
 ### Real-time voice engine
 
 - [ ] 20. **Real-time voice session engine** - the core product. Sub-items are independent build slices but the item is only complete when a full spoken conversation works end to end
-  - [ ] 20a. **Framework selection and media transport** - evaluate LiveKit Agents against Pipecat, record the decision, and establish bidirectional streaming audio behind Norma's own interfaces
+  - [x] 20a. **Framework selection and media transport** - evaluate LiveKit Agents against Pipecat, record the decision, and establish bidirectional streaming audio behind Norma's own interfaces
   - [ ] 20b. **Streaming STT integration** - partial and final transcripts with glossary biasing
   - [ ] 20c. **Turn detection** - VAD plus semantic end-of-turn classification with operator-configurable sensitivity
   - [ ] 20d. **LLM turn loop** - realtime model streaming, assistant configuration and retrieved context assembly, conversation state

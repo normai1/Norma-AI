@@ -160,10 +160,20 @@ name, which does not resolve from the host.
 
 - Logs: `docker compose logs -f voice`
 - Health: `curl http://localhost:8080/health`
+- One-time setup: `cd apps/voice && python -m venv .venv && .venv/Scripts/pip install -r requirements.txt` (macOS/Linux: `.venv/bin/pip`)
+- Test: `cd apps/voice && .venv/Scripts/python -m pytest` (macOS/Linux: `.venv/bin/python`)
+- Lint: `ruff check apps/voice` (via the venv's `ruff`, or any Python 3.12 environment with `ruff` installed)
+- Rebuild after a dependency change: `docker compose build voice && docker compose up -d voice`
 
-No standalone local dev command yet - it only runs via `docker compose up`. This
-is a minimal skeleton (build-plan item 5); the real session-handling logic is
-item 20.
+`apps/voice` is a separate Python environment from `apps/api` - its own
+`requirements.txt`, its own container, its own `pytest.ini` (rootdir-local, so a
+test run from `apps/voice` does not pick up the root `pytest.ini`'s
+`apps/api`-specific `pythonpath`). Unlike `apps/api`, install its dependencies
+into the **local `.venv` above, never the shared host Python** - one of its
+dependencies (`pipecat-ai`, item 20a) pulls in a large, version-sensitive tree
+that has been observed to downgrade unrelated global tooling when installed
+system-wide. `apps/api`'s own lighter dependencies remain a host-Python install
+per its own section above; that convention does not extend to `apps/voice`.
 
 ### Background jobs (`apps/worker`)
 

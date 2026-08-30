@@ -593,7 +593,7 @@ Serverless-friendly                  NOT serverless-deployable
 | Database | **PostgreSQL 16** + **pgvector** | Primary store and vector store; no separate vector DB |
 | Cache / state | **Redis 7** | Sessions, cache, rate limiting, job queues |
 | Media plane | Python voice agent workers | Real-time call sessions - long-lived, not serverless |
-| Realtime framework | **LiveKit Agents** (primary) vs **Pipecat** (alternative) | Selected in item 20a; pipeline stages sit behind Norma's own interfaces regardless |
+| Realtime framework | **Pipecat** - selected in item 20a over LiveKit Agents (no separate self-hosted SFU tier needed for a Twilio-first, phone-only product; native Twilio transport; less vendor lock-in) | Pipeline stages sit behind Norma's own interfaces regardless |
 | Background jobs | Redis-backed queue (ARQ or Celery) | Document parsing, crawling, embedding, post-call summarization, webhook delivery, campaign dialling, recording deletion |
 | Backend testing | **pytest**, **httpx** | Unit, DB integration, authorization/tenant-isolation regression tests |
 | Frontend testing | **Vitest** + React Testing Library; **Playwright Test** for E2E | Playwright is the required E2E runner; Jest is not introduced |
@@ -952,13 +952,7 @@ gaps as they are built; this is expected sequencing, not a bug.
 
 > Resolve these in `project-plan.md` / `build-plan.md`, then re-run `/overview`.
 
-1. **Stale item-number reference for the realtime-framework decision.** `project-plan.md` §5 Media
-   plane says the LiveKit Agents vs. Pipecat decision is "selected during item 17 and the decision
-   is recorded here." Under the current numbering, item 17 is "Document processing pipeline" (a
-   Knowledge item) - the actual framework-selection work is item **20a** ("Framework selection and
-   media transport"). Fix the reference in `project-plan.md` so nobody looks for the recorded
-   decision in the wrong place.
-2. **Zero data retention mode may need to be in the MVP, not post-MVP.** `project-plan.md` §6's
+1. **Zero data retention mode may need to be in the MVP, not post-MVP.** `project-plan.md` §6's
    plan table lists "No-retention mode" as included on the **Scale** plan - one of the three
    MVP-launch tiers - and §4's sensitive-data policy already describes the capability as part of
    the data model. `build-plan.md` defers "Zero data retention mode" entirely to post-MVP item
