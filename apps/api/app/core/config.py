@@ -122,6 +122,27 @@ class Settings(BaseSettings):
     elevenlabs_api_key: str = ""
 
     # ------------------------------------------------------------------
+    # Embeddings
+    # ------------------------------------------------------------------
+
+    # "mock" for the same reason stt_provider/tts_provider default to it - a
+    # fresh checkout and the test suite must never reach a paid provider
+    # without deliberately configuring one.
+    embedding_provider: str = "mock"
+
+    # Empty by default; the "openai" provider branch refuses to construct
+    # without a real key rather than failing mid-call.
+    openai_api_key: str = ""
+
+    embedding_model: str = "text-embedding-3-small"
+
+    # Must match the actual dimension the configured model/provider
+    # produces, and the chunks table's vector(1536) column width - never
+    # "fixed" by truncating or padding a mismatched vector (CLAUDE.md
+    # section 6.4).
+    embedding_dimension: int = 1536
+
+    # ------------------------------------------------------------------
     # Storage
     # ------------------------------------------------------------------
 

@@ -2,10 +2,11 @@ import uuid
 
 from fastapi import APIRouter, HTTPException, Response, status
 
-from app.api.deps import DbSession
+from app.api.deps import DbSession, EmbeddingProviderDep
 from app.api.org_deps import CanManageKnowledge
 from app.api.workspace_deps import CurrentWorkspace
 from app.core.exceptions import FaqEntryNotFound, WorkspaceNotFound
+from app.providers.embedding import EmbeddingProviderError
 from app.schemas.faq_entry import FaqEntryCreate, FaqEntryResponse, FaqEntryUpdate
 from app.services import faq_entry as faq_entry_service
 
@@ -19,6 +20,11 @@ _FAQ_ENTRY_NOT_FOUND = HTTPException(
 _WORKSPACE_NOT_FOUND = HTTPException(
     status_code=status.HTTP_404_NOT_FOUND,
     detail="Workspace not found",
+)
+
+_EMBEDDING_UNAVAILABLE = HTTPException(
+    status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+    detail="Could not process this entry right now - try again shortly",
 )
 
 _PREFIX = (
@@ -38,6 +44,7 @@ async def create_faq_entry(
     payload: FaqEntryCreate,
     membership: CanManageKnowledge,
     db: DbSession,
+    embedding_provider: EmbeddingProviderDep,
 ) -> FaqEntryResponse:
     """
     Add a FAQ entry to a manual-FAQ knowledge source. Owners and admins only.
@@ -46,6 +53,7 @@ async def create_faq_entry(
     try:
         faq_entry = await faq_entry_service.create_faq_entry(
             db,
+            embedding_provider,
             organization_id=membership.organization_id,
             workspace_id=workspace_id,
             knowledge_source_id=knowledge_source_id,
@@ -56,6 +64,8 @@ async def create_faq_entry(
         raise _WORKSPACE_NOT_FOUND from exc
     except FaqEntryNotFound as exc:
         raise _FAQ_ENTRY_NOT_FOUND from exc
+    except EmbeddingProviderError as exc:
+        raise _EMBEDDING_UNAVAILABLE from exc
 
     await db.commit()
 
@@ -97,6 +107,7 @@ async def update_faq_entry(
     payload: FaqEntryUpdate,
     membership: CanManageKnowledge,
     db: DbSession,
+    embedding_provider: EmbeddingProviderDep,
 ) -> FaqEntryResponse:
     """
     Apply a partial update to a FAQ entry. Owners and admins only.
@@ -107,6 +118,7 @@ async def update_faq_entry(
     try:
         faq_entry = await faq_entry_service.update_faq_entry(
             db,
+            embedding_provider,
             organization_id=membership.organization_id,
             workspace_id=workspace_id,
             knowledge_source_id=knowledge_source_id,
@@ -117,6 +129,8 @@ async def update_faq_entry(
         raise _WORKSPACE_NOT_FOUND from exc
     except FaqEntryNotFound as exc:
         raise _FAQ_ENTRY_NOT_FOUND from exc
+    except EmbeddingProviderError as exc:
+        raise _EMBEDDING_UNAVAILABLE from exc
 
     await db.commit()
 

@@ -12,13 +12,15 @@ from app.core.exceptions import (
 from app.models.crawled_page import CrawledPage
 from app.models.document import Document
 from app.models.knowledge_source import KnowledgeSource
+from app.providers.embedding import EmbeddingProvider, EmbeddingProviderError
 from app.providers.storage import StorageObjectNotFound, StorageProvider
 from app.providers.web_crawler import PageFetcher, PageFetchError
 from app.repositories import chunk as chunk_repo
 from app.repositories import crawled_page as crawled_page_repo
 from app.repositories import knowledge_source as knowledge_source_repo
 from app.repositories import workspace as workspace_repo
-from app.services.chunker import chunk_text
+from app.repositories.chunk import ChunkWrite
+from app.services.chunker import ChunkSpan, chunk_text
 from app.services.document_parser import DocumentParseError, parse_document
 from app.services.web_crawler import crawl_website
 
@@ -125,16 +127,17 @@ async def create_manual_faq_knowledge_source(
 async def _parse_and_chunk_document(
     db: AsyncSession,
     storage: StorageProvider,
+    embedding_provider: EmbeddingProvider,
     knowledge_source: KnowledgeSource,
     document: Document,
 ) -> None:
     """
-    (Re)parse a file-type source's stored document and (re)chunk it. A
-    failure leaves any chunks from an earlier successful run untouched -
-    replace_for_source is only called after parsing and chunking both
-    succeed. Runs synchronously in the caller's request, the same
-    deliberate, temporary tradeoff item 15's crawl already established;
-    there is no background job queue yet.
+    (Re)parse a file-type source's stored document, (re)chunk it, and embed
+    every chunk. A failure at any stage leaves any chunks from an earlier
+    successful run untouched - replace_for_source is only called after
+    parsing, chunking, AND embedding all succeed. Runs synchronously in the
+    caller's request, the same deliberate, temporary tradeoff item 15's
+    crawl already established; there is no background job queue yet.
     """
 
     extension = _extension_of(document.filename)
@@ -157,14 +160,31 @@ async def _parse_and_chunk_document(
         return
 
     spans = chunk_text(text)
+
+    try:
+        vectors = await embedding_provider.embed([span.text for span in spans])
+    except EmbeddingProviderError as exc:
+        message = str(exc)
+        knowledge_source.status = FAILED_STATUS
+        knowledge_source.error_message = message
+        document.processing_status = FAILED_STATUS
+        document.processing_error = message
+        await db.flush()
+
+        return
+
     await chunk_repo.replace_for_source(
         db,
         organization_id=knowledge_source.organization_id,
         workspace_id=knowledge_source.workspace_id,
         knowledge_source_id=knowledge_source.id,
-        texts=[
-            (span.text, {"char_start": span.char_start, "char_end": span.char_end})
-            for span in spans
+        chunks=[
+            ChunkWrite(
+                text=span.text,
+                metadata={"char_start": span.char_start, "char_end": span.char_end},
+                embedding=vector,
+            )
+            for span, vector in zip(spans, vectors, strict=True)
         ],
     )
 
@@ -178,13 +198,15 @@ async def _parse_and_chunk_document(
 async def process_knowledge_source(
     db: AsyncSession,
     storage: StorageProvider,
+    embedding_provider: EmbeddingProvider,
     *,
     organization_id: uuid.UUID,
     workspace_id: uuid.UUID,
     knowledge_source_id: uuid.UUID,
 ) -> tuple[KnowledgeSource, Document]:
     """
-    Retry parsing+chunking a file-type source's already-stored document.
+    Retry parsing+chunking+embedding a file-type source's already-stored
+    document.
     """
 
     knowledge_source = await resolve_knowledge_source(
@@ -204,7 +226,9 @@ async def process_knowledge_source(
     if document is None:
         raise InvalidKnowledgeSourceType
 
-    await _parse_and_chunk_document(db, storage, knowledge_source, document)
+    await _parse_and_chunk_document(
+        db, storage, embedding_provider, knowledge_source, document
+    )
 
     return knowledge_source, document
 
@@ -212,6 +236,7 @@ async def process_knowledge_source(
 async def upload_knowledge_source(
     db: AsyncSession,
     storage: StorageProvider,
+    embedding_provider: EmbeddingProvider,
     *,
     organization_id: uuid.UUID,
     workspace_id: uuid.UUID,
@@ -262,7 +287,9 @@ async def upload_knowledge_source(
         await storage.delete(key)
         raise
 
-    await _parse_and_chunk_document(db, storage, knowledge_source, document)
+    await _parse_and_chunk_document(
+        db, storage, embedding_provider, knowledge_source, document
+    )
 
     return knowledge_source, document
 
@@ -358,6 +385,7 @@ async def get_knowledge_source(
 async def _crawl_and_reconcile(
     db: AsyncSession,
     fetcher: PageFetcher,
+    embedding_provider: EmbeddingProvider,
     knowledge_source: KnowledgeSource,
     url: str,
 ) -> list[CrawledPage]:
@@ -365,7 +393,11 @@ async def _crawl_and_reconcile(
     Run the crawl and write its results. A root-fetch failure marks the
     whole source 'failed' with the error recorded; otherwise every crawled
     page is upserted (new pages inserted, changed pages updated, unchanged
-    pages left alone) and the source is marked 'completed'.
+    pages left alone), then every page is chunked and embedded, and only if
+    that succeeds too is the source marked 'completed'. An embedding
+    failure after a successful crawl still marks the source 'failed' - the
+    crawled pages stay on record (they are real), but the chunk set is left
+    untouched rather than replaced with an incomplete one.
     """
 
     try:
@@ -387,26 +419,41 @@ async def _crawl_and_reconcile(
             fetched_at=result.fetched_at,
         )
 
-    texts: list[tuple[str, dict]] = []
+    spans_by_url: list[tuple[str, ChunkSpan]] = []
     for result in sorted(crawl_results, key=lambda r: r.url):
         for span in chunk_text(result.extracted_text):
-            texts.append(
-                (
-                    span.text,
-                    {
-                        "url": result.url,
-                        "char_start": span.char_start,
-                        "char_end": span.char_end,
-                    },
-                )
-            )
+            spans_by_url.append((result.url, span))
+
+    try:
+        vectors = await embedding_provider.embed(
+            [span.text for _url, span in spans_by_url]
+        )
+    except EmbeddingProviderError as exc:
+        knowledge_source.status = FAILED_STATUS
+        knowledge_source.error_message = str(exc)
+        await db.flush()
+
+        return await crawled_page_repo.list_for_source(db, knowledge_source.id)
 
     await chunk_repo.replace_for_source(
         db,
         organization_id=knowledge_source.organization_id,
         workspace_id=knowledge_source.workspace_id,
         knowledge_source_id=knowledge_source.id,
-        texts=texts,
+        chunks=[
+            ChunkWrite(
+                text=span.text,
+                metadata={
+                    "url": page_url,
+                    "char_start": span.char_start,
+                    "char_end": span.char_end,
+                },
+                embedding=vector,
+            )
+            for (page_url, span), vector in zip(
+                spans_by_url, vectors, strict=True
+            )
+        ],
     )
 
     knowledge_source.status = COMPLETED_STATUS
@@ -419,6 +466,7 @@ async def _crawl_and_reconcile(
 async def create_website_knowledge_source(
     db: AsyncSession,
     fetcher: PageFetcher,
+    embedding_provider: EmbeddingProvider,
     *,
     organization_id: uuid.UUID,
     workspace_id: uuid.UUID,
@@ -445,7 +493,9 @@ async def create_website_knowledge_source(
     db.add(knowledge_source)
     await db.flush()
 
-    crawled_pages = await _crawl_and_reconcile(db, fetcher, knowledge_source, url)
+    crawled_pages = await _crawl_and_reconcile(
+        db, fetcher, embedding_provider, knowledge_source, url
+    )
 
     return knowledge_source, crawled_pages
 
@@ -453,6 +503,7 @@ async def create_website_knowledge_source(
 async def recrawl_knowledge_source(
     db: AsyncSession,
     fetcher: PageFetcher,
+    embedding_provider: EmbeddingProvider,
     *,
     organization_id: uuid.UUID,
     workspace_id: uuid.UUID,
@@ -477,7 +528,7 @@ async def recrawl_knowledge_source(
         raise KnowledgeSourceNotFound
 
     crawled_pages = await _crawl_and_reconcile(
-        db, fetcher, knowledge_source, knowledge_source.source_url
+        db, fetcher, embedding_provider, knowledge_source, knowledge_source.source_url
     )
 
     return knowledge_source, crawled_pages

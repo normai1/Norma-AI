@@ -16,8 +16,12 @@ from app.core.database import get_db
 from app.core.redis import get_redis
 from app.db.base import Base
 from app.main import app
-from app.providers.factory import get_storage_provider_dependency
+from app.providers.factory import (
+    get_embedding_provider_dependency,
+    get_storage_provider_dependency,
+)
 from app.providers.httpx_web_crawler import get_page_fetcher_dependency
+from app.providers.mock_embedding import MockEmbeddingProvider
 from app.providers.mock_storage import MockStorage
 from app.providers.mock_web_crawler import MockPageFetcher
 
@@ -168,11 +172,23 @@ async def page_fetcher() -> MockPageFetcher:
 
 
 @pytest_asyncio.fixture(loop_scope="session")
+async def embedding_provider() -> MockEmbeddingProvider:
+    """
+    The deterministic embedding double a test can inspect directly
+    (embedded_texts) or force to fail (failure), injected in place of a
+    real OpenAI call.
+    """
+
+    return MockEmbeddingProvider()
+
+
+@pytest_asyncio.fixture(loop_scope="session")
 async def client(
     db: AsyncSession,
     redis_client: Redis,
     storage: MockStorage,
     page_fetcher: MockPageFetcher,
+    embedding_provider: MockEmbeddingProvider,
 ) -> AsyncGenerator[AsyncClient, None]:
     """
     HTTP client whose requests run inside the per-test transaction.
@@ -193,12 +209,18 @@ async def client(
     def override_get_page_fetcher() -> MockPageFetcher:
         return page_fetcher
 
+    def override_get_embedding_provider() -> MockEmbeddingProvider:
+        return embedding_provider
+
     app.dependency_overrides[get_db] = override_get_db
     app.dependency_overrides[get_redis] = override_get_redis
     app.dependency_overrides[get_storage_provider_dependency] = (
         override_get_storage_provider
     )
     app.dependency_overrides[get_page_fetcher_dependency] = override_get_page_fetcher
+    app.dependency_overrides[get_embedding_provider_dependency] = (
+        override_get_embedding_provider
+    )
 
     async with AsyncClient(
         transport=ASGITransport(app=app),

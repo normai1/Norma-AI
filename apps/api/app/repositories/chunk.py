@@ -1,9 +1,17 @@
 import uuid
+from dataclasses import dataclass
 
 from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.chunk import Chunk
+
+
+@dataclass(frozen=True)
+class ChunkWrite:
+    text: str
+    metadata: dict
+    embedding: list[float] | None = None
 
 
 async def list_for_source(
@@ -28,36 +36,37 @@ async def replace_for_source(
     organization_id: uuid.UUID,
     workspace_id: uuid.UUID,
     knowledge_source_id: uuid.UUID,
-    texts: list[tuple[str, dict]],
+    chunks: list[ChunkWrite],
 ) -> list[Chunk]:
     """
     Replace a source's entire chunk set: delete whatever is there, insert
-    the given (text, metadata) pairs with sequential ordering. Used for
-    file and website sources, which re-derive their whole chunk set from
-    scratch on every (re)process - never called before a parse/chunk
-    attempt has already succeeded, so a failed reprocess never destroys
-    chunks a prior successful run produced.
+    the given writes with sequential ordering. Used for file and website
+    sources, which re-derive their whole chunk set from scratch on every
+    (re)process - never called before a parse/chunk/embed attempt has
+    already succeeded, so a failed reprocess never destroys chunks a prior
+    successful run produced.
     """
 
     await db.execute(
         delete(Chunk).where(Chunk.knowledge_source_id == knowledge_source_id)
     )
 
-    chunks = [
+    rows = [
         Chunk(
             organization_id=organization_id,
             workspace_id=workspace_id,
             knowledge_source_id=knowledge_source_id,
-            text=text,
+            text=write.text,
             ordering=ordering,
-            chunk_metadata=metadata,
+            chunk_metadata=write.metadata,
+            embedding=write.embedding,
         )
-        for ordering, (text, metadata) in enumerate(texts)
+        for ordering, write in enumerate(chunks)
     ]
-    db.add_all(chunks)
+    db.add_all(rows)
     await db.flush()
 
-    return chunks
+    return rows
 
 
 async def get_for_faq_entry(
@@ -87,6 +96,7 @@ async def upsert_for_faq_entry(
     knowledge_source_id: uuid.UUID,
     faq_entry_id: uuid.UUID,
     text: str,
+    embedding: list[float] | None = None,
 ) -> Chunk:
     """
     Insert or update the one chunk backing a manual-FAQ entry. Ordering is
@@ -100,6 +110,7 @@ async def upsert_for_faq_entry(
 
     if existing is not None:
         existing.text = text
+        existing.embedding = embedding
         await db.flush()
 
         return existing
@@ -111,6 +122,7 @@ async def upsert_for_faq_entry(
         text=text,
         ordering=0,
         chunk_metadata={"faq_entry_id": str(faq_entry_id)},
+        embedding=embedding,
     )
     db.add(chunk)
     await db.flush()

@@ -3,7 +3,12 @@ from typing import Annotated
 
 from fastapi import APIRouter, File, HTTPException, UploadFile, status
 
-from app.api.deps import DbSession, PageFetcherDep, StorageProviderDep
+from app.api.deps import (
+    DbSession,
+    EmbeddingProviderDep,
+    PageFetcherDep,
+    StorageProviderDep,
+)
 from app.api.org_deps import CanManageKnowledge
 from app.api.workspace_deps import CurrentWorkspace
 from app.core.exceptions import (
@@ -92,6 +97,7 @@ async def upload_knowledge_source(
     membership: CanManageKnowledge,
     db: DbSession,
     storage: StorageProviderDep,
+    embedding_provider: EmbeddingProviderDep,
     file: Annotated[UploadFile, File()],
 ) -> KnowledgeSourceResponse:
     """
@@ -107,6 +113,7 @@ async def upload_knowledge_source(
         ) = await knowledge_source_service.upload_knowledge_source(
             db,
             storage,
+            embedding_provider,
             organization_id=membership.organization_id,
             workspace_id=workspace_id,
             owner_user_id=membership.user_id,
@@ -136,6 +143,7 @@ async def create_website_knowledge_source(
     membership: CanManageKnowledge,
     db: DbSession,
     fetcher: PageFetcherDep,
+    embedding_provider: EmbeddingProviderDep,
 ) -> KnowledgeSourceResponse:
     """
     Crawl a domain as a new knowledge source. Owners and admins only. Runs
@@ -150,6 +158,7 @@ async def create_website_knowledge_source(
         ) = await knowledge_source_service.create_website_knowledge_source(
             db,
             fetcher,
+            embedding_provider,
             organization_id=membership.organization_id,
             workspace_id=workspace_id,
             owner_user_id=membership.user_id,
@@ -173,6 +182,7 @@ async def recrawl_knowledge_source(
     membership: CanManageKnowledge,
     db: DbSession,
     fetcher: PageFetcherDep,
+    embedding_provider: EmbeddingProviderDep,
 ) -> KnowledgeSourceResponse:
     """
     Re-crawl an existing website-type knowledge source. Owners and admins
@@ -187,6 +197,7 @@ async def recrawl_knowledge_source(
         ) = await knowledge_source_service.recrawl_knowledge_source(
             db,
             fetcher,
+            embedding_provider,
             organization_id=membership.organization_id,
             workspace_id=workspace_id,
             knowledge_source_id=knowledge_source_id,
@@ -244,10 +255,11 @@ async def process_knowledge_source(
     membership: CanManageKnowledge,
     db: DbSession,
     storage: StorageProviderDep,
+    embedding_provider: EmbeddingProviderDep,
 ) -> KnowledgeSourceResponse:
     """
-    Retry parsing+chunking a file-type source's already-stored document.
-    Owners and admins only.
+    Retry parsing+chunking+embedding a file-type source's already-stored
+    document. Owners and admins only.
     """
 
     try:
@@ -257,6 +269,7 @@ async def process_knowledge_source(
         ) = await knowledge_source_service.process_knowledge_source(
             db,
             storage,
+            embedding_provider,
             organization_id=membership.organization_id,
             workspace_id=workspace_id,
             knowledge_source_id=knowledge_source_id,

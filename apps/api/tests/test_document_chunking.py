@@ -1,7 +1,25 @@
-from httpx import AsyncClient
+import uuid
 
+from httpx import AsyncClient
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from app.models.chunk import Chunk
+from app.providers.embedding import EmbeddingProviderUnavailable
+from app.providers.mock_embedding import MockEmbeddingProvider
 from app.providers.mock_web_crawler import MockPageFetcher
 from tests.conftest import _org_with_owner, _signed_in
+
+
+async def _chunks_for_source(db: AsyncSession, knowledge_source_id: str) -> list[Chunk]:
+    result = await db.scalars(
+        select(Chunk)
+        .where(Chunk.knowledge_source_id == uuid.UUID(knowledge_source_id))
+        .order_by(Chunk.ordering)
+    )
+
+    return list(result.all())
+
 
 ORGS = "/api/v1/organizations"
 
@@ -466,3 +484,230 @@ async def test_deleting_a_faq_entry_removes_its_chunk(client: AsyncClient) -> No
     )
 
     assert chunks.json() == []
+
+
+async def test_uploading_a_valid_txt_embeds_every_chunk(
+    client: AsyncClient, db: AsyncSession
+) -> None:
+    organization_id, workspace_id, owner_headers = await _setup_org_workspace(
+        client, "embed-upload-ok"
+    )
+
+    upload = await _upload(
+        client, organization_id, workspace_id, owner_headers, content=b"hello there"
+    )
+    assert upload.json()["status"] == "completed"
+
+    chunks = await _chunks_for_source(db, upload.json()["id"])
+
+    assert len(chunks) == 1
+    assert chunks[0].embedding is not None
+    assert len(chunks[0].embedding) == 1536
+
+
+async def test_embedding_failure_marks_the_file_source_failed_and_keeps_no_chunks(
+    client: AsyncClient,
+    db: AsyncSession,
+    embedding_provider: MockEmbeddingProvider,
+) -> None:
+    organization_id, workspace_id, owner_headers = await _setup_org_workspace(
+        client, "embed-upload-fail"
+    )
+    embedding_provider.failure = EmbeddingProviderUnavailable("simulated outage")
+
+    upload = await _upload(client, organization_id, workspace_id, owner_headers)
+
+    assert upload.json()["status"] == "failed"
+    assert upload.json()["error_message"]
+    assert upload.json()["document"]["processing_status"] == "failed"
+
+    chunks = await _chunks_for_source(db, upload.json()["id"])
+    assert chunks == []
+
+
+async def test_reprocessing_after_an_embedding_failure_keeps_prior_chunks(
+    client: AsyncClient,
+    db: AsyncSession,
+    embedding_provider: MockEmbeddingProvider,
+) -> None:
+    organization_id, workspace_id, owner_headers = await _setup_org_workspace(
+        client, "embed-reprocess-recovers"
+    )
+
+    upload = await _upload(client, organization_id, workspace_id, owner_headers)
+    source_id = upload.json()["id"]
+    original_chunks = await _chunks_for_source(db, source_id)
+    assert len(original_chunks) == 1
+
+    embedding_provider.failure = EmbeddingProviderUnavailable("simulated outage")
+
+    process = await client.post(
+        f"{_knowledge_sources_url(organization_id, workspace_id)}/{source_id}/process",
+        headers=owner_headers,
+    )
+
+    assert process.json()["status"] == "failed"
+    chunks_after_failure = await _chunks_for_source(db, source_id)
+    assert len(chunks_after_failure) == 1
+    assert chunks_after_failure[0].id == original_chunks[0].id
+
+
+async def test_creating_a_website_source_embeds_every_chunk(
+    client: AsyncClient, db: AsyncSession, page_fetcher: MockPageFetcher
+) -> None:
+    organization_id, workspace_id, owner_headers = await _setup_org_workspace(
+        client, "embed-website-create"
+    )
+    page_fetcher.pages["http://example.com/"] = _page("Hello from the homepage.")
+
+    created = await _create_website(
+        client, organization_id, workspace_id, owner_headers
+    )
+
+    chunks = await _chunks_for_source(db, created.json()["id"])
+    assert len(chunks) >= 1
+    assert all(
+        chunk.embedding is not None and len(chunk.embedding) == 1536 for chunk in chunks
+    )
+
+
+async def test_embedding_failure_marks_the_website_source_failed(
+    client: AsyncClient,
+    embedding_provider: MockEmbeddingProvider,
+    page_fetcher: MockPageFetcher,
+) -> None:
+    organization_id, workspace_id, owner_headers = await _setup_org_workspace(
+        client, "embed-website-fail"
+    )
+    page_fetcher.pages["http://example.com/"] = _page("Hello from the homepage.")
+    embedding_provider.failure = EmbeddingProviderUnavailable("simulated outage")
+
+    created = await _create_website(
+        client, organization_id, workspace_id, owner_headers
+    )
+
+    assert created.json()["status"] == "failed"
+    assert created.json()["error_message"]
+
+
+async def test_creating_a_faq_entry_embeds_its_chunk(
+    client: AsyncClient, db: AsyncSession
+) -> None:
+    organization_id, workspace_id, owner_headers = await _setup_org_workspace(
+        client, "embed-faq-create"
+    )
+    source = await _create_manual_faq_source(
+        client, organization_id, workspace_id, owner_headers
+    )
+    source_id = source.json()["id"]
+
+    await client.post(
+        _faq_entries_url(organization_id, workspace_id, source_id),
+        json={"question": "What are your hours?", "answer": "9am to 5pm."},
+        headers=owner_headers,
+    )
+
+    chunks = await _chunks_for_source(db, source_id)
+    assert len(chunks) == 1
+    assert chunks[0].embedding is not None
+    assert len(chunks[0].embedding) == 1536
+
+
+async def test_creating_a_faq_entry_fails_with_503_when_embedding_fails(
+    client: AsyncClient,
+    db: AsyncSession,
+    embedding_provider: MockEmbeddingProvider,
+) -> None:
+    organization_id, workspace_id, owner_headers = await _setup_org_workspace(
+        client, "embed-faq-create-fail"
+    )
+    source = await _create_manual_faq_source(
+        client, organization_id, workspace_id, owner_headers
+    )
+    source_id = source.json()["id"]
+    embedding_provider.failure = EmbeddingProviderUnavailable("simulated outage")
+
+    response = await client.post(
+        _faq_entries_url(organization_id, workspace_id, source_id),
+        json={"question": "What are your hours?", "answer": "9am to 5pm."},
+        headers=owner_headers,
+    )
+
+    assert response.status_code == 503
+
+    entries = await client.get(
+        _faq_entries_url(organization_id, workspace_id, source_id),
+        headers=owner_headers,
+    )
+    assert entries.json() == []
+    assert await _chunks_for_source(db, source_id) == []
+
+
+async def test_updating_a_faq_entry_updates_its_chunks_embedding(
+    client: AsyncClient, db: AsyncSession
+) -> None:
+    organization_id, workspace_id, owner_headers = await _setup_org_workspace(
+        client, "embed-faq-update"
+    )
+    source = await _create_manual_faq_source(
+        client, organization_id, workspace_id, owner_headers
+    )
+    source_id = source.json()["id"]
+    created = await client.post(
+        _faq_entries_url(organization_id, workspace_id, source_id),
+        json={"question": "What are your hours?", "answer": "9am to 5pm."},
+        headers=owner_headers,
+    )
+    entry_id = created.json()["id"]
+    original_chunk = (await _chunks_for_source(db, source_id))[0]
+    # Snapshot values, not the ORM object itself - db is the same session
+    # the route below runs on, so the identity map would otherwise mutate
+    # this same object in place and make the "before" comparison a no-op.
+    original_chunk_id = original_chunk.id
+    original_embedding = list(original_chunk.embedding)
+
+    await client.patch(
+        f"{_faq_entries_url(organization_id, workspace_id, source_id)}/{entry_id}",
+        json={"answer": "8am to 6pm."},
+        headers=owner_headers,
+    )
+
+    chunks = await _chunks_for_source(db, source_id)
+    assert len(chunks) == 1
+    assert chunks[0].id == original_chunk_id
+    assert chunks[0].embedding != original_embedding
+
+
+async def test_updating_a_faq_entry_leaves_it_untouched_when_embedding_fails(
+    client: AsyncClient,
+    embedding_provider: MockEmbeddingProvider,
+) -> None:
+    organization_id, workspace_id, owner_headers = await _setup_org_workspace(
+        client, "embed-faq-update-fail"
+    )
+    source = await _create_manual_faq_source(
+        client, organization_id, workspace_id, owner_headers
+    )
+    source_id = source.json()["id"]
+    created = await client.post(
+        _faq_entries_url(organization_id, workspace_id, source_id),
+        json={"question": "What are your hours?", "answer": "9am to 5pm."},
+        headers=owner_headers,
+    )
+    entry_id = created.json()["id"]
+
+    embedding_provider.failure = EmbeddingProviderUnavailable("simulated outage")
+
+    response = await client.patch(
+        f"{_faq_entries_url(organization_id, workspace_id, source_id)}/{entry_id}",
+        json={"answer": "8am to 6pm."},
+        headers=owner_headers,
+    )
+
+    assert response.status_code == 503
+
+    entries = await client.get(
+        _faq_entries_url(organization_id, workspace_id, source_id),
+        headers=owner_headers,
+    )
+    assert entries.json()[0]["answer"] == "9am to 5pm."

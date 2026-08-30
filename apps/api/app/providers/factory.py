@@ -8,15 +8,19 @@ either - that would be a circular import.
 
 from app.core.config import settings
 from app.providers.elevenlabs_speech import ElevenLabsSTT, ElevenLabsTTS
+from app.providers.embedding import EmbeddingProvider
 from app.providers.local_storage import LocalStorage
+from app.providers.mock_embedding import MockEmbeddingProvider
 from app.providers.mock_speech import MockSTT, MockTTS
 from app.providers.mock_storage import MockStorage
+from app.providers.openai_embedding import OpenAIEmbeddingProvider
 from app.providers.s3_storage import S3Storage
 from app.providers.speech import SpeechToTextProvider, TextToSpeechProvider
 from app.providers.storage import StorageProvider
 
 _VALID_PROVIDER_NAMES = "'mock', 'elevenlabs'"
 _VALID_STORAGE_PROVIDER_NAMES = "'mock', 'local', 's3'"
+_VALID_EMBEDDING_PROVIDER_NAMES = "'mock', 'openai'"
 
 
 class UnknownSpeechProviderError(ValueError):
@@ -45,6 +49,20 @@ class MissingS3ConfigError(ValueError):
     """
     The "s3" storage provider was selected but AWS credentials/bucket are
     unset. Fails at construction, not on the first upload attempt - the same
+    reasoning MissingElevenLabsApiKeyError already established.
+    """
+
+
+class UnknownEmbeddingProviderError(ValueError):
+    """
+    A configured EMBEDDING_PROVIDER name has no known implementation.
+    """
+
+
+class MissingOpenAiApiKeyError(ValueError):
+    """
+    The "openai" embedding provider was selected but OPENAI_API_KEY is
+    unset. Fails at construction, not on the first embed() call - the same
     reasoning MissingElevenLabsApiKeyError already established.
     """
 
@@ -155,3 +173,42 @@ def get_storage_provider_dependency() -> StorageProvider:
     """
 
     return get_storage_provider()
+
+
+def get_embedding_provider(name: str | None = None) -> EmbeddingProvider:
+    """
+    Resolve an embedding provider by name, defaulting to EMBEDDING_PROVIDER.
+    """
+
+    provider_name = name if name is not None else settings.embedding_provider
+
+    if provider_name == "mock":
+        return MockEmbeddingProvider(dimension=settings.embedding_dimension)
+
+    if provider_name == "openai":
+        if not settings.openai_api_key:
+            raise MissingOpenAiApiKeyError(
+                "OPENAI_API_KEY is not set. The 'openai' embedding "
+                "provider requires it.",
+            )
+
+        return OpenAIEmbeddingProvider(
+            api_key=settings.openai_api_key,
+            model=settings.embedding_model,
+            dimension=settings.embedding_dimension,
+        )
+
+    raise UnknownEmbeddingProviderError(
+        f"Unknown EMBEDDING_PROVIDER {provider_name!r}. Valid options: "
+        f"{_VALID_EMBEDDING_PROVIDER_NAMES}.",
+    )
+
+
+def get_embedding_provider_dependency() -> EmbeddingProvider:
+    """
+    FastAPI dependency entry point for the configured embedding provider.
+    Takes no arguments for the same reason get_tts_provider_dependency does
+    not.
+    """
+
+    return get_embedding_provider()

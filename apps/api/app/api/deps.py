@@ -11,7 +11,9 @@ from app.core.database import get_db
 from app.core.redis import get_redis
 from app.core.tokens import decode_access_token
 from app.models.user import User
+from app.providers.embedding import EmbeddingProvider
 from app.providers.factory import (
+    get_embedding_provider_dependency,
     get_storage_provider_dependency,
     get_tts_provider_dependency,
 )
@@ -37,6 +39,11 @@ StorageProviderDep = Annotated[
 PageFetcherDep = Annotated[
     PageFetcher,
     Depends(get_page_fetcher_dependency),
+]
+
+EmbeddingProviderDep = Annotated[
+    EmbeddingProvider,
+    Depends(get_embedding_provider_dependency),
 ]
 
 _CREDENTIALS_ERROR = HTTPException(

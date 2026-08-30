@@ -4,6 +4,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.exceptions import FaqEntryNotFound, KnowledgeSourceNotFound
 from app.models.faq_entry import FaqEntry
+from app.providers.embedding import EmbeddingProvider
 from app.repositories import chunk as chunk_repo
 from app.repositories import faq_entry as faq_entry_repo
 from app.repositories import knowledge_source as knowledge_source_repo
@@ -76,6 +77,7 @@ async def resolve_faq_entry(
 
 async def create_faq_entry(
     db: AsyncSession,
+    embedding_provider: EmbeddingProvider,
     *,
     organization_id: uuid.UUID,
     workspace_id: uuid.UUID,
@@ -85,6 +87,10 @@ async def create_faq_entry(
 ) -> FaqEntry:
     """
     Add a FAQ entry to a manual-FAQ knowledge source the caller may manage.
+    Embedding happens before the entry is created - a provider failure
+    propagates to the caller (mapped to a 503 at the route) rather than
+    creating an entry with no embedding; nothing is committed either way
+    since the caller's db.commit() runs after this returns.
     """
 
     source_id = await _resolve_manual_faq_source_id(
@@ -93,6 +99,8 @@ async def create_faq_entry(
         workspace_id=workspace_id,
         knowledge_source_id=knowledge_source_id,
     )
+
+    [vector] = await embedding_provider.embed([_faq_chunk_text(question, answer)])
 
     faq_entry = await faq_entry_repo.create(
         db,
@@ -108,6 +116,7 @@ async def create_faq_entry(
         knowledge_source_id=source_id,
         faq_entry_id=faq_entry.id,
         text=_faq_chunk_text(faq_entry.question, faq_entry.answer),
+        embedding=vector,
     )
 
     return faq_entry
@@ -137,6 +146,7 @@ async def list_faq_entries(
 
 async def update_faq_entry(
     db: AsyncSession,
+    embedding_provider: EmbeddingProvider,
     *,
     organization_id: uuid.UUID,
     workspace_id: uuid.UUID,
@@ -146,7 +156,10 @@ async def update_faq_entry(
     answer: str = _UNSET,
 ) -> FaqEntry:
     """
-    Apply a partial update to a FAQ entry the caller may manage.
+    Apply a partial update to a FAQ entry the caller may manage. Embedding
+    happens before the update is applied - a provider failure propagates
+    to the caller (mapped to a 503 at the route) leaving the original
+    entry and chunk untouched.
     """
 
     faq_entry = await resolve_faq_entry(
@@ -155,6 +168,12 @@ async def update_faq_entry(
         workspace_id=workspace_id,
         knowledge_source_id=knowledge_source_id,
         faq_entry_id=faq_entry_id,
+    )
+
+    new_question = faq_entry.question if question is _UNSET else question
+    new_answer = faq_entry.answer if answer is _UNSET else answer
+    [vector] = await embedding_provider.embed(
+        [_faq_chunk_text(new_question, new_answer)]
     )
 
     faq_entry = await faq_entry_repo.update(
@@ -168,6 +187,7 @@ async def update_faq_entry(
         knowledge_source_id=faq_entry.knowledge_source_id,
         faq_entry_id=faq_entry.id,
         text=_faq_chunk_text(faq_entry.question, faq_entry.answer),
+        embedding=vector,
     )
 
     return faq_entry
