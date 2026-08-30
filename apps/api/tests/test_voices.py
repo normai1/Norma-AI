@@ -1,9 +1,9 @@
 from httpx import AsyncClient
+from norma_shared.mock_speech import MockTTS
+from norma_shared.speech import SpeechProviderTimeout, SpeechProviderUnavailable, Voice
 
 from app.main import app
 from app.providers.factory import get_tts_provider_dependency
-from app.providers.mock_speech import MockTTS
-from app.providers.speech import SpeechProviderTimeout, SpeechProviderUnavailable, Voice
 from tests.conftest import _signed_in
 
 _VOICES = "/api/v1/voices"

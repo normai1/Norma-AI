@@ -61,6 +61,8 @@ services:
     build:
       context: ./apps/api
       dockerfile: Dockerfile
+      additional_contexts:
+        shared: ./packages/shared
 
     container_name: norma-api
     restart: unless-stopped
@@ -95,6 +97,8 @@ services:
     build:
       context: ./apps/voice
       dockerfile: Dockerfile
+      additional_contexts:
+        shared: ./packages/shared
 
     container_name: norma-voice
     restart: unless-stopped

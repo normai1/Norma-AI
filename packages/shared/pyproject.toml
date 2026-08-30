@@ -1,0 +1,16 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "norma-shared"
+version = "0.1.0"
+description = "Provider abstractions shared between apps/api and apps/voice - moved here, not duplicated, when a real cross-service need first arises (item 20b)."
+requires-python = ">=3.12"
+dependencies = [
+    "httpx",
+    "websockets",
+]
+
+[tool.setuptools]
+packages = ["norma_shared"]

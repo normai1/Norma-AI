@@ -6,16 +6,17 @@ adapters once feature 9b lands), and speech.py must not import back from
 either - that would be a circular import.
 """
 
+from norma_shared.elevenlabs_speech import ElevenLabsSTT, ElevenLabsTTS
+from norma_shared.mock_speech import MockSTT, MockTTS
+from norma_shared.speech import SpeechToTextProvider, TextToSpeechProvider
+
 from app.core.config import settings
-from app.providers.elevenlabs_speech import ElevenLabsSTT, ElevenLabsTTS
 from app.providers.embedding import EmbeddingProvider
 from app.providers.local_storage import LocalStorage
 from app.providers.mock_embedding import MockEmbeddingProvider
-from app.providers.mock_speech import MockSTT, MockTTS
 from app.providers.mock_storage import MockStorage
 from app.providers.openai_embedding import OpenAIEmbeddingProvider
 from app.providers.s3_storage import S3Storage
-from app.providers.speech import SpeechToTextProvider, TextToSpeechProvider
 from app.providers.storage import StorageProvider
 
 _VALID_PROVIDER_NAMES = "'mock', 'elevenlabs'"

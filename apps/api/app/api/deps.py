@@ -4,6 +4,7 @@ from typing import Annotated
 import jwt
 from fastapi import Depends, HTTPException, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
+from norma_shared.speech import TextToSpeechProvider
 from redis.asyncio import Redis
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -18,7 +19,6 @@ from app.providers.factory import (
     get_tts_provider_dependency,
 )
 from app.providers.httpx_web_crawler import get_page_fetcher_dependency
-from app.providers.speech import TextToSpeechProvider
 from app.providers.storage import StorageProvider
 from app.providers.web_crawler import PageFetcher
 from app.services import auth as auth_service

@@ -31,9 +31,46 @@ def test_short_key_is_rejected_outside_development() -> None:
 
 
 def test_strong_key_is_accepted_in_production() -> None:
-    settings = _settings(environment="production", secret_key=STRONG_KEY)
+    settings = _settings(
+        environment="production",
+        secret_key=STRONG_KEY,
+        internal_api_secret=STRONG_KEY,
+    )
 
     assert settings.secret_key == STRONG_KEY
+
+
+@pytest.mark.parametrize("environment", ["production", "staging"])
+def test_placeholder_internal_secret_is_rejected_outside_development(
+    environment: str,
+) -> None:
+    with pytest.raises(ValueError, match="INTERNAL_API_SECRET.*placeholder"):
+        _settings(
+            environment=environment,
+            secret_key=STRONG_KEY,
+            internal_api_secret="replace-this-in-production",
+        )
+
+
+def test_short_internal_secret_is_rejected_outside_development() -> None:
+    with pytest.raises(
+        ValueError, match=f"INTERNAL_API_SECRET.*{MIN_SECRET_KEY_LENGTH}"
+    ):
+        _settings(
+            environment="production",
+            secret_key=STRONG_KEY,
+            internal_api_secret="x" * 31,
+        )
+
+
+def test_strong_internal_secret_is_accepted_in_production() -> None:
+    settings = _settings(
+        environment="production",
+        secret_key=STRONG_KEY,
+        internal_api_secret=STRONG_KEY,
+    )
+
+    assert settings.internal_api_secret == STRONG_KEY
 
 
 def test_unset_environment_is_not_treated_as_development(
@@ -50,6 +87,8 @@ def test_unset_environment_still_accepts_a_strong_key(
 ) -> None:
     monkeypatch.delenv("ENVIRONMENT", raising=False)
 
-    settings = Settings(_env_file=None, secret_key=STRONG_KEY)
+    settings = Settings(
+        _env_file=None, secret_key=STRONG_KEY, internal_api_secret=STRONG_KEY
+    )
 
     assert settings.secret_key == STRONG_KEY

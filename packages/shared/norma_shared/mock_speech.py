@@ -7,25 +7,41 @@ depend on a paid or live external API.
 import asyncio
 from collections.abc import AsyncIterator, Sequence
 
-from app.providers.speech import SpeechProviderError, TranscriptEvent, Voice
+from norma_shared.speech import SpeechProviderError, TranscriptEvent, Voice
 
 
 class MockSTT:
     """
     Yields a caller-scripted sequence of transcript events, optionally with a
     per-event delay and/or a failure raised after the script is exhausted.
+
+    By default (chunks_before_event=None) drains the whole audio iterator
+    before yielding anything - fine for tests that only care about the
+    final script content, but unable to express a partial transcript
+    arriving mid-stream (finding F-40). Passing chunks_before_event - one
+    integer per script entry, "consume this many audio chunks before
+    yielding this event" - switches to interleaved mode instead, so a
+    test can prove ordering between audio arrival and transcript events.
     """
 
     def __init__(
         self,
         *,
         script: Sequence[TranscriptEvent] = (),
+        chunks_before_event: Sequence[int] | None = None,
         event_delay_seconds: float = 0.0,
         failure: SpeechProviderError | None = None,
     ) -> None:
         self._script = list(script)
+        self._chunks_before_event = (
+            list(chunks_before_event) if chunks_before_event is not None else None
+        )
         self._event_delay_seconds = event_delay_seconds
         self._failure = failure
+        # Records the keywords argument of the most recent stream() call, for
+        # a test to assert glossary terms actually reached the provider -
+        # mirrors MockEmbeddingProvider.embedded_texts's exact precedent.
+        self.received_keywords: list[str] | None = None
 
     async def stream(
         self,
@@ -34,17 +50,47 @@ class MockSTT:
         language: str,
         keywords: Sequence[str] = (),
     ) -> AsyncIterator[TranscriptEvent]:
-        # The scripted transcript does not depend on the audio content, but
-        # draining the iterator matches a real provider's contract: the
-        # caller is streaming audio in, not just waiting on output.
-        async for _ in audio:
-            pass
+        self.received_keywords = list(keywords)
 
-        for event in self._script:
+        if self._chunks_before_event is None:
+            # The scripted transcript does not depend on the audio content,
+            # but draining the iterator matches a real provider's contract:
+            # the caller is streaming audio in, not just waiting on output.
+            async for _ in audio:
+                pass
+
+            for event in self._script:
+                if self._event_delay_seconds:
+                    await asyncio.sleep(self._event_delay_seconds)
+
+                yield event
+
+            if self._failure is not None:
+                raise self._failure
+
+            return
+
+        audio_iterator = audio.__aiter__()
+        consumed = 0
+
+        for event, chunks_needed in zip(
+            self._script, self._chunks_before_event, strict=True
+        ):
+            while consumed < chunks_needed:
+                try:
+                    await audio_iterator.__anext__()
+                except StopAsyncIteration:
+                    break
+
+                consumed += 1
+
             if self._event_delay_seconds:
                 await asyncio.sleep(self._event_delay_seconds)
 
             yield event
+
+        async for _ in audio_iterator:
+            pass
 
         if self._failure is not None:
             raise self._failure

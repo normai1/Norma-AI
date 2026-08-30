@@ -94,6 +94,12 @@ class Settings(BaseSettings):
 
     jwt_algorithm: str = "HS256"
 
+    # Authenticates apps/voice's service-to-service calls (item 20b) - there
+    # is no user session inside a live call for a JWT to belong to. Separate
+    # from secret_key: a leaked internal secret should not also compromise
+    # user session tokens, and vice versa.
+    internal_api_secret: str = "change-me-in-production"
+
     # ------------------------------------------------------------------
     # CORS
     # ------------------------------------------------------------------
@@ -198,6 +204,18 @@ class Settings(BaseSettings):
         if len(self.secret_key) < MIN_SECRET_KEY_LENGTH:
             raise ValueError(
                 f"SECRET_KEY must be at least {MIN_SECRET_KEY_LENGTH} "
+                f"characters {where}."
+            )
+
+        if self.internal_api_secret in PLACEHOLDER_SECRET_KEYS:
+            raise ValueError(
+                "INTERNAL_API_SECRET is still a placeholder. Set a unique "
+                f"random value {where}."
+            )
+
+        if len(self.internal_api_secret) < MIN_SECRET_KEY_LENGTH:
+            raise ValueError(
+                f"INTERNAL_API_SECRET must be at least {MIN_SECRET_KEY_LENGTH} "
                 f"characters {where}."
             )
 

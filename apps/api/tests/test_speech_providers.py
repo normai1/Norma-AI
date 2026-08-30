@@ -1,17 +1,17 @@
 from collections.abc import AsyncIterator
 
 import pytest
+from norma_shared.elevenlabs_speech import ElevenLabsSTT, ElevenLabsTTS
+from norma_shared.mock_speech import MockSTT, MockTTS
+from norma_shared.speech import SpeechProviderError, TranscriptEvent, Voice
 
 from app.core.config import settings
-from app.providers.elevenlabs_speech import ElevenLabsSTT, ElevenLabsTTS
 from app.providers.factory import (
     MissingElevenLabsApiKeyError,
     UnknownSpeechProviderError,
     get_stt_provider,
     get_tts_provider,
 )
-from app.providers.mock_speech import MockSTT, MockTTS
-from app.providers.speech import SpeechProviderError, TranscriptEvent, Voice
 
 
 async def _audio_chunks(chunks: list[bytes]) -> AsyncIterator[bytes]:
@@ -91,6 +91,72 @@ async def test_stt_applies_a_per_event_delay() -> None:
     ]
 
     assert len(events) == 1
+
+
+async def test_stt_default_mode_still_drains_before_yielding() -> None:
+    """
+    chunks_before_event=None (the default) preserves the exact original
+    drain-then-yield behavior - a regression guard for every test above
+    that relies on it.
+    """
+
+    seen_before_first_event: list[bytes] = []
+    script = [TranscriptEvent(text="done", is_final=True)]
+    stt = MockSTT(script=script)
+
+    async def audio() -> AsyncIterator[bytes]:
+        for chunk in [b"one", b"two"]:
+            seen_before_first_event.append(chunk)
+            yield chunk
+
+    events = [event async for event in stt.stream(audio(), language="en")]
+
+    assert events == script
+    assert seen_before_first_event == [b"one", b"two"]
+
+
+async def test_stt_interleaves_a_partial_transcript_mid_stream() -> None:
+    """
+    Resolves finding F-40: a partial transcript can now be observed while
+    more audio is still being sent, not only after the whole stream drains.
+    """
+
+    partial = TranscriptEvent(text="hello", is_final=False)
+    final = TranscriptEvent(text="hello there", is_final=True)
+    stt = MockSTT(script=[partial, final], chunks_before_event=[1, 3])
+
+    chunks_sent_when_seen: dict[str, int] = {}
+    sent = 0
+
+    async def audio() -> AsyncIterator[bytes]:
+        nonlocal sent
+        for chunk in [b"a", b"b", b"c"]:
+            sent += 1
+            yield chunk
+
+    events = []
+    async for event in stt.stream(audio(), language="en"):
+        events.append(event)
+        chunks_sent_when_seen[event.text] = sent
+
+    assert events == [partial, final]
+    # The partial arrived after only 1 chunk had been consumed, not all 3 -
+    # proof it did not wait for the stream to drain first.
+    assert chunks_sent_when_seen["hello"] == 1
+    assert chunks_sent_when_seen["hello there"] == 3
+
+
+async def test_stt_records_the_keywords_it_was_called_with() -> None:
+    stt = MockSTT(script=[TranscriptEvent(text="hi", is_final=True)])
+
+    assert stt.received_keywords is None
+
+    async for _ in stt.stream(
+        _audio_chunks([b"audio"]), language="en", keywords=["tinnitus", "otoscopy"]
+    ):
+        pass
+
+    assert stt.received_keywords == ["tinnitus", "otoscopy"]
 
 
 async def _synthesize_all(tts: MockTTS, text: str) -> bytes:

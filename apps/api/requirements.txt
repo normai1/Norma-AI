@@ -1,6 +1,11 @@
 fastapi
 uvicorn[standard]
 
+# Local, editable install of the package shared with apps/voice (item 20b) -
+# copied into the image at /packages/shared via docker-compose.yml's
+# additional build context for this service.
+-e /packages/shared
+
 sqlalchemy[asyncio]
 asyncpg
 alembic

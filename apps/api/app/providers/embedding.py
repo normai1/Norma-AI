@@ -1,7 +1,7 @@
 """
 Embedding provider contract: the interface every text-embedding
 implementation in this codebase is built against - mock (tests), OpenAI
-(production). Mirrors app/providers/speech.py's shape.
+(production). Mirrors norma_shared/speech.py's shape.
 """
 
 from typing import Protocol

@@ -297,9 +297,9 @@ in the validator (normalize `{}` to `None`), or explicitly document that `{}` an
 never meant to matter.
 **Resolution:**
 
-### F-40 [unverified] open - `MockSTT.stream()` fully drains the audio iterator before yielding any transcript event, so it cannot express a partial transcript arriving while audio is still being sent
+### F-40 [unverified] fixed - `MockSTT.stream()` fully drains the audio iterator before yielding any transcript event, so it cannot express a partial transcript arriving while audio is still being sent
 
-**File:** apps/api/app/providers/mock_speech.py:40-47
+**File:** packages/shared/norma_shared/mock_speech.py (moved from apps/api/app/providers/mock_speech.py:40-47 in item 20b)
 **Found:** 2026-08-28 by /audit (scope: build-plan item 9; lens: quality)
 **Why it matters:** `ElevenLabsSTT.stream` (9b) is deliberately built around genuine
 concurrency - sending audio and receiving transcripts happen at the same time on the wire,
@@ -315,4 +315,12 @@ item 20, matching the pattern of F-37/F-38.
 script event N after consuming audio chunk N) rather than drain-then-yield, or add a second
 scripting parameter that pairs each transcript event with how many audio chunks to consume
 first.
-**Resolution:**
+**Resolution:** Fixed in feature 20b, Step 4 - `MockSTT` gained an opt-in
+`chunks_before_event` parameter (a list parallel to `script`, "consume this many
+audio chunks before yielding this event"); `chunks_before_event=None` (the default)
+preserves the exact original drain-then-yield behavior unchanged, verified by a new
+regression test alongside the interleaving one. While already touching the class,
+also added `received_keywords` (mirroring `MockEmbeddingProvider.embedded_texts`'s
+precedent) since `keywords` was being silently discarded with nothing recording what
+was passed - a real gap 20b's own test coverage needed closed. `pytest`
+(549/549) and `ruff check` both green. Not yet re-reviewed by `/audit`.

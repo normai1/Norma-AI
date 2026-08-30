@@ -19,7 +19,7 @@ import httpx
 import websockets
 import websockets.exceptions
 
-from app.providers.speech import (
+from norma_shared.speech import (
     SpeechProviderError,
     SpeechProviderTimeout,
     SpeechProviderUnavailable,

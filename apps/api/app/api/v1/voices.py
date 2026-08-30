@@ -1,7 +1,7 @@
 from fastapi import APIRouter, HTTPException, status
+from norma_shared.speech import SpeechProviderError, SpeechProviderTimeout
 
 from app.api.deps import CurrentUser, TtsProvider
-from app.providers.speech import SpeechProviderError, SpeechProviderTimeout
 from app.schemas.voice import VoiceResponse
 
 router = APIRouter(prefix="/voices", tags=["voices"])

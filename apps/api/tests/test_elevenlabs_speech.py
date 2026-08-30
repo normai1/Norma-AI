@@ -6,15 +6,14 @@ from collections.abc import AsyncIterator
 import httpx
 import pytest
 import websockets.exceptions
-
-from app.providers.elevenlabs_speech import (
+from norma_shared.elevenlabs_speech import (
     _MAX_VOICE_PAGES,
     ElevenLabsSTT,
     ElevenLabsTTS,
     _map_realtime_message,
     _send_audio_chunks,
 )
-from app.providers.speech import (
+from norma_shared.speech import (
     SpeechProviderError,
     SpeechProviderTimeout,
     SpeechProviderUnavailable,

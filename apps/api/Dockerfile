@@ -10,6 +10,10 @@ RUN apt-get update \
         curl \
     && rm -rf /var/lib/apt/lists/*
 
+# From docker-compose.yml's additional build context "shared" (item 20b) -
+# provider abstractions this service and apps/voice both depend on.
+COPY --from=shared . /packages/shared
+
 COPY requirements.txt .
 
 RUN pip install --no-cache-dir --upgrade pip \

@@ -1,9 +1,15 @@
 fastapi
 uvicorn[standard]
 
+# Local, editable install of the package shared with apps/api (item 20b) -
+# copied into the image at /packages/shared via docker-compose.yml's
+# additional build context for this service.
+-e /packages/shared
+
 pipecat-ai[websocket]
 
 pytest
+pytest-asyncio
 httpx
 
 ruff
