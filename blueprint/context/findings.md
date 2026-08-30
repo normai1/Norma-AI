@@ -25,39 +25,6 @@ possibly-tainted connection is disposed with it rather than pooled. Do not chang
 anything now; there is no failure to chase.
 **Resolution:**
 
-### F-27 [P3] closed - `_signed_in` is duplicated across five test files, byte-identical
-
-**File:** apps/api/tests/test_permission_enforcement.py:20
-**Found:** 2026-08-26 by /audit (scope: current; lens: quality)
-**Why it matters:** The exact same `_signed_in(client, email)` helper is defined
-identically in `test_organizations.py`, `test_organization_authorization.py`,
-`test_organization_members.py`, `test_invitations.py`, and now
-`test_permission_enforcement.py` (diffed all five, byte-identical). Four predate
-this feature - pre-existing drift from feature 2 that its own three audit rounds
-never caught - and this feature added a fifth rather than breaking the pattern.
-Not a defect; every copy works. It is compounding maintainability debt: a change
-to the registration payload shape now needs five identical edits, and each new
-test file makes the eventual extraction slightly more work.
-**Suggested fix:** Move `_signed_in` into `conftest.py` as a shared helper or
-fixture, import it from all five files. While in that territory, the three
-differently-named "create an org and add a member" helpers
-(`_org_with_role`, `_org_with_owner`, `_org_with_second_member`) are a related,
-looser instance of the same pattern - worth a look in the same pass, though their
-differing return shapes mean the fix isn't as mechanical.
-**Resolution:** Fixed in feature 4a, Step 1. `_signed_in` and the two byte-identical
-`_org_with_owner` copies (`test_invitations.py`, `test_organization_members.py`)
-moved into `tests/conftest.py`; all five `_signed_in` sites and both
-`_org_with_owner` sites now import the shared version. `_org_with_role`
-(`test_permission_enforcement.py`) and `_org_with_second_member`
-(`test_organization_authorization.py`) were deliberately left in place - their
-differing return shapes (2-tuple vs. 4-tuple) mean a forced merge risks a subtle
-bug in two already-correct files for a P3 finding's marginal benefit. The
-unrelated DB-level `_org_with_owner` in `test_organization_concurrency.py` was
-also left alone; it builds fixtures directly, not through the API. Re-reviewed
-2026-08-27 (scope: full; lens: quality): `conftest.py` and the five originally
-affected test files are unchanged since the fix, confirmed zero duplicate
-`_signed_in` definitions outside `conftest.py`. Closed.
-
 ### F-28 [P3] fixed - `apps/voice`'s new health endpoint has no test, unlike every other health endpoint in the repo
 
 **File:** apps/voice/app/main.py:11
@@ -80,26 +47,6 @@ the wrong `app.main` entirely), `pytest`/`httpx` added to its `requirements.txt`
 `tests/test_health.py` smoke-tests the existing endpoint. `ruff check apps/voice` and
 the new test both pass. Not yet re-reviewed by `/audit`.
 
-### F-29 [P2] closed - Workspace `settings` update has zero test coverage
-
-**File:** apps/api/tests/test_workspaces.py
-**Found:** 2026-08-27 by /audit (scope: current; lens: tests)
-**Why it matters:** `WorkspaceUpdate.settings` and `workspace_repo.update`'s partial-update
-handling of it are live, mutable code paths, but no test in `test_workspaces.py` ever sends
-`settings` in a PATCH request. The only reference to `settings` in the whole file is the
-create-test's default-`{}` assertion. The sibling resource, organizations, has direct
-coverage of this exact pattern (`test_organization_members.py::test_update_settings_without_touching_name`).
-The underlying code is a structural copy of `organization_repo.update` (already proven correct),
-so this is a coverage gap rather than a suspected bug - hence P2, not P1.
-**Suggested fix:** Add a test that PATCHes `settings` on a workspace and asserts it persists,
-and (mirroring the organization test) a test proving a name-only update leaves `settings`
-untouched, and a settings-only update leaves `name` untouched.
-**Resolution:** Fixed, then re-reviewed 2026-08-27 (scope: apps/api item-6 files; lens: tests).
-`test_update_settings_without_touching_name` and `test_update_name_without_touching_settings`
-in `test_workspaces.py` both pass, correctly assert `settings` persists on a settings-only PATCH
-and stays untouched on a name-only PATCH (and vice versa) - the exact partial-update semantic
-`workspace_repo.update` implements. No new defect introduced. Closed.
-
 ### F-30 [P3] fixed - "Workspace not found" is defined twice, byte-identical in message and status
 
 **File:** apps/api/app/api/workspace_deps.py:15
@@ -117,32 +64,6 @@ modules import. Small, low-risk, not urgent.
 **Resolution:** Fixed. `workspaces.py` now imports `_NOT_FOUND as _WORKSPACE_NOT_FOUND` from
 `workspace_deps.py` instead of redefining it; every existing raise site is unchanged. `pytest`
 (207 passed) and `ruff` stayed green with no behavior change. Not yet re-reviewed by `/audit`.
-
-### F-31 [P2] closed - No test proves a WorkspaceMember grant to one workspace doesn't leak access to a sibling workspace
-
-**File:** apps/api/tests/test_workspaces.py
-**Found:** 2026-08-27 by /audit (scope: apps/api item-6 files; lens: tests)
-**Why it matters:** `require_workspace_access` and `workspace_repo.list_for_user` both scope
-the `WorkspaceMember` check to the exact `workspace_id` in play (`WHERE workspace_id = :id AND
-user_id = :id`), so a member granted access to workspace A should not be able to `GET` or see
-in the list a sibling workspace B in the same organization. The query logic is correct on
-inspection, but nothing tests it: the existing coverage only proves "zero memberships -> empty
-list / 404" and "the one membership that matches -> access granted," never "a membership that
-exists but doesn't match." This is exactly the kind of tenant/resource-boundary case this
-project otherwise tests explicitly (see `test_tenant_isolation.py` for the equivalent at the
-organization level). Not a proven bug - hence P2, not P1.
-**Suggested fix:** Add a test that inserts a `WorkspaceMember` row for workspace A (same
-technique F-29's sibling tests and the existing `test_get_succeeds_for_an_explicit_member`
-already use, since 6a has no member-add endpoint yet) and asserts that member gets 404 on
-`GET` for workspace B, and that workspace B does not appear in their `list` results.
-**Resolution:** Fixed. Added `test_member_access_to_one_workspace_does_not_reach_a_sibling` to
-`test_workspaces.py`, verified it actually catches the regression by temporarily dropping the
-`workspace_id` filter in `workspace_member_repo.get` (the test failed as expected: 200 instead
-of 404), then reverted that change cleanly. Re-reviewed 2026-08-27 (scope: current, feature 6b;
-lens: tests): `workspace_member_repo.get`'s body is unchanged since the fix (confirmed via diff),
-the test still passes in the full suite, and 6b's own new `get_by_id`/`list_for_workspace` follow
-the identical workspace-scoping discipline (verified `remove_member`'s cross-workspace 404 test
-exercises it too). No new defect introduced. Closed.
 
 ### F-32 [P2] fixed - Permission module's extension-point docstring still names the abandoned CRM/RAG entities
 

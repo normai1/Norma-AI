@@ -166,7 +166,10 @@ async def test_reset_for_next_turn_detects_a_second_independent_turn() -> None:
 
     detector.reset_for_next_turn()
     assert detector.turn_ended() is False
-    assert detector.last_final_transcript == ""
+    # last_final_transcript is a stable snapshot of the turn that just
+    # ended, not cleared by reset - it still reads "Hello there." here,
+    # and only changes once a *second* turn completes below.
+    assert detector.last_final_transcript == "Hello there."
 
     clock.value = 1.0
     await detector.feed_audio(b"speech again")
@@ -207,3 +210,94 @@ async def test_reset_for_next_turn_prevents_stale_text_from_ending_the_next_turn
     await detector.feed_audio(b"silence again")
 
     assert detector.turn_ended() is False
+
+
+async def test_is_speaking_reflects_the_latest_vad_state() -> None:
+    vad = _ScriptedVADAnalyzer([VADState.QUIET, VADState.SPEAKING, VADState.QUIET])
+    detector = TurnDetector(sensitivity=0.5, sample_rate=16_000, vad_analyzer=vad)
+
+    assert detector.is_speaking is False
+
+    await detector.feed_audio(b"silence")
+    assert detector.is_speaking is False
+
+    await detector.feed_audio(b"speech")
+    assert detector.is_speaking is True
+
+    await detector.feed_audio(b"silence again")
+    assert detector.is_speaking is False
+
+
+async def test_is_speaking_keeps_updating_while_turn_ended_is_latched() -> None:
+    """
+    Regression guard for item 20e's barge-in: feed_audio used to skip VAD
+    analysis entirely once turn_ended() latched True, which would have
+    made it impossible to ever detect the caller speaking during an
+    in-flight reply.
+    """
+
+    clock = _FakeClock()
+    vad = _ScriptedVADAnalyzer(
+        [VADState.SPEAKING, VADState.QUIET, VADState.QUIET, VADState.SPEAKING]
+    )
+    detector = TurnDetector(sensitivity=0.5, sample_rate=16_000, vad_analyzer=vad, clock=clock)
+
+    await detector.feed_audio(b"speech")
+    clock.value = 0.5
+    await detector.feed_audio(b"silence")
+    detector.feed_transcript("Hello there.", is_final=True)
+    assert detector.turn_ended() is True
+
+    await detector.feed_audio(b"still latched")
+    assert detector.is_speaking is False
+
+    await detector.feed_audio(b"caller interrupts")
+    assert detector.is_speaking is True
+    assert detector.turn_ended() is True
+
+
+async def test_reset_for_next_turn_still_detects_a_short_interruption() -> None:
+    """
+    Regression guard for a real bug found via a hanging end-to-end barge-in
+    test: the interrupting frame's own SPEAKING state was fed to feed_audio
+    while turn_ended() was still True, so the early return meant it never
+    set ever_spoken - and reset_for_next_turn() used to unconditionally
+    clear ever_spoken back to False, discarding that fact entirely. If the
+    caller's interruption is short (one SPEAKING frame, then straight to
+    quiet - a plausible real interjection), turn_ended() could then never
+    fire again, since silence_since could never be set. reset_for_next_turn
+    must seed ever_spoken from is_speaking, not assume False.
+    """
+
+    clock = _FakeClock()
+    vad = _ScriptedVADAnalyzer(
+        [
+            VADState.SPEAKING,
+            VADState.QUIET,
+            VADState.SPEAKING,  # the interruption - one frame, then quiet
+            VADState.QUIET,
+            VADState.QUIET,
+        ]
+    )
+    detector = TurnDetector(sensitivity=0.5, sample_rate=16_000, vad_analyzer=vad, clock=clock)
+
+    await detector.feed_audio(b"speech")
+    clock.value = 0.5
+    await detector.feed_audio(b"silence")
+    detector.feed_transcript("First question.", is_final=True)
+    assert detector.turn_ended() is True
+
+    # The interrupting frame is fed while still latched (turn_ended() is
+    # still True here, exactly like the real pipeline) - only afterward
+    # does the caller (TTSProcessor, in the real pipeline) call reset.
+    await detector.feed_audio(b"short interruption")
+    detector.reset_for_next_turn()
+
+    clock.value = 1.0
+    await detector.feed_audio(b"quiet")
+    clock.value = 1.5
+    await detector.feed_audio(b"still quiet")
+    detector.feed_transcript("Second question.", is_final=True)
+
+    assert detector.turn_ended() is True
+    assert detector.last_final_transcript == "Second question."

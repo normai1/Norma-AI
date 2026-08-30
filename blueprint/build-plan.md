@@ -71,7 +71,7 @@
   - [x] 20b. **Streaming STT integration** - partial and final transcripts with glossary biasing
   - [x] 20c. **Turn detection** - VAD plus semantic end-of-turn classification with operator-configurable sensitivity
   - [x] 20d. **LLM turn loop** - realtime model streaming, assistant configuration and retrieved context assembly, conversation state
-  - [ ] 20e. **Streaming TTS and barge-in** - sentence-chunked playback starting before the LLM finishes, with immediate cancellation on caller speech
+  - [x] 20e. **Streaming TTS and barge-in** - sentence-chunked playback starting before the LLM finishes, with immediate cancellation on caller speech
   - [ ] 20f. **Latency instrumentation** - per-turn TurnMetric rows across every leg, with a p95 budget enforced in CI
   - [ ] 20g. **Session resilience** - provider timeouts, retries, and failover to forwarding or message-taking instead of dead air
 - [ ] 21. **In-browser test call** - operators talk to an assistant from the assistant editor with no phone number required, over WebRTC or WebSocket audio

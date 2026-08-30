@@ -106,14 +106,43 @@ class TurnDetector:
 
         self._ever_spoken = False
         self._silence_since: float | None = None
-        self._last_final_transcript = ""
+        # The transcript actively accumulating toward the *next* completed
+        # turn - fed by feed_transcript, consumed (and cleared) by
+        # _recompute() the moment it decides a turn has ended.
+        self._pending_transcript = ""
+        # A stable snapshot of whichever transcript most recently ended a
+        # turn - what last_final_transcript exposes. Deliberately a
+        # separate field from _pending_transcript: see last_final_transcript
+        # and reset_for_next_turn for why conflating the two caused a real,
+        # hard-to-find bug.
+        self._ended_turn_text = ""
         self._turn_ended = False
+        self._is_speaking = False
 
     async def feed_audio(self, chunk: bytes) -> None:
-        if self._turn_ended:
-            return
+        """
+        Always updates VAD-derived state - is_speaking, ever_spoken,
+        silence_since - regardless of turn_ended()'s latch. Item 20e's
+        barge-in needs this: the eventual reset is delivered asynchronously
+        (a caller_speech_started message reacted to by a downstream
+        processor, not synchronously alongside the audio frame that caused
+        it), so by the time it runs, more audio may already have been fed -
+        e.g. the caller speaks once to interrupt, then goes quiet again,
+        all before TTSProcessor gets around to resetting. If ever_spoken/
+        silence_since only updated while not-yet-latched, that entire
+        exchange would be silently lost - reset_for_next_turn() would find
+        nothing to seed from, and turn_ended() could never fire again for
+        the caller's actual new turn. _recompute()'s own early return on
+        turn_ended() already being True is what prevents this from
+        prematurely re-flipping the turn that already ended - not a guard
+        here - and _recompute() clears ever_spoken/silence_since itself at
+        the exact moment it sets turn_ended True, so anything that happens
+        during the latch starts from a clean slate rather than carrying
+        over the just-finished turn's own stale values.
+        """
 
         state = await self._vad_analyzer.analyze_audio(chunk)
+        self._is_speaking = state == VADState.SPEAKING
 
         if state == VADState.SPEAKING:
             self._ever_spoken = True
@@ -125,7 +154,7 @@ class TurnDetector:
 
     def feed_transcript(self, text: str, *, is_final: bool) -> None:
         if is_final:
-            self._last_final_transcript = text
+            self._pending_transcript = text
 
         self._recompute()
 
@@ -134,31 +163,81 @@ class TurnDetector:
 
     @property
     def last_final_transcript(self) -> str:
-        return self._last_final_transcript
+        """
+        The transcript that ended the most recently completed turn - a
+        stable snapshot, not the currently-accumulating buffer. Backed by a
+        field _recompute() only ever writes once, at the exact moment it
+        sets turn_ended True, and never clears afterward - so a caller
+        (TurnDetectionProcessor) can read it whenever it gets around to
+        building its turn_ended message, regardless of whether a *new*
+        transcript for the *next* turn has already started arriving by
+        then (found via a real, hanging-test-uncovered race: an earlier
+        design backed this by the same field feed_transcript writes to,
+        which reset_for_next_turn then had to clear to avoid reusing stale
+        text for the next turn - but that clearing could run after a
+        legitimately new transcript had already arrived, silently
+        discarding it instead).
+        """
+
+        return self._ended_turn_text
+
+    @property
+    def is_speaking(self) -> bool:
+        """
+        Whether the most recently analyzed audio chunk was confirmed
+        speech - current in real time, unaffected by turn_ended()'s latch
+        or reset_for_next_turn(). Item 20e's barge-in signal is driven off
+        this, not off the turn-ending state.
+        """
+
+        return self._is_speaking
 
     def reset_for_next_turn(self) -> None:
         """
         Rearm the detector to find a second, independent turn-ended cycle
-        after this one. Clears last_final_transcript too, not just the
-        ended/silence/speaking state: leaving stale text in place would let
-        a burst of silence at the start of the next turn - before any new
-        final transcript arrives - wrongly reuse the previous turn's
-        already-complete sentence and end the new turn instantly. The
-        caller must read last_final_transcript before calling this.
+        after this one. Only clears turn_ended - ever_spoken, silence_since,
+        and pending_transcript are all deliberately left alone here.
+        _recompute() already clears all three itself, synchronously, at the
+        exact moment it sets turn_ended True (see there); feed_audio and
+        feed_transcript both keep updating them unconditionally the whole
+        time this stays latched afterward. Whatever they currently hold by
+        the time this method runs already correctly reflects anything that
+        happened during the latch - including a barge-in that spoke once
+        and went quiet again, or even a new final transcript that arrived
+        before this reset got around to running, since this reset is
+        delivered asynchronously (a caller_speech_started message reacted
+        to by a downstream processor), not synchronously alongside
+        whatever caused it. Clearing any of the three here would throw
+        that away.
+
+        Calls _recompute() itself afterward - a real bug, found via a
+        hanging end-to-end test, was this method not doing so. _recompute()
+        otherwise only ever runs as a side effect of a *new* feed_audio or
+        feed_transcript call; if the caller's entire new turn (speak, go
+        quiet, get transcribed) already happened during the latch - and
+        with an async-delivered reset, it can - there may be no further
+        audio or transcript still to arrive that would otherwise trigger
+        the check, leaving an already-satisfied turn undetected forever.
         """
 
-        self._ever_spoken = False
-        self._silence_since = None
-        self._last_final_transcript = ""
         self._turn_ended = False
+        self._recompute()
 
     def _recompute(self) -> None:
         if self._turn_ended or self._silence_since is None:
             return
 
-        if is_semantically_complete(self._last_final_transcript):
+        if is_semantically_complete(self._pending_transcript):
+            self._ended_turn_text = self._pending_transcript
+            self._pending_transcript = ""
             self._turn_ended = True
+            self._ever_spoken = False
+            self._silence_since = None
             return
 
         if self._clock() - self._silence_since >= FALLBACK_TIMEOUT_SECONDS:
+            self._ended_turn_text = self._pending_transcript
+            self._pending_transcript = ""
             self._turn_ended = True
+            self._ever_spoken = False
+            self._silence_since = None

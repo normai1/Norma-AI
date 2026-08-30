@@ -135,19 +135,30 @@ class MockTTS:
         if total_bytes == 0:
             return
 
-        if self._time_to_first_byte_seconds:
-            await asyncio.sleep(self._time_to_first_byte_seconds)
-
-        remaining = total_bytes
-
         try:
+            if self._time_to_first_byte_seconds:
+                await asyncio.sleep(self._time_to_first_byte_seconds)
+
+            remaining = total_bytes
+
             while remaining > 0:
                 chunk_bytes = min(self._chunk_size_bytes, remaining)
 
                 yield b"\x00" * chunk_bytes
 
                 remaining -= chunk_bytes
-        except GeneratorExit:
+        except (GeneratorExit, asyncio.CancelledError):
+            # Real barge-in cancellation (item 20e) cancels the asyncio
+            # Task consuming this generator, not this generator's own
+            # aclose() - verified empirically that a cancelled consuming
+            # task delivers CancelledError here, never GeneratorExit.
+            # Catching only GeneratorExit (as this method originally did)
+            # would silently never set .cancelled for that real
+            # cancellation path, breaking the barge-in tests this
+            # property's docstring says it exists for. The
+            # time_to_first_byte_seconds sleep is inside this try too -
+            # cancellation before any chunk is ever yielded (exactly
+            # barge-in's most important case) must still be caught.
             self.cancelled = True
 
             raise

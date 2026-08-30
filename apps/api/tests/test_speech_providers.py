@@ -1,3 +1,4 @@
+import asyncio
 from collections.abc import AsyncIterator
 
 import pytest
@@ -218,6 +219,35 @@ async def test_tts_marks_cancelled_when_abandoned_mid_stream() -> None:
     generator = tts.synthesize("a fairly long sentence to synthesize", voice_id="v1")
     await generator.__anext__()
     await generator.aclose()
+
+    assert tts.cancelled is True
+
+
+async def test_tts_marks_cancelled_when_the_consuming_task_is_cancelled() -> None:
+    """
+    Item 20e's real barge-in mechanism: cancelling the asyncio Task that is
+    consuming synthesize() via `async for`, not calling .aclose() directly
+    and sequentially the way the test above does. Verified empirically that
+    this delivers CancelledError to the generator, never GeneratorExit -
+    MockTTS must catch both to keep .cancelled meaningful for that path.
+    """
+
+    tts = MockTTS(
+        bytes_per_character=100, chunk_size_bytes=50, time_to_first_byte_seconds=0.2
+    )
+
+    async def consume() -> None:
+        async for _ in tts.synthesize(
+            "a fairly long sentence to synthesize", voice_id="v1"
+        ):
+            pass
+
+    task = asyncio.create_task(consume())
+    await asyncio.sleep(0.05)
+    task.cancel()
+
+    with pytest.raises(asyncio.CancelledError):
+        await task
 
     assert tts.cancelled is True
 

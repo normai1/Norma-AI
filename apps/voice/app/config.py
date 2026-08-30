@@ -11,6 +11,9 @@ import os
 # reasoning for the same setting.
 STT_PROVIDER = os.environ.get("STT_PROVIDER", "mock")
 
+# Same reasoning as STT_PROVIDER's default.
+TTS_PROVIDER = os.environ.get("TTS_PROVIDER", "mock")
+
 ELEVENLABS_API_KEY = os.environ.get("ELEVENLABS_API_KEY", "")
 
 # Reaches apps/api by its Compose service name - only resolves inside the
