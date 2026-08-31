@@ -34,6 +34,24 @@ import {
   type GlossaryEntry,
 } from "@/lib/glossary";
 import {
+  canRecrawlKnowledgeSource,
+  canRetryKnowledgeSource,
+  createFaqEntry,
+  createManualFaqKnowledgeSource,
+  createWebsiteKnowledgeSource,
+  deleteFaqEntry,
+  knowledgeSourceDisplayName,
+  knowledgeSourceTypeLabel,
+  listFaqEntries,
+  listKnowledgeSources,
+  processKnowledgeSource,
+  recrawlKnowledgeSource,
+  updateFaqEntry,
+  uploadKnowledgeSourceFile,
+  type FaqEntry,
+  type KnowledgeSource,
+} from "@/lib/knowledge-sources";
+import {
   listPromptTemplates,
   listPromptTemplateVersions,
   type PromptTemplate,
@@ -65,6 +83,23 @@ function AssistantStatusBadge({ status }: { status: string }) {
   return (
     <span
       className={`rounded-full border px-2.5 py-0.5 text-xs font-medium ${STATUS_TONE[status] ?? "border-slate-700 text-slate-400"}`}
+    >
+      {status}
+    </span>
+  );
+}
+
+const KNOWLEDGE_SOURCE_STATUS_TONE: Record<string, string> = {
+  pending: "border-slate-700 text-slate-400",
+  processing: "border-amber-800 text-amber-300",
+  completed: "border-green-800 text-green-300",
+  failed: "border-red-900 text-red-300",
+};
+
+function KnowledgeSourceStatusBadge({ status }: { status: string }) {
+  return (
+    <span
+      className={`rounded-full border px-2.5 py-0.5 text-xs font-medium ${KNOWLEDGE_SOURCE_STATUS_TONE[status] ?? "border-slate-700 text-slate-400"}`}
     >
       {status}
     </span>
@@ -109,6 +144,55 @@ export default function AssistantEditorPage() {
   const [maxSilenceTimeoutSeconds, setMaxSilenceTimeoutSeconds] = useState("");
   const [recordCalls, setRecordCalls] = useState(false);
   const [autoDeleteOnDeclinedConsent, setAutoDeleteOnDeclinedConsent] = useState(false);
+
+  const [knowledgeSources, setKnowledgeSources] = useState<
+    KnowledgeSource[] | null
+  >(null);
+  const [knowledgeSourcesError, setKnowledgeSourcesError] = useState<string | null>(
+    null,
+  );
+
+  const [uploadFile, setUploadFile] = useState<File | null>(null);
+  const [uploading, setUploading] = useState(false);
+  const [uploadError, setUploadError] = useState<string | null>(null);
+
+  const [retryingId, setRetryingId] = useState<string | null>(null);
+  const [retryError, setRetryError] = useState<string | null>(null);
+
+  const [websiteUrl, setWebsiteUrl] = useState("");
+  const [addingWebsite, setAddingWebsite] = useState(false);
+  const [addWebsiteError, setAddWebsiteError] = useState<string | null>(null);
+
+  const [recrawlingId, setRecrawlingId] = useState<string | null>(null);
+  const [recrawlError, setRecrawlError] = useState<string | null>(null);
+
+  const [faqSourceName, setFaqSourceName] = useState("");
+  const [addingFaqSource, setAddingFaqSource] = useState(false);
+  const [addFaqSourceError, setAddFaqSourceError] = useState<string | null>(null);
+
+  const [expandedFaqSourceId, setExpandedFaqSourceId] = useState<string | null>(null);
+  const [faqEntries, setFaqEntries] = useState<FaqEntry[] | null>(null);
+  const [faqEntriesError, setFaqEntriesError] = useState<string | null>(null);
+
+  const [newFaqQuestion, setNewFaqQuestion] = useState("");
+  const [newFaqAnswer, setNewFaqAnswer] = useState("");
+  const [creatingFaqEntry, setCreatingFaqEntry] = useState(false);
+  const [createFaqEntryError, setCreateFaqEntryError] = useState<string | null>(
+    null,
+  );
+
+  const [editingFaqEntryId, setEditingFaqEntryId] = useState<string | null>(null);
+  const [editFaqQuestion, setEditFaqQuestion] = useState("");
+  const [editFaqAnswer, setEditFaqAnswer] = useState("");
+  const [savingFaqEntryEdit, setSavingFaqEntryEdit] = useState(false);
+  const [editFaqEntryError, setEditFaqEntryError] = useState<string | null>(null);
+
+  const [deletingFaqEntryId, setDeletingFaqEntryId] = useState<string | null>(
+    null,
+  );
+  const [deleteFaqEntryError, setDeleteFaqEntryError] = useState<string | null>(
+    null,
+  );
 
   const [promptTemplates, setPromptTemplates] = useState<PromptTemplate[] | null>(
     null,
@@ -413,6 +497,323 @@ export default function AssistantEditorPage() {
       cancelled = true;
     };
   }, [activeWorkspace, selectedPromptTemplateId]);
+
+  // Fetched lazily - only once the Knowledge tab is actually viewed, matching
+  // Custom Prompt's own lazy-fetch-on-tab-view pattern.
+  useEffect(() => {
+    if (activeTab !== "knowledge" || !activeWorkspace || knowledgeSources !== null) {
+      return;
+    }
+
+    let cancelled = false;
+
+    listKnowledgeSources(activeWorkspace.organization_id, activeWorkspace.id)
+      .then((loaded) => {
+        if (!cancelled) {
+          setKnowledgeSources(loaded);
+        }
+      })
+      .catch((err) => {
+        if (!cancelled) {
+          setKnowledgeSourcesError(
+            err instanceof Error ? err.message : "Could not load knowledge sources.",
+          );
+        }
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [activeTab, activeWorkspace, knowledgeSources]);
+
+  async function refreshKnowledgeSources() {
+    if (!activeWorkspace) {
+      return;
+    }
+
+    try {
+      setKnowledgeSources(
+        await listKnowledgeSources(activeWorkspace.organization_id, activeWorkspace.id),
+      );
+    } catch (err) {
+      setKnowledgeSourcesError(
+        err instanceof Error ? err.message : "Could not load knowledge sources.",
+      );
+    }
+  }
+
+  async function handleUploadFile(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+
+    if (!activeWorkspace || !uploadFile) {
+      return;
+    }
+
+    setUploadError(null);
+    setUploading(true);
+
+    try {
+      await uploadKnowledgeSourceFile(
+        activeWorkspace.organization_id,
+        activeWorkspace.id,
+        assistantId,
+        uploadFile,
+      );
+
+      setUploadFile(null);
+      await refreshKnowledgeSources();
+    } catch (err) {
+      setUploadError(
+        err instanceof Error ? err.message : "Could not upload this file.",
+      );
+    } finally {
+      setUploading(false);
+    }
+  }
+
+  async function handleRetry(knowledgeSourceId: string) {
+    if (!activeWorkspace) {
+      return;
+    }
+
+    setRetryError(null);
+    setRetryingId(knowledgeSourceId);
+
+    try {
+      await processKnowledgeSource(
+        activeWorkspace.organization_id,
+        activeWorkspace.id,
+        knowledgeSourceId,
+      );
+      await refreshKnowledgeSources();
+    } catch (err) {
+      setRetryError(
+        err instanceof Error ? err.message : "Could not retry this source.",
+      );
+    } finally {
+      setRetryingId(null);
+    }
+  }
+
+  async function handleAddWebsite(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+
+    if (!activeWorkspace || !websiteUrl.trim()) {
+      return;
+    }
+
+    setAddWebsiteError(null);
+    setAddingWebsite(true);
+
+    try {
+      await createWebsiteKnowledgeSource(
+        activeWorkspace.organization_id,
+        activeWorkspace.id,
+        assistantId,
+        websiteUrl.trim(),
+      );
+
+      setWebsiteUrl("");
+      await refreshKnowledgeSources();
+    } catch (err) {
+      setAddWebsiteError(
+        err instanceof Error ? err.message : "Could not add this website.",
+      );
+    } finally {
+      setAddingWebsite(false);
+    }
+  }
+
+  async function handleRecrawl(knowledgeSourceId: string) {
+    if (!activeWorkspace) {
+      return;
+    }
+
+    setRecrawlError(null);
+    setRecrawlingId(knowledgeSourceId);
+
+    try {
+      await recrawlKnowledgeSource(
+        activeWorkspace.organization_id,
+        activeWorkspace.id,
+        knowledgeSourceId,
+      );
+      await refreshKnowledgeSources();
+    } catch (err) {
+      setRecrawlError(
+        err instanceof Error ? err.message : "Could not recrawl this source.",
+      );
+    } finally {
+      setRecrawlingId(null);
+    }
+  }
+
+  async function handleAddFaqSource(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+
+    if (!activeWorkspace || !faqSourceName.trim()) {
+      return;
+    }
+
+    setAddFaqSourceError(null);
+    setAddingFaqSource(true);
+
+    try {
+      await createManualFaqKnowledgeSource(
+        activeWorkspace.organization_id,
+        activeWorkspace.id,
+        assistantId,
+        faqSourceName.trim(),
+      );
+
+      setFaqSourceName("");
+      await refreshKnowledgeSources();
+    } catch (err) {
+      setAddFaqSourceError(
+        err instanceof Error ? err.message : "Could not add this FAQ source.",
+      );
+    } finally {
+      setAddingFaqSource(false);
+    }
+  }
+
+  async function loadFaqEntries(knowledgeSourceId: string) {
+    if (!activeWorkspace) {
+      return;
+    }
+
+    try {
+      setFaqEntries(
+        await listFaqEntries(
+          activeWorkspace.organization_id,
+          activeWorkspace.id,
+          knowledgeSourceId,
+        ),
+      );
+    } catch (err) {
+      setFaqEntriesError(
+        err instanceof Error ? err.message : "Could not load this source's entries.",
+      );
+    }
+  }
+
+  function handleToggleFaqSource(knowledgeSourceId: string) {
+    if (expandedFaqSourceId === knowledgeSourceId) {
+      setExpandedFaqSourceId(null);
+
+      return;
+    }
+
+    setExpandedFaqSourceId(knowledgeSourceId);
+    setFaqEntries(null);
+    setFaqEntriesError(null);
+    setEditingFaqEntryId(null);
+    loadFaqEntries(knowledgeSourceId);
+  }
+
+  async function handleCreateFaqEntry(
+    event: FormEvent<HTMLFormElement>,
+    knowledgeSourceId: string,
+  ) {
+    event.preventDefault();
+
+    if (!activeWorkspace) {
+      return;
+    }
+
+    setCreateFaqEntryError(null);
+    setCreatingFaqEntry(true);
+
+    try {
+      await createFaqEntry(
+        activeWorkspace.organization_id,
+        activeWorkspace.id,
+        knowledgeSourceId,
+        { question: newFaqQuestion, answer: newFaqAnswer },
+      );
+
+      setNewFaqQuestion("");
+      setNewFaqAnswer("");
+      await loadFaqEntries(knowledgeSourceId);
+    } catch (err) {
+      setCreateFaqEntryError(
+        err instanceof Error ? err.message : "Could not add this entry.",
+      );
+    } finally {
+      setCreatingFaqEntry(false);
+    }
+  }
+
+  function handleStartEditFaqEntry(entry: FaqEntry) {
+    setEditingFaqEntryId(entry.id);
+    setEditFaqQuestion(entry.question);
+    setEditFaqAnswer(entry.answer);
+    setEditFaqEntryError(null);
+  }
+
+  function handleCancelEditFaqEntry() {
+    setEditingFaqEntryId(null);
+    setEditFaqEntryError(null);
+  }
+
+  async function handleSaveFaqEntryEdit(
+    knowledgeSourceId: string,
+    faqEntryId: string,
+  ) {
+    if (!activeWorkspace) {
+      return;
+    }
+
+    setEditFaqEntryError(null);
+    setSavingFaqEntryEdit(true);
+
+    try {
+      await updateFaqEntry(
+        activeWorkspace.organization_id,
+        activeWorkspace.id,
+        knowledgeSourceId,
+        faqEntryId,
+        { question: editFaqQuestion, answer: editFaqAnswer },
+      );
+
+      setEditingFaqEntryId(null);
+      await loadFaqEntries(knowledgeSourceId);
+    } catch (err) {
+      setEditFaqEntryError(
+        err instanceof Error ? err.message : "Could not save this entry.",
+      );
+    } finally {
+      setSavingFaqEntryEdit(false);
+    }
+  }
+
+  async function handleDeleteFaqEntry(
+    knowledgeSourceId: string,
+    faqEntryId: string,
+  ) {
+    if (!activeWorkspace) {
+      return;
+    }
+
+    setDeleteFaqEntryError(null);
+    setDeletingFaqEntryId(faqEntryId);
+
+    try {
+      await deleteFaqEntry(
+        activeWorkspace.organization_id,
+        activeWorkspace.id,
+        knowledgeSourceId,
+        faqEntryId,
+      );
+      await loadFaqEntries(knowledgeSourceId);
+    } catch (err) {
+      setDeleteFaqEntryError(
+        err instanceof Error ? err.message : "Could not delete this entry.",
+      );
+    } finally {
+      setDeletingFaqEntryId(null);
+    }
+  }
 
   async function handleRename(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -954,7 +1355,337 @@ export default function AssistantEditorPage() {
       {activeTab === "knowledge" && (
         <div className="mt-6">
           <Card>
-            <EmptyState message="Knowledge management is coming soon." />
+            <h2 className="text-lg font-semibold">Knowledge</h2>
+            <p className="mt-1 text-sm text-slate-400">
+              Files, websites, and manual FAQs this assistant can answer from.
+            </p>
+
+            <form
+              onSubmit={handleUploadFile}
+              className="mt-4 flex flex-wrap items-center gap-3 border-b border-slate-800 pb-4"
+              noValidate
+            >
+              <input
+                aria-label="Upload a file"
+                type="file"
+                accept=".pdf,.docx,.md,.txt"
+                disabled={uploading}
+                onChange={(event) => setUploadFile(event.target.files?.[0] ?? null)}
+                className="text-sm text-slate-300 file:mr-3 file:rounded-lg file:border file:border-slate-700 file:bg-slate-950 file:px-3 file:py-2 file:text-sm file:text-white"
+              />
+              <Button type="submit" disabled={uploading || !uploadFile}>
+                {uploading ? "Uploading..." : "Upload file"}
+              </Button>
+              {uploadError && <ErrorText message={uploadError} />}
+            </form>
+
+            <form
+              onSubmit={handleAddWebsite}
+              className="mt-4 flex flex-wrap items-center gap-3 border-b border-slate-800 pb-4"
+              noValidate
+            >
+              <input
+                aria-label="Website URL"
+                type="url"
+                placeholder="https://example.com"
+                required
+                disabled={addingWebsite}
+                value={websiteUrl}
+                onChange={(event) => setWebsiteUrl(event.target.value)}
+                className="min-w-64 flex-1 rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-white placeholder:text-slate-500 focus:border-slate-500 focus:outline-none focus:ring-2 focus:ring-slate-600"
+              />
+              <Button type="submit" disabled={addingWebsite || !websiteUrl.trim()}>
+                {addingWebsite ? "Adding..." : "Add website"}
+              </Button>
+              {addWebsiteError && <ErrorText message={addWebsiteError} />}
+            </form>
+
+            <form
+              onSubmit={handleAddFaqSource}
+              className="mt-4 flex flex-wrap items-center gap-3 border-b border-slate-800 pb-4"
+              noValidate
+            >
+              <input
+                aria-label="FAQ source name"
+                placeholder="FAQ source name"
+                required
+                disabled={addingFaqSource}
+                value={faqSourceName}
+                onChange={(event) => setFaqSourceName(event.target.value)}
+                className="min-w-64 flex-1 rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-white placeholder:text-slate-500 focus:border-slate-500 focus:outline-none focus:ring-2 focus:ring-slate-600"
+              />
+              <Button type="submit" disabled={addingFaqSource || !faqSourceName.trim()}>
+                {addingFaqSource ? "Adding..." : "Add FAQ source"}
+              </Button>
+              {addFaqSourceError && <ErrorText message={addFaqSourceError} />}
+            </form>
+
+            {retryError && (
+              <div className="mt-4">
+                <ErrorText message={retryError} />
+              </div>
+            )}
+
+            {recrawlError && (
+              <div className="mt-4">
+                <ErrorText message={recrawlError} />
+              </div>
+            )}
+
+            {knowledgeSourcesError && (
+              <div className="mt-4">
+                <ErrorText message={knowledgeSourcesError} />
+              </div>
+            )}
+
+            {knowledgeSources === null && !knowledgeSourcesError && (
+              <div className="mt-4">
+                <LoadingState message="Loading knowledge sources..." />
+              </div>
+            )}
+
+            {knowledgeSources !== null && knowledgeSources.length === 0 && (
+              <div className="mt-4">
+                <EmptyState message="No knowledge sources yet." />
+              </div>
+            )}
+
+            {knowledgeSources !== null && knowledgeSources.length > 0 && (
+              <ul className="mt-4 space-y-3">
+                {knowledgeSources.map((source) => (
+                  <li
+                    key={source.id}
+                    className="rounded-xl border border-slate-800 px-4 py-3"
+                  >
+                    <div className="flex flex-wrap items-center justify-between gap-3">
+                      <div>
+                        <span className="text-xs font-medium text-slate-500">
+                          {knowledgeSourceTypeLabel(source.type)}
+                        </span>
+                        <span className="ml-3 font-medium">
+                          {knowledgeSourceDisplayName(source)}
+                        </span>
+                      </div>
+
+                      <KnowledgeSourceStatusBadge status={source.status} />
+                    </div>
+
+                    {source.type === "website" && source.crawled_pages && (
+                      <p className="mt-1 text-xs text-slate-500">
+                        {source.crawled_pages.length} page
+                        {source.crawled_pages.length === 1 ? "" : "s"} crawled
+                      </p>
+                    )}
+
+                    {source.status === "failed" && source.error_message && (
+                      <div className="mt-2">
+                        <ErrorText message={source.error_message} />
+                      </div>
+                    )}
+
+                    <div className="mt-2 flex gap-2">
+                      {canRetryKnowledgeSource(source) && (
+                        <Button
+                          variant="secondary"
+                          disabled={retryingId === source.id}
+                          onClick={() => handleRetry(source.id)}
+                        >
+                          {retryingId === source.id ? "Retrying..." : "Retry"}
+                        </Button>
+                      )}
+
+                      {canRecrawlKnowledgeSource(source) && (
+                        <Button
+                          variant="secondary"
+                          disabled={recrawlingId === source.id}
+                          onClick={() => handleRecrawl(source.id)}
+                        >
+                          {recrawlingId === source.id ? "Recrawling..." : "Recrawl"}
+                        </Button>
+                      )}
+
+                      {source.type === "manual_faq" && (
+                        <Button
+                          variant="secondary"
+                          onClick={() => handleToggleFaqSource(source.id)}
+                        >
+                          {expandedFaqSourceId === source.id
+                            ? "Hide entries"
+                            : "Manage entries"}
+                        </Button>
+                      )}
+                    </div>
+
+                    {source.type === "manual_faq" &&
+                      expandedFaqSourceId === source.id && (
+                        <div className="mt-4 border-t border-slate-800 pt-4">
+                          {faqEntriesError && (
+                            <div className="mb-3">
+                              <ErrorText message={faqEntriesError} />
+                            </div>
+                          )}
+
+                          {faqEntries === null && !faqEntriesError && (
+                            <LoadingState message="Loading entries..." />
+                          )}
+
+                          {faqEntries !== null && faqEntries.length === 0 && (
+                            <EmptyState message="No entries yet." />
+                          )}
+
+                          {faqEntries !== null && faqEntries.length > 0 && (
+                            <ul className="space-y-3">
+                              {faqEntries.map((entry) =>
+                                editingFaqEntryId === entry.id ? (
+                                  <li
+                                    key={entry.id}
+                                    className="rounded-xl border border-slate-800 px-4 py-3"
+                                  >
+                                    {editFaqEntryError && (
+                                      <div className="mb-3">
+                                        <ErrorText message={editFaqEntryError} />
+                                      </div>
+                                    )}
+
+                                    <div className="space-y-2">
+                                      <input
+                                        aria-label="Edit question"
+                                        className="w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-white placeholder:text-slate-500 focus:border-slate-500 focus:outline-none focus:ring-2 focus:ring-slate-600"
+                                        placeholder="Question"
+                                        disabled={savingFaqEntryEdit}
+                                        value={editFaqQuestion}
+                                        onChange={(event) =>
+                                          setEditFaqQuestion(event.target.value)
+                                        }
+                                      />
+                                      <input
+                                        aria-label="Edit answer"
+                                        className="w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-white placeholder:text-slate-500 focus:border-slate-500 focus:outline-none focus:ring-2 focus:ring-slate-600"
+                                        placeholder="Answer"
+                                        disabled={savingFaqEntryEdit}
+                                        value={editFaqAnswer}
+                                        onChange={(event) =>
+                                          setEditFaqAnswer(event.target.value)
+                                        }
+                                      />
+                                    </div>
+
+                                    <div className="mt-3 flex gap-3">
+                                      <Button
+                                        disabled={
+                                          savingFaqEntryEdit ||
+                                          !editFaqQuestion.trim() ||
+                                          !editFaqAnswer.trim()
+                                        }
+                                        onClick={() =>
+                                          handleSaveFaqEntryEdit(source.id, entry.id)
+                                        }
+                                      >
+                                        {savingFaqEntryEdit ? "Saving..." : "Save"}
+                                      </Button>
+                                      <Button
+                                        variant="secondary"
+                                        disabled={savingFaqEntryEdit}
+                                        onClick={handleCancelEditFaqEntry}
+                                      >
+                                        Cancel
+                                      </Button>
+                                    </div>
+                                  </li>
+                                ) : (
+                                  <li
+                                    key={entry.id}
+                                    className="rounded-xl border border-slate-800 px-4 py-3"
+                                  >
+                                    <p className="font-medium">{entry.question}</p>
+                                    <p className="mt-1 text-sm text-slate-400">
+                                      {entry.answer}
+                                    </p>
+
+                                    <div className="mt-3 flex gap-2">
+                                      <Button
+                                        variant="secondary"
+                                        disabled={deletingFaqEntryId === entry.id}
+                                        onClick={() => handleStartEditFaqEntry(entry)}
+                                      >
+                                        Edit
+                                      </Button>
+                                      <Button
+                                        variant="secondary"
+                                        disabled={deletingFaqEntryId === entry.id}
+                                        onClick={() =>
+                                          handleDeleteFaqEntry(source.id, entry.id)
+                                        }
+                                      >
+                                        {deletingFaqEntryId === entry.id
+                                          ? "Deleting..."
+                                          : "Delete"}
+                                      </Button>
+                                    </div>
+                                  </li>
+                                ),
+                              )}
+                            </ul>
+                          )}
+
+                          {deleteFaqEntryError && (
+                            <div className="mt-3">
+                              <ErrorText message={deleteFaqEntryError} />
+                            </div>
+                          )}
+
+                          <form
+                            onSubmit={(event) =>
+                              handleCreateFaqEntry(event, source.id)
+                            }
+                            className="mt-4 space-y-3"
+                            noValidate
+                          >
+                            <h3 className="text-sm font-semibold text-slate-300">
+                              Add entry
+                            </h3>
+
+                            {createFaqEntryError && (
+                              <ErrorText message={createFaqEntryError} />
+                            )}
+
+                            <input
+                              aria-label="Question"
+                              className="w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-white placeholder:text-slate-500 focus:border-slate-500 focus:outline-none focus:ring-2 focus:ring-slate-600"
+                              placeholder="Question"
+                              required
+                              disabled={creatingFaqEntry}
+                              value={newFaqQuestion}
+                              onChange={(event) =>
+                                setNewFaqQuestion(event.target.value)
+                              }
+                            />
+                            <input
+                              aria-label="Answer"
+                              className="w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-white placeholder:text-slate-500 focus:border-slate-500 focus:outline-none focus:ring-2 focus:ring-slate-600"
+                              placeholder="Answer"
+                              required
+                              disabled={creatingFaqEntry}
+                              value={newFaqAnswer}
+                              onChange={(event) => setNewFaqAnswer(event.target.value)}
+                            />
+                            <Button
+                              type="submit"
+                              disabled={
+                                creatingFaqEntry ||
+                                !newFaqQuestion.trim() ||
+                                !newFaqAnswer.trim()
+                              }
+                            >
+                              {creatingFaqEntry ? "Adding..." : "Add entry"}
+                            </Button>
+                          </form>
+                        </div>
+                      )}
+                  </li>
+                ))}
+              </ul>
+            )}
           </Card>
         </div>
       )}

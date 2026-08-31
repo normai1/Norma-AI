@@ -137,7 +137,7 @@ export async function authorizedFetch(
   options?: RequestInit,
 ): Promise<Response> {
   const send = (token: string | null) => {
-    const headers = buildHeaders(options?.headers);
+    const headers = buildHeaders(options?.headers, options?.body);
 
     // set() rather than a spread: Headers normalizes names, so a caller
     // passing `authorization` in any casing is replaced rather than joined.

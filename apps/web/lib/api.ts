@@ -48,10 +48,13 @@ export async function toApiError(
  * as two distinct keys, which lets a caller-supplied value survive alongside
  * one the caller should not be able to influence.
  */
-export function buildHeaders(init?: HeadersInit): Headers {
+export function buildHeaders(init?: HeadersInit, body?: BodyInit | null): Headers {
   const headers = new Headers(init);
 
-  if (!headers.has("Content-Type")) {
+  // A FormData body (multipart file upload) must not get a Content-Type here -
+  // the browser sets its own `multipart/form-data; boundary=...` when it sees
+  // none, and a JSON default would make the server fail to parse the form.
+  if (!headers.has("Content-Type") && !(body instanceof FormData)) {
     headers.set("Content-Type", "application/json");
   }
 
@@ -70,7 +73,7 @@ export async function apiSend(
 ): Promise<Response> {
   const response = await fetch(`${API_URL}${path}`, {
     ...options,
-    headers: buildHeaders(options?.headers),
+    headers: buildHeaders(options?.headers, options?.body),
   });
 
   if (!response.ok) {
