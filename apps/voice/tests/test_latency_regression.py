@@ -3,7 +3,7 @@ Item 20f's own "p95 budget enforced in CI" claim - see current-feature.md's
 Architecture decisions for exactly what that means today: this proves the
 instrumentation and the percentile computation are correct and would fail
 the build on a real regression, under controlled mock-provider timing - not
-that real production latency is within budget (item 61's job, against real
+that real production latency is within budget (item 62's job, against real
 production topology).
 """
 

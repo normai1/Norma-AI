@@ -17,7 +17,7 @@ class TurnMetric(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     in the audio path). A leg the turn never reached (a failure, a
     barge-in, a mid-reply disconnect) simply stays null.
 
-    call_id has no foreign key yet - Call (build-plan item 26) doesn't
+    call_id has no foreign key yet - Call (build-plan item 27) doesn't
     exist. apps/voice generates a session-scoped UUID to stand in until
     then; adding the constraint later is a purely additive migration.
     organization_id/workspace_id/assistant_id are denormalized directly

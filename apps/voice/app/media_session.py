@@ -71,7 +71,7 @@ class RawAudioFrameSerializer(FrameSerializer):
     A binary WebSocket message is raw PCM audio bytes in, nothing else - no
     protocol, no framing. Enough to prove bidirectional audio streaming; a
     real telephony provider gets its own serializer (Pipecat already ships
-    one each for Twilio/Telnyx/Plivo/Vonage/Genesys, for item 23+ to use
+    one each for Twilio/Telnyx/Plivo/Vonage/Genesys, for item 24+ to use
     directly rather than reinventing). An OutputTransportMessageUrgentFrame
     (transcripts, turn/LLM/TTS control signals) serializes out as a JSON
     text message instead of audio; an OutputAudioRawFrame (item 20e's
@@ -1005,7 +1005,7 @@ def build_voice_session_pipeline_worker(
 
     call_id (item 20f) is generated once per session by the caller (see
     app/main.py) - a session-scoped placeholder identity for TurnMetric
-    rows, since Call (build-plan item 26) doesn't exist yet.
+    rows, since Call (build-plan item 27) doesn't exist yet.
     """
 
     transport = FastAPIWebsocketTransport(

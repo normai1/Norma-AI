@@ -4,7 +4,7 @@ from zoneinfo import available_timezones
 from pydantic import BaseModel, field_validator, model_validator
 
 # A curated allow-list, not open ISO 4217 format-matching: a garbage-but-
-# well-formed code stored now would need a data migration to fix once item 55
+# well-formed code stored now would need a data migration to fix once item 56
 # wires up real billing. Extend by adding to this tuple.
 SUPPORTED_CURRENCIES = ("USD", "EUR", "GBP", "CAD", "AUD")
 

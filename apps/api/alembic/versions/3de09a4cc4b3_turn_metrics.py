@@ -26,7 +26,7 @@ def upgrade() -> None:
         sa.Column("organization_id", sa.UUID(), nullable=False),
         sa.Column("workspace_id", sa.UUID(), nullable=False),
         sa.Column("assistant_id", sa.UUID(), nullable=False),
-        # No foreign key yet - Call (build-plan item 26) doesn't exist.
+        # No foreign key yet - Call (build-plan item 27) doesn't exist.
         # Adding the constraint once it does is a purely additive migration.
         sa.Column("call_id", sa.UUID(), nullable=False),
         sa.Column("stt_finalized_at", sa.DateTime(timezone=True), nullable=True),

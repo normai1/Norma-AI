@@ -25,7 +25,7 @@ _CONTEXT_HEADING = (
 class ConversationState:
     """
     The caller/assistant turn history for one call, in memory only - no
-    persistence (Call/CallLeg/TranscriptTurn rows are item 22, unbuilt).
+    persistence (Call/CallLeg/TranscriptTurn rows are item 27, unbuilt).
     """
 
     def __init__(self) -> None:
@@ -49,7 +49,7 @@ def assemble_system_prompt(*, base_prompt: str, retrieved_context: str) -> str:
     handled outcome, not an error). Otherwise the context is appended under
     a heading that frames it as data, not instructions - the one baseline
     prompt-injection safeguard in scope here; the full guardrail system is
-    item 47.
+    item 48.
     """
 
     if not retrieved_context:

@@ -308,7 +308,7 @@ async def test_retrieve_and_build_context_latency_regression(
 ) -> None:
     """
     A local regression guard against an obvious slowdown (an N+1 query, a
-    missing filter forcing a full scan) - not item 61's real p95
+    missing filter forcing a full scan) - not item 62's real p95
     measurement, which requires production topology and a real embedding
     provider, neither of which exist in this test.
     """

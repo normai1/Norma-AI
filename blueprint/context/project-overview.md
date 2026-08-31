@@ -120,46 +120,47 @@ this one.
     - 20a framework selection + media transport (LiveKit Agents vs Pipecat, decided here), 20b streaming STT w/ glossary biasing, 20c turn detection (VAD + semantic, operator-configurable sensitivity), 20d LLM turn loop, 20e streaming TTS + barge-in, 20f latency instrumentation (p95 budget enforced in CI), 20g session resilience (provider timeouts/retries/failover).
 21. **In-browser test call** - talk to an assistant with no phone number required, over WebRTC or WebSocket audio.
 22. **Voice pipeline test harness** - fixture-audio conversation replay against the full pipeline with mock providers, plus barge-in and turn-detection behavioral tests.
-23. **Telephony provider abstraction** - `TelephonyProvider` interface, verified webhook signature handling, a mock provider simulating the full call lifecycle.
-24. **Phone number provisioning** - search/claim numbers by country and area, surface regulatory document requirements, assign numbers to assistants, release numbers.
-25. **Inbound call handling** - answer an inbound call, route it to the correct assistant version, hold a complete conversation.
-26. **Call records and transcripts** - Call, CallLeg, and TranscriptTurn persistence (direction, duration, billable seconds, outcome, interruption marking).
-27. **Call recording** - optional, S3, configurable retention, automatic deletion, signed short-lived playback URLs.
-28. **Call detail UI** - transcript synchronized to audio, tool-call log, knowledge sources used per answer, latency detail behind a disclosure.
-29. **Live call forwarding** - transfer on request, on failure, or outside business hours, prioritized and international targets.
-30. **DTMF and IVR navigation** - keypress tones so the assistant can traverse external phone menus.
-31. **Concurrency and call admission control** - per-plan concurrent-call limits enforced at admission, defined overflow behavior rather than indefinite queueing.
-32. **Bring-your-own SIP trunk** - connect an existing PBX/carrier, credential storage, allowed-IP configuration.
-33. **Tool permission framework** - declarative per-assistant skill enablement enforced independently of model output, with ToolInvocation logging.
-34. **Variable extraction** - operator-defined field schema, structured extraction from the conversation, confidence reporting.
-35. **Post-call processing** - generated summary and disposition from the post-call model, assembled from the transcript and extracted fields.
-36. **Post-call delivery** - email/SMS delivery of transcript/summary/fields, behind swappable messaging providers.
-37. **Contacts** - workspace-scoped, automatic creation/matching from calls by phone number, per-contact call history, custom fields, import/export, do-not-call flags.
-38. **Calendar connections** - Google Calendar and Microsoft 365 OAuth, calendar selection, availability rules.
-39. **In-call scheduler** - live availability check, booking/rescheduling/cancellation during the call, confirmation by SMS/email.
-40. **Webhooks** - outbound call-event webhooks with signing and retry, plus an inbound webhook to trigger calls or update assistant data.
-41. **Custom API actions** - operator-configured authenticated HTTP requests during/after a call, with request/response schemas and timeout handling.
-42. **Integration framework** - credential storage, per-integration scopes, connection status, the first native CRM integration.
-43. **Public API and API keys** - versioned REST API surface with hashed, scoped, revocable organization API keys.
-44. **Outbound calls** - place a single outbound call from an assistant, caller-ID configuration, per-destination gating.
-45. **Outbound campaigns** - contact lists, timezone-aware calling windows, retry policy, per-contact outcome tracking, suppression lists, per-organization dialling concurrency.
-46. **Outbound abuse controls** - spend caps, destination allow-lists, consent gating, rate limits on call-triggering endpoints.
-47. **AI guardrails** - prompt-injection resistance for retrieved/caller-supplied text, topic and action allow-lists, refusal to state ungrounded prices/hours/policy, PII rules, output validation before spoken commitments.
-48. **Call analytics** - handled/missed calls, minutes against allowance, resolution/transfer rates, average handle time, appointment conversion, top intents, latency percentiles.
-49. **Voice and retrieval observability** - structured logging with call/turn correlation IDs, per-provider latency/error telemetry, token/cost capture per call.
-50. **Activity timeline** - user-facing business history (call handled, appointment booked, contact created, assistant published).
-51. **Audit logging** - security/administrative events: logins, role changes, number provisioning, recording deletion, integration connection, API key issuance.
-52. **Global search** - tenant-scoped typed search across assistants, calls, transcripts, contacts, appointments, numbers, and knowledge sources.
-53. **API and service health monitoring** - application, database, Redis, media-plane capacity, and per-provider dependency health checks.
-54. **Usage metering** - per-call minute accounting, plus call/contact/number/workspace counters per billing period, with provider cost capture.
-55. **Subscription billing** - Stripe plans (Solo/Team/Scale), monthly and annual, checkout, plan changes, webhook reconciliation.
-56. **Plan limit enforcement** - concurrency/minute/number/workspace/contact allowances enforced in the application, automatic overage packages, defined exhaustion behavior that never fails silently mid-call.
-57. **Onboarding flow** - pick a use-case template, crawl the business website, choose a voice, hear a test call, claim a number.
-58. **Production configuration** - separated development/production configuration, secure secret handling, per-plane environment definitions.
-59. **Initial CI/CD pipeline** - lint, typecheck, backend tests, frontend tests, voice pipeline + latency regression tests, E2E tests, builds (web/api/voice), migration step, staged deploy with health verification.
-60. **Production deployment readiness** - Vercel frontend, Render API + worker, media plane on Fly.io/AWS ECS with connection-draining deploys and session-based scaling, Render Postgres + pgvector, Render Key Value, S3, Stripe live mode.
-61. **Load and latency validation** - concurrent-call load test against production topology, confirming p95 time-to-first-audio within budget and no dropped calls during a deploy.
-62. **MVP release validation** - a real inbound call to a real number, answered by a real assistant, that books a real calendar appointment and delivers a correct transcript, summary, and extracted fields, repeatedly, from a cold production deployment.
+23. **Assistant editor redesign: General/Knowledge/Custom Prompt/Technical tabs** - reorganizes the assistant editor into four tabs; Knowledge adds full knowledge-source management and closes the assistant-scoping gap retrieval (item 19) has deferred; Custom Prompt adds the prompt-template picker; Technical relocates speech rate/sensitivity/creativity and Glossary (renamed Technical Terms), and adds configuration-only call-duration/silence-timeout limits, a recording toggle, auto-delete-on-declined-consent, and ambient-sound presets with volume - pending enforcement until telephony (items 24-28) exists.
+24. **Telephony provider abstraction** - `TelephonyProvider` interface, verified webhook signature handling, a mock provider simulating the full call lifecycle.
+25. **Phone number provisioning** - search/claim numbers by country and area, surface regulatory document requirements, assign numbers to assistants, release numbers.
+26. **Inbound call handling** - answer an inbound call, route it to the correct assistant version, hold a complete conversation.
+27. **Call records and transcripts** - Call, CallLeg, and TranscriptTurn persistence (direction, duration, billable seconds, outcome, interruption marking).
+28. **Call recording** - optional, S3, configurable retention, automatic deletion, signed short-lived playback URLs.
+29. **Call detail UI** - transcript synchronized to audio, tool-call log, knowledge sources used per answer, latency detail behind a disclosure.
+30. **Live call forwarding** - transfer on request, on failure, or outside business hours, prioritized and international targets.
+31. **DTMF and IVR navigation** - keypress tones so the assistant can traverse external phone menus.
+32. **Concurrency and call admission control** - per-plan concurrent-call limits enforced at admission, defined overflow behavior rather than indefinite queueing.
+33. **Bring-your-own SIP trunk** - connect an existing PBX/carrier, credential storage, allowed-IP configuration.
+34. **Tool permission framework** - declarative per-assistant skill enablement enforced independently of model output, with ToolInvocation logging.
+35. **Variable extraction** - operator-defined field schema, structured extraction from the conversation, confidence reporting.
+36. **Post-call processing** - generated summary and disposition from the post-call model, assembled from the transcript and extracted fields.
+37. **Post-call delivery** - email/SMS delivery of transcript/summary/fields, behind swappable messaging providers.
+38. **Contacts** - workspace-scoped, automatic creation/matching from calls by phone number, per-contact call history, custom fields, import/export, do-not-call flags.
+39. **Calendar connections** - Google Calendar and Microsoft 365 OAuth, calendar selection, availability rules.
+40. **In-call scheduler** - live availability check, booking/rescheduling/cancellation during the call, confirmation by SMS/email.
+41. **Webhooks** - outbound call-event webhooks with signing and retry, plus an inbound webhook to trigger calls or update assistant data.
+42. **Custom API actions** - operator-configured authenticated HTTP requests during/after a call, with request/response schemas and timeout handling.
+43. **Integration framework** - credential storage, per-integration scopes, connection status, the first native CRM integration.
+44. **Public API and API keys** - versioned REST API surface with hashed, scoped, revocable organization API keys.
+45. **Outbound calls** - place a single outbound call from an assistant, caller-ID configuration, per-destination gating.
+46. **Outbound campaigns** - contact lists, timezone-aware calling windows, retry policy, per-contact outcome tracking, suppression lists, per-organization dialling concurrency.
+47. **Outbound abuse controls** - spend caps, destination allow-lists, consent gating, rate limits on call-triggering endpoints.
+48. **AI guardrails** - prompt-injection resistance for retrieved/caller-supplied text, topic and action allow-lists, refusal to state ungrounded prices/hours/policy, PII rules, output validation before spoken commitments.
+49. **Call analytics** - handled/missed calls, minutes against allowance, resolution/transfer rates, average handle time, appointment conversion, top intents, latency percentiles.
+50. **Voice and retrieval observability** - structured logging with call/turn correlation IDs, per-provider latency/error telemetry, token/cost capture per call.
+51. **Activity timeline** - user-facing business history (call handled, appointment booked, contact created, assistant published).
+52. **Audit logging** - security/administrative events: logins, role changes, number provisioning, recording deletion, integration connection, API key issuance.
+53. **Global search** - tenant-scoped typed search across assistants, calls, transcripts, contacts, appointments, numbers, and knowledge sources.
+54. **API and service health monitoring** - application, database, Redis, media-plane capacity, and per-provider dependency health checks.
+55. **Usage metering** - per-call minute accounting, plus call/contact/number/workspace counters per billing period, with provider cost capture.
+56. **Subscription billing** - Stripe plans (Solo/Team/Scale), monthly and annual, checkout, plan changes, webhook reconciliation.
+57. **Plan limit enforcement** - concurrency/minute/number/workspace/contact allowances enforced in the application, automatic overage packages, defined exhaustion behavior that never fails silently mid-call.
+58. **Onboarding flow** - pick a use-case template, crawl the business website, choose a voice, hear a test call, claim a number.
+59. **Production configuration** - separated development/production configuration, secure secret handling, per-plane environment definitions.
+60. **Initial CI/CD pipeline** - lint, typecheck, backend tests, frontend tests, voice pipeline + latency regression tests, E2E tests, builds (web/api/voice), migration step, staged deploy with health verification.
+61. **Production deployment readiness** - Vercel frontend, Render API + worker, media plane on Fly.io/AWS ECS with connection-draining deploys and session-based scaling, Render Postgres + pgvector, Render Key Value, S3, Stripe live mode.
+62. **Load and latency validation** - concurrent-call load test against production topology, confirming p95 time-to-first-audio within budget and no dropped calls during a deploy.
+63. **MVP release validation** - a real inbound call to a real number, answered by a real assistant, that books a real calendar appointment and delivers a correct transcript, summary, and extracted fields, repeatedly, from a cold production deployment.
 
 ### MVP success path
 
@@ -171,18 +172,18 @@ Caller dials a Norma number -> telephony leg established -> streaming STT
   -> delivery to the team + webhook/integration push -> minutes metered
 ```
 
-### Post-MVP (63-84)
+### Post-MVP (64-85)
 
 Out of scope now, but the MVP data model and abstractions should not block them: self-learning
-knowledge base (63), internet search skill (64), WhatsApp channel (65), web chat channel (66), AI
-email assistant (67), omnichannel inbox (68), custom voice (69), zero data retention mode (70),
-enterprise security incl. SSO/SAML (71), custom SLA/support tiers (72), integration expansion (73),
-vertical templates (74), localization (75), partner/reseller program (76), advanced analytics (77),
-multi-region media routing (78), scalability improvements (79), production observability (80),
-advanced deployment operations (81), hosted PBX/softphone (82), advanced AI workflows (83), public
-launch readiness (84).
+knowledge base (64), internet search skill (65), WhatsApp channel (66), web chat channel (67), AI
+email assistant (68), omnichannel inbox (69), custom voice (70), zero data retention mode (71),
+enterprise security incl. SSO/SAML (72), custom SLA/support tiers (73), integration expansion (74),
+vertical templates (75), localization (76), partner/reseller program (77), advanced analytics (78),
+multi-region media routing (79), scalability improvements (80), production observability (81),
+advanced deployment operations (82), hosted PBX/softphone (83), advanced AI workflows (84), public
+launch readiness (85).
 
-> See Open questions - item 70 (zero data retention) may need to move into the MVP list; the
+> See Open questions - item 71 (zero data retention) may need to move into the MVP list; the
 > commercial plan table already promises it on the Scale tier.
 
 ## Data model
@@ -294,13 +295,13 @@ pivot. Do not alter this shape without a real requirement.
 - `ambient_sound` (text, nullable)
 - `business_hours_behavior` (JSONB)
 - `fallback_behavior` (JSONB) - what to do when the assistant cannot resolve the request
-- `enabled_skills` (JSONB) - the tool-permission set feature 33 enforces
+- `enabled_skills` (JSONB) - the tool-permission set feature 34 enforces
 - `prompt_template_id`, `prompt_version` (nullable) - which prompt this version used
 
 > **Immutable.** Every call records exactly which `AssistantVersion` answered it (item 20). Never
 > mutate a version in place; publishing a change creates a new version.
 
-### Telephony (items 23-24, 32)
+### Telephony (items 24-25, 33)
 
 #### PhoneNumber
 
@@ -323,7 +324,7 @@ pivot. Do not alter this shape without a real requirement.
 - `name` (text), `number` (text)
 - `hours` (JSONB), `priority` (int)
 
-### Calls (items 20, 26-27, 33-36)
+### Calls (items 20, 27-28, 34-37)
 
 #### Call
 
@@ -377,7 +378,7 @@ pivot. Do not alter this shape without a real requirement.
 - `tool_name` (text), `arguments` (JSONB), `result` (JSONB)
 - `latency_ms` (int), `success` (bool)
 
-> One row per in-call tool call - the enforcement record for feature 33's permission framework.
+> One row per in-call tool call - the enforcement record for feature 34's permission framework.
 
 #### TurnMetric
 
@@ -423,6 +424,12 @@ pivot. Do not alter this shape without a real requirement.
 > must never be mixed in one column. Changing the model or dimension later requires an explicit
 > migration **and** reindex strategy - never "fix" a mismatch by editing the column.
 
+> **`assistant_id` scoping is not built yet.** `KnowledgeSource` and `Chunk` are currently
+> organization/workspace-scoped only; retrieval (item 19) validates `assistant_id` against the
+> workspace but does not yet filter by it, since no feature has assigned a knowledge source to one
+> specific assistant. Item 23 adds an `assistant_id` FK to `KnowledgeSource` (denormalized onto
+> `Chunk` too, matching the existing `organization_id`/`workspace_id` pattern) and closes this gap.
+
 #### GlossaryEntry
 
 - `organization_id`, `workspace_id`
@@ -437,7 +444,7 @@ pivot. Do not alter this shape without a real requirement.
 - `question_text` (text), `occurrence_count` (int)
 - `status` (text), `proposed_answer` (text, nullable), `approving_user_id` (UUID, nullable)
 
-### Contacts & appointments (items 37-39)
+### Contacts & appointments (items 38-40)
 
 #### Contact
 
@@ -463,7 +470,7 @@ pivot. Do not alter this shape without a real requirement.
 - `credentials_ref` (text), `calendar_id` (text)
 - `availability_rules` (JSONB)
 
-### Campaigns (items 44-46)
+### Campaigns (items 45-47)
 
 #### Campaign
 
@@ -485,7 +492,7 @@ pivot. Do not alter this shape without a real requirement.
 - `phone_number` (text), `reason` (text)
 - `added_by_user_id` (UUID, FK -> User)
 
-### Integrations & API (items 40-43)
+### Integrations & API (items 41-44)
 
 #### Integration
 
@@ -513,7 +520,7 @@ pivot. Do not alter this shape without a real requirement.
 - `hashed_key` (text) - never store the raw key
 - `scopes` (JSONB), `last_used_at` (timestamptz, nullable)
 
-### Billing & usage (items 54-56)
+### Billing & usage (items 55-57)
 
 #### Subscription
 
@@ -534,7 +541,7 @@ pivot. Do not alter this shape without a real requirement.
 - `organization_id`, `period`
 - `package` (text), `purchased_at` (timestamptz)
 
-### Audit & observability (items 49-51)
+### Audit & observability (items 50-52)
 
 #### Activity
 
@@ -553,8 +560,8 @@ pivot. Do not alter this shape without a real requirement.
 - `ip_address`, `user_agent` (text, nullable)
 - `metadata` (JSONB)
 
-> **Activity is not AuditLog.** Activity is the user-facing business timeline (item 50). AuditLog is
-> the security/compliance record (item 51). The plans call these deliberately distinct.
+> **Activity is not AuditLog.** Activity is the user-facing business timeline (item 51). AuditLog is
+> the security/compliance record (item 52). The plans call these deliberately distinct.
 
 ### Not stored in PostgreSQL
 
@@ -599,7 +606,7 @@ Serverless-friendly                  NOT serverless-deployable
 | Frontend testing | **Vitest** + React Testing Library; **Playwright Test** for E2E | Playwright is the required E2E runner; Jest is not introduced |
 | Voice pipeline testing | Fixture-audio replay harness (item 22) | Full pipeline against mock providers, latency regression, barge-in/turn-detection behavior |
 | Containers | **Docker** + **Docker Compose** | Full local stack, both planes |
-| CI/CD | **GitHub Actions** (item 59) | Lint, typecheck, tests, voice pipeline + latency regression, E2E, build, migrate, staged deploy, health verification |
+| CI/CD | **GitHub Actions** (item 60) | Lint, typecheck, tests, voice pipeline + latency regression, E2E, build, migrate, staged deploy, health verification |
 
 ### LLM - two tiers, one provider
 
@@ -704,8 +711,8 @@ minute-metered, so metering and enforcement cannot be deferred without breaking 
 | Workspaces | 1 | 3 | custom |
 | Outbound + campaigns | - | included, carrier cost extra | included |
 | BYO SIP trunk | - | included | included |
-| Custom voice | - | - | included (post-MVP capability, item 69) |
-| No-retention mode | - | - | included (see Open questions - item 70 is currently post-MVP) |
+| Custom voice | - | - | included (post-MVP capability, item 70) |
+| No-retention mode | - | - | included (see Open questions - item 71 is currently post-MVP) |
 | Support | email | priority | account manager |
 
 Monthly and annual billing with an annual discount. Overage minutes sell in fixed packages,
@@ -714,8 +721,8 @@ concurrency gates call admission (excess calls forward or take a message, never 
 indefinitely); minute exhaustion triggers overage purchase or a configured degraded behavior,
 never a silent mid-call failure; number/workspace/contact allowances are checked at creation time.
 
-Usage and provider cost metadata is captured per call from the first release (item 54), even before
-billing (item 55) is wired up, so gross margin per minute is visible from day one.
+Usage and provider cost metadata is captured per call from the first release (item 55), even before
+billing (item 56) is wired up, so gross margin per minute is visible from day one.
 
 ## UI/UX
 
@@ -756,13 +763,13 @@ Navigation items appear only for features that are actually built.
 | `/assistants`, `/assistants/[id]` | Assistant list and the split-view editor (features 11-13) |
 | `/assistants/[id]/test-call` | In-browser test call (item 21) |
 | `/knowledge` | Sources, upload, crawl status, unanswered-questions inbox (items 14-19) |
-| `/contacts`, `/contacts/[id]` | Contact list and detail with call history (item 37) |
-| `/appointments` | Appointment list, calendar connections (items 38-39) |
-| `/campaigns`, `/campaigns/[id]` | Outbound campaign management (items 44-46) |
-| `/calls`, `/calls/[id]` | Call feed and the transcript/audio/tool-call detail view (items 26-28) |
-| `/numbers` | Provisioning flow, assignment to assistants (item 24) |
-| `/integrations` | Connected integrations, API keys (items 42-43) |
-| `/analytics` | Overview cards, trend charts, top intents (item 48) |
+| `/contacts`, `/contacts/[id]` | Contact list and detail with call history (item 38) |
+| `/appointments` | Appointment list, calendar connections (items 39-40) |
+| `/campaigns`, `/campaigns/[id]` | Outbound campaign management (items 45-47) |
+| `/calls`, `/calls/[id]` | Call feed and the transcript/audio/tool-call detail view (items 27-29) |
+| `/numbers` | Provisioning flow, assignment to assistants (item 25) |
+| `/integrations` | Connected integrations, API keys (items 43-44) |
+| `/analytics` | Overview cards, trend charts, top intents (item 49) |
 
 ### Onboarding
 
@@ -924,7 +931,7 @@ speech/LLM provider; documented retention and deletion behavior; where the EU is
 GDPR and EU AI Act transparency obligations apply, including disclosing to callers that they are
 speaking to an AI.
 
-### CI/CD pipeline (item 59)
+### CI/CD pipeline (item 60)
 
 ```text
 Push -> Lint -> Type check -> Backend tests -> Frontend tests
@@ -937,7 +944,7 @@ Push -> Lint -> Type check -> Backend tests -> Frontend tests
 
 The MVP is not shippable until a real phone call to a real number, answered by a real assistant,
 books a real calendar appointment, and delivers a correct transcript and summary - repeatedly,
-within the latency budget, from a cold-started production deployment (item 62).
+within the latency budget, from a cold-started production deployment (item 63).
 
 ### Known plan-to-repo drift (expected, no action needed yet)
 
@@ -945,7 +952,7 @@ within the latency budget, from a cold-started production deployment (item 62).
 `ANTHROPIC_BASE_URL`, `NEXT_PUBLIC_VOICE_WS_URL`, any `STT_`/`TTS_`/`TELEPHONY_` variable, or the
 `AWS_*`/`STRIPE_*` variables - its AI values are otherwise already correctly named
 (`EMBEDDING_DIMENSION`, matching both plans). `docker-compose.yml` has only `postgres`, `redis`,
-`api`, `web` - no `norma-voice` or `norma-worker` service yet. Items 5, 9, 58, and 60 close these
+`api`, `web` - no `norma-voice` or `norma-worker` service yet. Items 5, 9, 59, and 61 close these
 gaps as they are built; this is expected sequencing, not a bug.
 
 ## Open questions
@@ -956,6 +963,6 @@ gaps as they are built; this is expected sequencing, not a bug.
    plan table lists "No-retention mode" as included on the **Scale** plan - one of the three
    MVP-launch tiers - and §4's sensitive-data policy already describes the capability as part of
    the data model. `build-plan.md` defers "Zero data retention mode" entirely to post-MVP item
-   **70**. If Scale-tier customers are sold this at MVP launch, item 70 needs to move into the MVP
-   list before item 55 (Subscription billing) locks in plan features - or the Scale-plan promise
-   needs to be scoped down until item 70 ships.
+   **71**. If Scale-tier customers are sold this at MVP launch, item 71 needs to move into the MVP
+   list before item 56 (Subscription billing) locks in plan features - or the Scale-plan promise
+   needs to be scoped down until item 71 ships.

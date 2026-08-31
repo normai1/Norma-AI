@@ -1,6 +1,6 @@
 """
 LLM provider contract for the realtime turn loop (item 20d). Lives in
-apps/voice, not norma_shared: apps/worker (post-call summaries, item 35) has
+apps/voice, not norma_shared: apps/worker (post-call summaries, item 36) has
 no LLM need yet, so there is no second consumer to justify a shared package
 - mirrors item 20b's own "moved here, not duplicated, when a real
 cross-service need first arises" rule. Shape deliberately mirrors

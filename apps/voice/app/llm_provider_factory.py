@@ -1,7 +1,7 @@
 """
 LLM provider selection for apps/voice. Mirrors app/provider_factory.py's
 exact shape and reasoning, scoped to the realtime tier only - a post-call
-tier provider has no consumer yet (item 35, apps/worker, unbuilt).
+tier provider has no consumer yet (item 36, apps/worker, unbuilt).
 """
 
 from app import config

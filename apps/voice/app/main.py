@@ -80,7 +80,7 @@ async def media_session(
     await websocket.accept()
 
     # Session-scoped placeholder call identity for item 20f's TurnMetric
-    # rows - Call (build-plan item 26) doesn't exist yet.
+    # rows - Call (build-plan item 27) doesn't exist yet.
     call_id = uuid.uuid4()
 
     keywords = await fetch_glossary_terms(assistant_id)
