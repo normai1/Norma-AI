@@ -33,6 +33,12 @@ import {
   updateGlossaryEntry,
   type GlossaryEntry,
 } from "@/lib/glossary";
+import {
+  listPromptTemplates,
+  listPromptTemplateVersions,
+  type PromptTemplate,
+  type PromptTemplateVersion,
+} from "@/lib/prompt-templates";
 import { listVoices, type Voice } from "@/lib/voices";
 import { COMMON_LOCALES } from "@/lib/workspaces";
 
@@ -103,6 +109,21 @@ export default function AssistantEditorPage() {
   const [maxSilenceTimeoutSeconds, setMaxSilenceTimeoutSeconds] = useState("");
   const [recordCalls, setRecordCalls] = useState(false);
   const [autoDeleteOnDeclinedConsent, setAutoDeleteOnDeclinedConsent] = useState(false);
+
+  const [promptTemplates, setPromptTemplates] = useState<PromptTemplate[] | null>(
+    null,
+  );
+  const [promptTemplatesError, setPromptTemplatesError] = useState<string | null>(
+    null,
+  );
+  const [selectedPromptTemplateId, setSelectedPromptTemplateId] = useState("");
+  const [promptTemplateVersions, setPromptTemplateVersions] = useState<
+    PromptTemplateVersion[] | null
+  >(null);
+  const [promptTemplateVersionsError, setPromptTemplateVersionsError] = useState<
+    string | null
+  >(null);
+  const [selectedPromptVersion, setSelectedPromptVersion] = useState("");
   const [savingVersion, setSavingVersion] = useState(false);
   const [versionError, setVersionError] = useState<string | null>(null);
   const [versionSaved, setVersionSaved] = useState<AssistantVersion | null>(
@@ -329,6 +350,70 @@ export default function AssistantEditorPage() {
     };
   }, [fetchAssistant, applyAssistant, applyLoadError]);
 
+  // Fetched lazily - only once the Custom Prompt tab is actually viewed,
+  // not on initial page load, matching how Technical's Glossary section is
+  // also scoped to its own tab.
+  useEffect(() => {
+    if (activeTab !== "customPrompt" || !activeWorkspace || promptTemplates !== null) {
+      return;
+    }
+
+    let cancelled = false;
+
+    listPromptTemplates(activeWorkspace.organization_id, activeWorkspace.id)
+      .then((loaded) => {
+        if (!cancelled) {
+          setPromptTemplates(loaded);
+        }
+      })
+      .catch((err) => {
+        if (!cancelled) {
+          setPromptTemplatesError(
+            err instanceof Error ? err.message : "Could not load prompt templates.",
+          );
+        }
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [activeTab, activeWorkspace, promptTemplates]);
+
+  useEffect(() => {
+    // No setState here when nothing is selected - the version section below
+    // is already gated on selectedPromptTemplateId, so a stale non-null
+    // promptTemplateVersions from a previous selection is never rendered.
+    if (!activeWorkspace || !selectedPromptTemplateId) {
+      return;
+    }
+
+    let cancelled = false;
+
+    listPromptTemplateVersions(
+      activeWorkspace.organization_id,
+      activeWorkspace.id,
+      selectedPromptTemplateId,
+    )
+      .then((loaded) => {
+        if (!cancelled) {
+          setPromptTemplateVersions(loaded);
+        }
+      })
+      .catch((err) => {
+        if (!cancelled) {
+          setPromptTemplateVersionsError(
+            err instanceof Error
+              ? err.message
+              : "Could not load this template's versions.",
+          );
+        }
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [activeWorkspace, selectedPromptTemplateId]);
+
   async function handleRename(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
 
@@ -435,6 +520,10 @@ export default function AssistantEditorPage() {
           max_silence_timeout_seconds: parsedMaxSilenceTimeout,
           record_calls: recordCalls,
           auto_delete_on_declined_consent: autoDeleteOnDeclinedConsent,
+          prompt_template_id: selectedPromptTemplateId || null,
+          prompt_version: selectedPromptTemplateId
+            ? Number(selectedPromptVersion)
+            : null,
         },
       );
 
@@ -847,7 +936,12 @@ export default function AssistantEditorPage() {
 
               <Button
                 type="submit"
-                disabled={savingVersion || !voiceId || !greeting.trim()}
+                disabled={
+                  savingVersion ||
+                  !voiceId ||
+                  !greeting.trim() ||
+                  (!!selectedPromptTemplateId && !selectedPromptVersion)
+                }
               >
                 {savingVersion ? "Saving..." : "Save as new version"}
               </Button>
@@ -868,7 +962,145 @@ export default function AssistantEditorPage() {
       {activeTab === "customPrompt" && (
         <div className="mt-6">
           <Card>
-            <EmptyState message="Prompt template selection is coming soon." />
+            <h2 className="text-lg font-semibold">Custom Prompt</h2>
+            <p className="mt-1 text-sm text-slate-400">
+              Pick a reusable prompt template and a specific version - saved as part of this
+              assistant&apos;s version snapshot.
+            </p>
+
+            {promptTemplatesError && (
+              <div className="mt-4">
+                <ErrorText message={promptTemplatesError} />
+              </div>
+            )}
+
+            {promptTemplates === null && !promptTemplatesError && (
+              <div className="mt-4">
+                <LoadingState message="Loading prompt templates..." />
+              </div>
+            )}
+
+            {promptTemplates !== null && promptTemplates.length === 0 && (
+              <div className="mt-4">
+                <EmptyState message="No prompt templates in this workspace yet." />
+              </div>
+            )}
+
+            {promptTemplates !== null && promptTemplates.length > 0 && (
+              <form onSubmit={handleSaveVersion} className="mt-4 space-y-4" noValidate>
+                {versionError && <ErrorText message={versionError} />}
+                {versionSaved && (
+                  <p className="text-sm text-green-400">
+                    Saved as version {versionSaved.version}.
+                  </p>
+                )}
+
+                <div>
+                  <label
+                    htmlFor="prompt_template"
+                    className="block text-sm font-medium text-slate-200"
+                  >
+                    Prompt template
+                  </label>
+
+                  <select
+                    id="prompt_template"
+                    disabled={savingVersion}
+                    className="mt-2 w-full max-w-md rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-white focus:outline-none focus:ring-2 focus:ring-slate-600"
+                    value={selectedPromptTemplateId}
+                    onChange={(event) => {
+                      setSelectedPromptTemplateId(event.target.value);
+                      setSelectedPromptVersion("");
+                    }}
+                  >
+                    <option value="">None</option>
+                    {promptTemplates.map((template) => (
+                      <option key={template.id} value={template.id}>
+                        {template.name} ({template.use_case})
+                      </option>
+                    ))}
+                  </select>
+                </div>
+
+                {selectedPromptTemplateId && (
+                  <div>
+                    <label
+                      htmlFor="prompt_version"
+                      className="block text-sm font-medium text-slate-200"
+                    >
+                      Version
+                    </label>
+
+                    {promptTemplateVersionsError && (
+                      <div className="mt-2">
+                        <ErrorText message={promptTemplateVersionsError} />
+                      </div>
+                    )}
+
+                    {promptTemplateVersions === null && !promptTemplateVersionsError && (
+                      <div className="mt-2">
+                        <LoadingState message="Loading versions..." />
+                      </div>
+                    )}
+
+                    {promptTemplateVersions !== null &&
+                      promptTemplateVersions.length === 0 && (
+                        <div className="mt-2">
+                          <EmptyState message="This template has no saved versions yet." />
+                        </div>
+                      )}
+
+                    {promptTemplateVersions !== null &&
+                      promptTemplateVersions.length > 0 && (
+                        <select
+                          id="prompt_version"
+                          disabled={savingVersion}
+                          className="mt-2 w-full max-w-xs rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-white focus:outline-none focus:ring-2 focus:ring-slate-600"
+                          value={selectedPromptVersion}
+                          onChange={(event) =>
+                            setSelectedPromptVersion(event.target.value)
+                          }
+                        >
+                          <option value="" disabled>
+                            Select a version
+                          </option>
+                          {promptTemplateVersions.map((version) => (
+                            <option key={version.id} value={version.version}>
+                              Version {version.version}
+                            </option>
+                          ))}
+                        </select>
+                      )}
+
+                    {selectedPromptVersion && promptTemplateVersions && (
+                      <div className="mt-3">
+                        <p className="text-xs font-medium text-slate-400">Preview</p>
+                        <pre className="mt-1 max-w-2xl whitespace-pre-wrap rounded-lg border border-slate-800 bg-slate-950 px-3 py-2 text-sm text-slate-300">
+                          {
+                            promptTemplateVersions.find(
+                              (version) =>
+                                version.version === Number(selectedPromptVersion),
+                            )?.content
+                          }
+                        </pre>
+                      </div>
+                    )}
+                  </div>
+                )}
+
+                <Button
+                  type="submit"
+                  disabled={
+                    savingVersion ||
+                    !voiceId ||
+                    !greeting.trim() ||
+                    (!!selectedPromptTemplateId && !selectedPromptVersion)
+                  }
+                >
+                  {savingVersion ? "Saving..." : "Save as new version"}
+                </Button>
+              </form>
+            )}
           </Card>
         </div>
       )}
@@ -1091,7 +1323,12 @@ export default function AssistantEditorPage() {
 
               <Button
                 type="submit"
-                disabled={savingVersion || !voiceId || !greeting.trim()}
+                disabled={
+                  savingVersion ||
+                  !voiceId ||
+                  !greeting.trim() ||
+                  (!!selectedPromptTemplateId && !selectedPromptVersion)
+                }
               >
                 {savingVersion ? "Saving..." : "Save as new version"}
               </Button>
