@@ -619,9 +619,16 @@ export default function AssistantEditorPage() {
 
   return (
     <PageShell title={assistant.name} description="Assistant configuration.">
-      <div className="mb-6">
+      <div className="mb-6 flex items-center justify-between gap-4">
         <Link href="/assistants" className="text-sm text-slate-400 hover:text-slate-300">
           &larr; Back to assistants
+        </Link>
+
+        <Link
+          href={`/assistants/${assistant.id}/test-call`}
+          className="rounded-lg border border-slate-700 px-4 py-2 text-sm font-medium text-white transition hover:bg-slate-900"
+        >
+          Test call
         </Link>
       </div>
 

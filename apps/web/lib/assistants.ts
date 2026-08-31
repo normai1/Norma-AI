@@ -47,6 +47,11 @@ export interface AssistantVersionDiff {
   changes: Record<string, AssistantVersionFieldDiff>;
 }
 
+export interface TestCallTicket {
+  ticket: string;
+  expires_in: number;
+}
+
 function assistantsUrl(organizationId: string, workspaceId: string): string {
   return `/api/v1/organizations/${organizationId}/workspaces/${workspaceId}/assistants`;
 }
@@ -141,6 +146,17 @@ export async function createAssistantVersion(
   return authorizedJson<AssistantVersion>(
     `${assistantUrl(organizationId, workspaceId, assistantId)}/versions`,
     { method: "POST", body: JSON.stringify(input) },
+  );
+}
+
+export async function fetchTestCallTicket(
+  organizationId: string,
+  workspaceId: string,
+  assistantId: string,
+): Promise<TestCallTicket> {
+  return authorizedJson<TestCallTicket>(
+    `${assistantUrl(organizationId, workspaceId, assistantId)}/test-call-token`,
+    { method: "POST" },
   );
 }
 
