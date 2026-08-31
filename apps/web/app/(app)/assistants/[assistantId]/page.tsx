@@ -52,10 +52,17 @@ import {
   type KnowledgeSource,
 } from "@/lib/knowledge-sources";
 import {
+  archivePromptTemplate,
+  createPromptTemplate,
+  createPromptTemplateVersion,
+  diffPromptTemplateVersions,
   listPromptTemplates,
   listPromptTemplateVersions,
+  publishPromptTemplate,
+  renamePromptTemplate,
   type PromptTemplate,
   type PromptTemplateVersion,
+  type PromptTemplateVersionDiff,
 } from "@/lib/prompt-templates";
 import { listVoices, type Voice } from "@/lib/voices";
 import { COMMON_LOCALES } from "@/lib/workspaces";
@@ -100,6 +107,16 @@ function KnowledgeSourceStatusBadge({ status }: { status: string }) {
   return (
     <span
       className={`rounded-full border px-2.5 py-0.5 text-xs font-medium ${KNOWLEDGE_SOURCE_STATUS_TONE[status] ?? "border-slate-700 text-slate-400"}`}
+    >
+      {status}
+    </span>
+  );
+}
+
+function PromptTemplateStatusBadge({ status }: { status: string }) {
+  return (
+    <span
+      className={`rounded-full border px-2.5 py-0.5 text-xs font-medium ${STATUS_TONE[status] ?? "border-slate-700 text-slate-400"}`}
     >
       {status}
     </span>
@@ -200,6 +217,59 @@ export default function AssistantEditorPage() {
   const [promptTemplatesError, setPromptTemplatesError] = useState<string | null>(
     null,
   );
+
+  const [newTemplateName, setNewTemplateName] = useState("");
+  const [newTemplateUseCase, setNewTemplateUseCase] = useState("");
+  const [creatingTemplate, setCreatingTemplate] = useState(false);
+  const [createTemplateError, setCreateTemplateError] = useState<string | null>(
+    null,
+  );
+
+  const [expandedTemplateId, setExpandedTemplateId] = useState<string | null>(
+    null,
+  );
+
+  const [editTemplateName, setEditTemplateName] = useState("");
+  const [renamingTemplate, setRenamingTemplate] = useState(false);
+  const [renameTemplateError, setRenameTemplateError] = useState<string | null>(
+    null,
+  );
+
+  const [archivingTemplateId, setArchivingTemplateId] = useState<string | null>(
+    null,
+  );
+  const [archiveTemplateError, setArchiveTemplateError] = useState<string | null>(
+    null,
+  );
+
+  const [templateContent, setTemplateContent] = useState("");
+  const [savingTemplateVersion, setSavingTemplateVersion] = useState(false);
+  const [saveTemplateVersionError, setSaveTemplateVersionError] = useState<
+    string | null
+  >(null);
+  const [templateVersionSaved, setTemplateVersionSaved] =
+    useState<PromptTemplateVersion | null>(null);
+
+  const [templateVersions, setTemplateVersions] = useState<
+    PromptTemplateVersion[] | null
+  >(null);
+  const [templateVersionsError, setTemplateVersionsError] = useState<
+    string | null
+  >(null);
+
+  const [publishingTemplateVersion, setPublishingTemplateVersion] = useState<
+    number | null
+  >(null);
+  const [publishTemplateVersionError, setPublishTemplateVersionError] =
+    useState<string | null>(null);
+
+  const [templateDiffFrom, setTemplateDiffFrom] = useState("");
+  const [templateDiffTo, setTemplateDiffTo] = useState("");
+  const [templateDiffResult, setTemplateDiffResult] =
+    useState<PromptTemplateVersionDiff | null>(null);
+  const [templateDiffError, setTemplateDiffError] = useState<string | null>(null);
+  const [templateDiffLoading, setTemplateDiffLoading] = useState(false);
+
   const [selectedPromptTemplateId, setSelectedPromptTemplateId] = useState("");
   const [promptTemplateVersions, setPromptTemplateVersions] = useState<
     PromptTemplateVersion[] | null
@@ -462,6 +532,249 @@ export default function AssistantEditorPage() {
       cancelled = true;
     };
   }, [activeTab, activeWorkspace, promptTemplates]);
+
+  async function refreshPromptTemplates() {
+    if (!activeWorkspace) {
+      return;
+    }
+
+    try {
+      setPromptTemplates(
+        await listPromptTemplates(activeWorkspace.organization_id, activeWorkspace.id),
+      );
+    } catch (err) {
+      setPromptTemplatesError(
+        err instanceof Error ? err.message : "Could not load prompt templates.",
+      );
+    }
+  }
+
+  async function handleCreateTemplate(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+
+    if (!activeWorkspace) {
+      return;
+    }
+
+    setCreateTemplateError(null);
+    setCreatingTemplate(true);
+
+    try {
+      await createPromptTemplate(
+        activeWorkspace.organization_id,
+        activeWorkspace.id,
+        newTemplateName,
+        newTemplateUseCase,
+      );
+
+      setNewTemplateName("");
+      setNewTemplateUseCase("");
+      await refreshPromptTemplates();
+    } catch (err) {
+      setCreateTemplateError(
+        err instanceof Error ? err.message : "Could not create this prompt template.",
+      );
+    } finally {
+      setCreatingTemplate(false);
+    }
+  }
+
+  async function loadTemplateVersions(templateId: string) {
+    if (!activeWorkspace) {
+      return;
+    }
+
+    try {
+      setTemplateVersions(
+        await listPromptTemplateVersions(
+          activeWorkspace.organization_id,
+          activeWorkspace.id,
+          templateId,
+        ),
+      );
+    } catch (err) {
+      setTemplateVersionsError(
+        err instanceof Error ? err.message : "Could not load version history.",
+      );
+    }
+  }
+
+  function handleToggleTemplate(template: PromptTemplate) {
+    if (expandedTemplateId === template.id) {
+      setExpandedTemplateId(null);
+
+      return;
+    }
+
+    setExpandedTemplateId(template.id);
+    setEditTemplateName(template.name);
+    setRenameTemplateError(null);
+    setTemplateContent("");
+    setTemplateVersionSaved(null);
+    setSaveTemplateVersionError(null);
+    setTemplateVersions(null);
+    setTemplateVersionsError(null);
+    setTemplateDiffFrom("");
+    setTemplateDiffTo("");
+    setTemplateDiffResult(null);
+    setTemplateDiffError(null);
+    loadTemplateVersions(template.id);
+  }
+
+  async function handleSaveTemplateVersion(
+    event: FormEvent<HTMLFormElement>,
+    templateId: string,
+  ) {
+    event.preventDefault();
+
+    if (!activeWorkspace) {
+      return;
+    }
+
+    setSaveTemplateVersionError(null);
+    setTemplateVersionSaved(null);
+    setSavingTemplateVersion(true);
+
+    try {
+      const created = await createPromptTemplateVersion(
+        activeWorkspace.organization_id,
+        activeWorkspace.id,
+        templateId,
+        templateContent,
+      );
+
+      setTemplateVersionSaved(created);
+      await loadTemplateVersions(templateId);
+    } catch (err) {
+      setSaveTemplateVersionError(
+        err instanceof Error ? err.message : "Could not save this version.",
+      );
+    } finally {
+      setSavingTemplateVersion(false);
+    }
+  }
+
+  async function handlePublishTemplateVersion(templateId: string, version: number) {
+    if (!activeWorkspace) {
+      return;
+    }
+
+    setPublishTemplateVersionError(null);
+    setPublishingTemplateVersion(version);
+
+    try {
+      await publishPromptTemplate(
+        activeWorkspace.organization_id,
+        activeWorkspace.id,
+        templateId,
+        version,
+      );
+      await loadTemplateVersions(templateId);
+      await refreshPromptTemplates();
+    } catch (err) {
+      setPublishTemplateVersionError(
+        err instanceof Error ? err.message : "Could not publish this version.",
+      );
+    } finally {
+      setPublishingTemplateVersion(null);
+    }
+  }
+
+  async function handleDiffTemplateVersions(
+    event: FormEvent<HTMLFormElement>,
+    templateId: string,
+  ) {
+    event.preventDefault();
+
+    if (!activeWorkspace) {
+      return;
+    }
+
+    const from = Number(templateDiffFrom);
+    const to = Number(templateDiffTo);
+
+    if (!Number.isFinite(from) || !Number.isFinite(to)) {
+      setTemplateDiffError("Choose two versions to compare.");
+
+      return;
+    }
+
+    setTemplateDiffError(null);
+    setTemplateDiffResult(null);
+    setTemplateDiffLoading(true);
+
+    try {
+      const result = await diffPromptTemplateVersions(
+        activeWorkspace.organization_id,
+        activeWorkspace.id,
+        templateId,
+        from,
+        to,
+      );
+
+      setTemplateDiffResult(result);
+    } catch (err) {
+      setTemplateDiffError(
+        err instanceof Error ? err.message : "Could not compare these versions.",
+      );
+    } finally {
+      setTemplateDiffLoading(false);
+    }
+  }
+
+  async function handleRenameTemplate(
+    event: FormEvent<HTMLFormElement>,
+    templateId: string,
+  ) {
+    event.preventDefault();
+
+    if (!activeWorkspace) {
+      return;
+    }
+
+    setRenameTemplateError(null);
+    setRenamingTemplate(true);
+
+    try {
+      await renamePromptTemplate(
+        activeWorkspace.organization_id,
+        activeWorkspace.id,
+        templateId,
+        editTemplateName,
+      );
+      await refreshPromptTemplates();
+    } catch (err) {
+      setRenameTemplateError(
+        err instanceof Error ? err.message : "Could not rename this prompt template.",
+      );
+    } finally {
+      setRenamingTemplate(false);
+    }
+  }
+
+  async function handleArchiveTemplate(templateId: string) {
+    if (!activeWorkspace) {
+      return;
+    }
+
+    setArchiveTemplateError(null);
+    setArchivingTemplateId(templateId);
+
+    try {
+      await archivePromptTemplate(
+        activeWorkspace.organization_id,
+        activeWorkspace.id,
+        templateId,
+      );
+      await refreshPromptTemplates();
+    } catch (err) {
+      setArchiveTemplateError(
+        err instanceof Error ? err.message : "Could not archive this prompt template.",
+      );
+    } finally {
+      setArchivingTemplateId(null);
+    }
+  }
 
   useEffect(() => {
     // No setState here when nothing is selected - the version section below
@@ -1691,6 +2004,7 @@ export default function AssistantEditorPage() {
       )}
 
       {activeTab === "customPrompt" && (
+        <>
         <div className="mt-6">
           <Card>
             <h2 className="text-lg font-semibold">Custom Prompt</h2>
@@ -1834,6 +2148,440 @@ export default function AssistantEditorPage() {
             )}
           </Card>
         </div>
+
+        <div className="mt-6">
+          <Card>
+            <h2 className="text-lg font-semibold">Manage templates</h2>
+            <p className="mt-1 text-sm text-slate-400">
+              Prompt templates are shared across every assistant in this workspace.
+            </p>
+
+            <form
+              onSubmit={handleCreateTemplate}
+              className="mt-4 flex flex-wrap items-center gap-3 border-b border-slate-800 pb-4"
+              noValidate
+            >
+              <input
+                aria-label="New template name"
+                placeholder="Front Desk Receptionist"
+                required
+                disabled={creatingTemplate}
+                value={newTemplateName}
+                onChange={(event) => setNewTemplateName(event.target.value)}
+                className="min-w-56 flex-1 rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-white placeholder:text-slate-500 focus:border-slate-500 focus:outline-none focus:ring-2 focus:ring-slate-600"
+              />
+              <input
+                aria-label="New template use case"
+                placeholder="receptionist"
+                required
+                disabled={creatingTemplate}
+                value={newTemplateUseCase}
+                onChange={(event) => setNewTemplateUseCase(event.target.value)}
+                className="min-w-40 flex-1 rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-white placeholder:text-slate-500 focus:border-slate-500 focus:outline-none focus:ring-2 focus:ring-slate-600"
+              />
+              <Button
+                type="submit"
+                disabled={
+                  creatingTemplate || !newTemplateName.trim() || !newTemplateUseCase.trim()
+                }
+              >
+                {creatingTemplate ? "Creating..." : "Create template"}
+              </Button>
+              {createTemplateError && <ErrorText message={createTemplateError} />}
+            </form>
+
+            {archiveTemplateError && (
+              <div className="mt-4">
+                <ErrorText message={archiveTemplateError} />
+              </div>
+            )}
+
+            {promptTemplatesError && (
+              <div className="mt-4">
+                <ErrorText message={promptTemplatesError} />
+              </div>
+            )}
+
+            {promptTemplates === null && !promptTemplatesError && (
+              <div className="mt-4">
+                <LoadingState message="Loading prompt templates..." />
+              </div>
+            )}
+
+            {promptTemplates !== null && promptTemplates.length === 0 && (
+              <div className="mt-4">
+                <EmptyState message="No prompt templates yet. Create one above to get started." />
+              </div>
+            )}
+
+            {promptTemplates !== null && promptTemplates.length > 0 && (
+              <ul className="mt-4 space-y-3">
+                {promptTemplates.map((template) => (
+                  <li
+                    key={template.id}
+                    className="rounded-xl border border-slate-800 px-4 py-3"
+                  >
+                    <div className="flex flex-wrap items-center justify-between gap-3">
+                      <div>
+                        <span className="font-medium">{template.name}</span>
+                        <span className="ml-3 text-sm text-slate-500">
+                          {template.use_case}
+                        </span>
+                      </div>
+
+                      <div className="flex items-center gap-3">
+                        <PromptTemplateStatusBadge status={template.status} />
+                        <Button
+                          variant="secondary"
+                          onClick={() => handleToggleTemplate(template)}
+                        >
+                          {expandedTemplateId === template.id ? "Hide" : "Manage"}
+                        </Button>
+                      </div>
+                    </div>
+
+                    {expandedTemplateId === template.id && (
+                      <div className="mt-4 space-y-4 border-t border-slate-800 pt-4">
+                        {renameTemplateError && (
+                          <ErrorText message={renameTemplateError} />
+                        )}
+
+                        <form
+                          onSubmit={(event) => handleRenameTemplate(event, template.id)}
+                          className="flex flex-wrap gap-3"
+                        >
+                          <input
+                            aria-label="Edit template name"
+                            required
+                            disabled={
+                              renamingTemplate || template.status === "archived"
+                            }
+                            value={editTemplateName}
+                            onChange={(event) =>
+                              setEditTemplateName(event.target.value)
+                            }
+                            className="min-w-56 flex-1 rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-white placeholder:text-slate-500 focus:border-slate-500 focus:outline-none focus:ring-2 focus:ring-slate-600"
+                          />
+                          <Button
+                            type="submit"
+                            disabled={
+                              renamingTemplate ||
+                              template.status === "archived" ||
+                              !editTemplateName.trim()
+                            }
+                          >
+                            {renamingTemplate ? "Saving..." : "Save name"}
+                          </Button>
+                        </form>
+
+                        {template.status === "archived" ? (
+                          <p className="text-sm text-slate-500">
+                            This prompt template is archived.
+                          </p>
+                        ) : (
+                          <Button
+                            variant="secondary"
+                            disabled={archivingTemplateId === template.id}
+                            onClick={() => handleArchiveTemplate(template.id)}
+                          >
+                            {archivingTemplateId === template.id
+                              ? "Archiving..."
+                              : "Archive prompt template"}
+                          </Button>
+                        )}
+
+                        <div className="border-t border-slate-800 pt-4">
+                          <h3 className="text-sm font-semibold text-slate-300">
+                            Content
+                          </h3>
+                          <p className="mt-1 text-xs text-slate-500">
+                            Saving posts a full new version snapshot - versions are
+                            immutable.
+                          </p>
+
+                          <form
+                            onSubmit={(event) =>
+                              handleSaveTemplateVersion(event, template.id)
+                            }
+                            className="mt-3 space-y-3"
+                            noValidate
+                          >
+                            {saveTemplateVersionError && (
+                              <ErrorText message={saveTemplateVersionError} />
+                            )}
+                            {templateVersionSaved && (
+                              <p className="text-sm text-green-400">
+                                Saved as version {templateVersionSaved.version}.
+                              </p>
+                            )}
+
+                            <textarea
+                              aria-label="Template content"
+                              rows={5}
+                              maxLength={20000}
+                              required
+                              disabled={savingTemplateVersion}
+                              className="w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-white placeholder:text-slate-500 focus:border-slate-500 focus:outline-none focus:ring-2 focus:ring-slate-600"
+                              placeholder="Thanks for calling {{workspace.name}} - how can I help?"
+                              value={templateContent}
+                              onChange={(event) =>
+                                setTemplateContent(event.target.value)
+                              }
+                            />
+
+                            <Button
+                              type="submit"
+                              disabled={
+                                savingTemplateVersion || !templateContent.trim()
+                              }
+                            >
+                              {savingTemplateVersion
+                                ? "Saving..."
+                                : "Save as new version"}
+                            </Button>
+                          </form>
+                        </div>
+
+                        <div className="border-t border-slate-800 pt-4">
+                          <h3 className="text-sm font-semibold text-slate-300">
+                            Version history
+                          </h3>
+
+                          {publishTemplateVersionError && (
+                            <div className="mt-3">
+                              <ErrorText message={publishTemplateVersionError} />
+                            </div>
+                          )}
+
+                          {templateVersionsError && (
+                            <div className="mt-3">
+                              <ErrorText message={templateVersionsError} />
+                            </div>
+                          )}
+
+                          {templateVersions === null && !templateVersionsError && (
+                            <div className="mt-3">
+                              <LoadingState message="Loading versions..." />
+                            </div>
+                          )}
+
+                          {templateVersions !== null &&
+                            templateVersions.length === 0 && (
+                              <div className="mt-3">
+                                <EmptyState message="This template has no saved versions yet." />
+                              </div>
+                            )}
+
+                          {templateVersions !== null &&
+                            templateVersions.length > 0 && (
+                              <ul className="mt-3 space-y-2">
+                                {templateVersions.map((version) => {
+                                  const isCurrent =
+                                    version.id === template.current_version_id;
+
+                                  return (
+                                    <li
+                                      key={version.id}
+                                      className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-slate-800 px-3 py-2"
+                                    >
+                                      <div>
+                                        <span className="font-medium">
+                                          Version {version.version}
+                                        </span>
+                                        <span className="ml-3 text-sm text-slate-500">
+                                          {new Date(
+                                            version.created_at,
+                                          ).toLocaleString()}
+                                        </span>
+                                      </div>
+
+                                      {isCurrent ? (
+                                        <span className="rounded-full border border-green-800 px-2.5 py-0.5 text-xs font-medium text-green-300">
+                                          Current
+                                        </span>
+                                      ) : (
+                                        <Button
+                                          variant="secondary"
+                                          disabled={
+                                            template.status === "archived" ||
+                                            publishingTemplateVersion !== null
+                                          }
+                                          onClick={() =>
+                                            handlePublishTemplateVersion(
+                                              template.id,
+                                              version.version,
+                                            )
+                                          }
+                                        >
+                                          {publishingTemplateVersion ===
+                                          version.version
+                                            ? "Publishing..."
+                                            : "Publish"}
+                                        </Button>
+                                      )}
+                                    </li>
+                                  );
+                                })}
+                              </ul>
+                            )}
+
+                          {templateVersions !== null &&
+                            templateVersions.length > 1 && (
+                              <div className="mt-4 border-t border-slate-800 pt-4">
+                                <h4 className="text-sm font-semibold text-slate-300">
+                                  Compare versions
+                                </h4>
+
+                                <form
+                                  onSubmit={(event) =>
+                                    handleDiffTemplateVersions(event, template.id)
+                                  }
+                                  className="mt-3 flex flex-wrap items-end gap-3"
+                                  noValidate
+                                >
+                                  <div>
+                                    <label
+                                      htmlFor={`template_diff_from_${template.id}`}
+                                      className="block text-sm font-medium text-slate-200"
+                                    >
+                                      From
+                                    </label>
+
+                                    <select
+                                      id={`template_diff_from_${template.id}`}
+                                      className="mt-2 rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-white focus:outline-none focus:ring-2 focus:ring-slate-600"
+                                      value={templateDiffFrom}
+                                      onChange={(event) =>
+                                        setTemplateDiffFrom(event.target.value)
+                                      }
+                                    >
+                                      <option value="" disabled>
+                                        Select a version
+                                      </option>
+                                      {templateVersions.map((version) => (
+                                        <option
+                                          key={version.id}
+                                          value={version.version}
+                                        >
+                                          Version {version.version}
+                                        </option>
+                                      ))}
+                                    </select>
+                                  </div>
+
+                                  <div>
+                                    <label
+                                      htmlFor={`template_diff_to_${template.id}`}
+                                      className="block text-sm font-medium text-slate-200"
+                                    >
+                                      To
+                                    </label>
+
+                                    <select
+                                      id={`template_diff_to_${template.id}`}
+                                      className="mt-2 rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-white focus:outline-none focus:ring-2 focus:ring-slate-600"
+                                      value={templateDiffTo}
+                                      onChange={(event) =>
+                                        setTemplateDiffTo(event.target.value)
+                                      }
+                                    >
+                                      <option value="" disabled>
+                                        Select a version
+                                      </option>
+                                      {templateVersions.map((version) => (
+                                        <option
+                                          key={version.id}
+                                          value={version.version}
+                                        >
+                                          Version {version.version}
+                                        </option>
+                                      ))}
+                                    </select>
+                                  </div>
+
+                                  <Button
+                                    type="submit"
+                                    disabled={
+                                      templateDiffLoading ||
+                                      !templateDiffFrom ||
+                                      !templateDiffTo
+                                    }
+                                  >
+                                    {templateDiffLoading
+                                      ? "Comparing..."
+                                      : "Show diff"}
+                                  </Button>
+                                </form>
+
+                                {templateDiffError && (
+                                  <div className="mt-4">
+                                    <ErrorText message={templateDiffError} />
+                                  </div>
+                                )}
+
+                                {templateDiffResult &&
+                                  Object.keys(templateDiffResult.changes).length ===
+                                    0 && (
+                                    <p className="mt-4 text-sm text-slate-400">
+                                      No differences between version{" "}
+                                      {templateDiffResult.from_version} and version{" "}
+                                      {templateDiffResult.to_version}.
+                                    </p>
+                                  )}
+
+                                {templateDiffResult &&
+                                  Object.keys(templateDiffResult.changes).length >
+                                    0 && (
+                                    <div className="mt-4 overflow-x-auto">
+                                      <table className="w-full text-left text-sm">
+                                        <thead>
+                                          <tr className="text-slate-400">
+                                            <th className="pb-2 pr-4 font-medium">
+                                              Field
+                                            </th>
+                                            <th className="pb-2 pr-4 font-medium">
+                                              Version {templateDiffResult.from_version}
+                                            </th>
+                                            <th className="pb-2 font-medium">
+                                              Version {templateDiffResult.to_version}
+                                            </th>
+                                          </tr>
+                                        </thead>
+                                        <tbody>
+                                          {Object.entries(
+                                            templateDiffResult.changes,
+                                          ).map(([field, change]) => (
+                                            <tr
+                                              key={field}
+                                              className="border-t border-slate-800"
+                                            >
+                                              <td className="py-2 pr-4 font-medium">
+                                                {field}
+                                              </td>
+                                              <td className="py-2 pr-4 text-slate-400">
+                                                {formatDiffValue(change.previous)}
+                                              </td>
+                                              <td className="py-2 text-slate-200">
+                                                {formatDiffValue(change.current)}
+                                              </td>
+                                            </tr>
+                                          ))}
+                                        </tbody>
+                                      </table>
+                                    </div>
+                                  )}
+                              </div>
+                            )}
+                        </div>
+                      </div>
+                    )}
+                  </li>
+                ))}
+              </ul>
+            )}
+          </Card>
+        </div>
+        </>
       )}
 
       {activeTab === "technical" && (
