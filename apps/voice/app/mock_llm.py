@@ -31,6 +31,10 @@ class MockLLM:
         self.received_messages: list[Message] | None = None
         self.received_system: str | None = None
         self.received_temperature: float | None = None
+        # How many times stream() has been called - item 20g's retry tests
+        # assert on this directly, rather than needing a stateful mock that
+        # behaves differently per call (see this feature's spec).
+        self.call_count = 0
 
     async def stream(
         self,
@@ -39,6 +43,7 @@ class MockLLM:
         system: str,
         temperature: float,
     ) -> AsyncIterator[str]:
+        self.call_count += 1
         self.received_messages = list(messages)
         self.received_system = system
         self.received_temperature = temperature

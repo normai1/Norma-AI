@@ -37,10 +37,12 @@ from pipecat.transports.websocket.fastapi import (
     FastAPIWebsocketTransport,
 )
 
+from app import config
 from app.conversation import ConversationState, assemble_system_prompt
 from app.llm import LLMProvider, LLMProviderError
 from app.retrieval_client import fetch_retrieved_context
 from app.sentence_chunker import SentenceChunker
+from app.session_resilience import SessionResilienceTracker
 from app.turn_detection import TurnDetector
 from app.turn_metrics import TurnMetricsRecorder
 from app.turn_metrics_client import record_turn_metric
@@ -50,6 +52,13 @@ from app.turn_metrics_client import record_turn_metric
 # exactly as much as to an HTTP error response.
 _LLM_ERROR_MESSAGE = "Sorry, I'm having trouble responding right now."
 _TTS_ERROR_MESSAGE = "Sorry, I'm having trouble speaking right now."
+
+# Item 20g's one fixed apology for both failure reasons (STT or LLM) a
+# session failover can have - see the spec's Out of scope for why this is
+# deliberately not reason-specific or configurable.
+_FAILOVER_MESSAGE = (
+    "I'm sorry, I'm having trouble with the call right now. Please try again in a few minutes."
+)
 
 # Matches norma_shared/speech.py's canonical internal audio format (item
 # 9a) on the control plane - the media plane should speak the same format
@@ -124,6 +133,14 @@ class SpeechToTextProcessor(FrameProcessor):
     frame here on the (then true) assumption that nothing downstream needed
     raw audio once STT had it. Item 20c's TurnDetectionProcessor needs the
     same audio for VAD, so it no longer holds.
+
+    A failure from the provider's own stream() triggers immediate session
+    failover (item 20g), no retry - unlike a single LLM/TTS call, this is a
+    live, continuous, whole-session operation; reconnecting it mid-call
+    while replaying whatever audio arrived since the last successful chunk
+    is a materially bigger undertaking, out of scope here. Once STT itself
+    is gone the caller can never be transcribed again for the rest of the
+    call - the single most severe failure this feature addresses.
     """
 
     def __init__(
@@ -150,17 +167,28 @@ class SpeechToTextProcessor(FrameProcessor):
             yield chunk
 
     async def _run_stream(self) -> None:
-        async for event in self._provider.stream(
-            self._audio_iterator(),
-            language=self._language,
-            keywords=self._keywords,
-        ):
+        try:
+            async for event in self._provider.stream(
+                self._audio_iterator(),
+                language=self._language,
+                keywords=self._keywords,
+            ):
+                await self.push_frame(
+                    OutputTransportMessageUrgentFrame(
+                        message={
+                            "type": "transcript",
+                            "text": event.text,
+                            "is_final": event.is_final,
+                        }
+                    )
+                )
+        except SpeechProviderError:
             await self.push_frame(
                 OutputTransportMessageUrgentFrame(
                     message={
-                        "type": "transcript",
-                        "text": event.text,
-                        "is_final": event.is_final,
+                        "type": "session_failover",
+                        "reason": "stt_unavailable",
+                        "message": _FAILOVER_MESSAGE,
                     }
                 )
             )
@@ -342,6 +370,15 @@ class LLMTurnProcessor(FrameProcessor):
     keep feeding text for an abandoned reply into a freshly-reset
     SentenceChunker downstream, and this also stops wasting LLM cost on a
     reply nobody will hear.
+
+    Item 20g: each turn retries up to MAX_PROVIDER_RETRIES times, guarding
+    only the *first* delta with a timeout (a stream already producing
+    output is not hung - see this feature's spec for why a mid-stream
+    stall is a documented, out-of-scope limitation instead). A turn that
+    still fails after every retry pushes llm_error exactly as before, then
+    reports itself to the shared SessionResilienceTracker; if that crosses
+    the consecutive-failure threshold, also pushes session_failover -
+    TTSProcessor is the sole consumer of that message.
     """
 
     def __init__(
@@ -349,6 +386,7 @@ class LLMTurnProcessor(FrameProcessor):
         llm_provider: LLMProvider,
         turn_detector: TurnDetector,
         turn_metrics: TurnMetricsRecorder,
+        session_resilience: SessionResilienceTracker,
         *,
         assistant_id: uuid.UUID,
         system_prompt: str,
@@ -358,6 +396,7 @@ class LLMTurnProcessor(FrameProcessor):
         self._llm_provider = llm_provider
         self._turn_detector = turn_detector
         self._turn_metrics = turn_metrics
+        self._session_resilience = session_resilience
         self._assistant_id = assistant_id
         self._system_prompt = system_prompt
         self._creativity = creativity
@@ -390,32 +429,70 @@ class LLMTurnProcessor(FrameProcessor):
         await self.push_frame(frame, direction)
 
     async def _run_llm_turn(self, caller_text: str, generation: int) -> None:
+        # Appended once, before any retry - a retried attempt must never
+        # duplicate the caller's own message in conversation history.
+        self._conversation.append_user_turn(caller_text)
+
+        stream = None
+        first_delta: str | None = None
+
+        # Retry loop covers only "get to the first token" - nothing has
+        # been spoken yet at this point, so restarting from scratch on
+        # failure is safe. A single stream() call itself may re-fetch
+        # retrieval each attempt; cheap and already independently resilient
+        # (fetch_retrieved_context fails open on its own).
+        for attempt in range(config.MAX_PROVIDER_RETRIES + 1):
+            try:
+                retrieved_context = await fetch_retrieved_context(
+                    self._assistant_id, caller_text
+                )
+                self._turn_metrics.mark_retrieval_done(generation)
+                system = assemble_system_prompt(
+                    base_prompt=self._system_prompt, retrieved_context=retrieved_context
+                )
+                stream = self._llm_provider.stream(
+                    self._conversation.messages, system=system, temperature=self._creativity
+                )
+
+                try:
+                    first_delta = await asyncio.wait_for(
+                        stream.__anext__(), timeout=config.LLM_FIRST_TOKEN_TIMEOUT_SECONDS
+                    )
+                except StopAsyncIteration:
+                    first_delta = None
+
+                break
+            except (LLMProviderError, TimeoutError):
+                if attempt < config.MAX_PROVIDER_RETRIES:
+                    continue
+
+                await self._give_up_on_turn()
+
+                return
+
+        # From here on, a failure means something has already been (or is
+        # about to be) spoken - no retry, matching this pipeline's original,
+        # pre-20g behavior exactly: give up immediately with llm_error for
+        # whatever was said so far.
         try:
-            self._conversation.append_user_turn(caller_text)
-            retrieved_context = await fetch_retrieved_context(
-                self._assistant_id, caller_text
-            )
-            self._turn_metrics.mark_retrieval_done(generation)
-            system = assemble_system_prompt(
-                base_prompt=self._system_prompt, retrieved_context=retrieved_context
-            )
-
             reply_parts: list[str] = []
-            first_delta = True
 
-            async for delta in self._llm_provider.stream(
-                self._conversation.messages, system=system, temperature=self._creativity
-            ):
-                if first_delta:
-                    self._turn_metrics.mark_llm_first_token(generation)
-                    first_delta = False
-
-                reply_parts.append(delta)
+            if first_delta is not None:
+                self._turn_metrics.mark_llm_first_token(generation)
+                reply_parts.append(first_delta)
                 await self.push_frame(
                     OutputTransportMessageUrgentFrame(
-                        message={"type": "llm_delta", "text": delta}
+                        message={"type": "llm_delta", "text": first_delta}
                     )
                 )
+
+                async for delta in stream:
+                    reply_parts.append(delta)
+                    await self.push_frame(
+                        OutputTransportMessageUrgentFrame(
+                            message={"type": "llm_delta", "text": delta}
+                        )
+                    )
 
             full_reply = "".join(reply_parts)
             self._conversation.append_assistant_turn(full_reply)
@@ -425,10 +502,31 @@ class LLMTurnProcessor(FrameProcessor):
                     message={"type": "llm_complete", "text": full_reply}
                 )
             )
+            self._session_resilience.record_turn_succeeded()
         except LLMProviderError:
+            await self._give_up_on_turn()
+
+    async def _give_up_on_turn(self) -> None:
+        """
+        Pushes the existing llm_error message, then reports the failure to
+        the shared SessionResilienceTracker - if that crosses the
+        consecutive-failure threshold, also pushes session_failover.
+        """
+
+        await self.push_frame(
+            OutputTransportMessageUrgentFrame(
+                message={"type": "llm_error", "text": _LLM_ERROR_MESSAGE}
+            )
+        )
+
+        if self._session_resilience.record_turn_failed():
             await self.push_frame(
                 OutputTransportMessageUrgentFrame(
-                    message={"type": "llm_error", "text": _LLM_ERROR_MESSAGE}
+                    message={
+                        "type": "session_failover",
+                        "reason": "llm_unavailable",
+                        "message": _FAILOVER_MESSAGE,
+                    }
                 )
             )
 
@@ -439,6 +537,10 @@ def _is_llm_delta_message(message: object) -> bool:
 
 def _is_llm_reply_finished_message(message: object) -> bool:
     return isinstance(message, dict) and message.get("type") in ("llm_complete", "llm_error")
+
+
+def _is_session_failover_message(message: object) -> bool:
+    return isinstance(message, dict) and message.get("type") == "session_failover"
 
 
 class TTSProcessor(FrameProcessor):
@@ -570,6 +672,10 @@ class TTSProcessor(FrameProcessor):
             frame, OutputTransportMessageUrgentFrame
         ) and _is_caller_speech_started_message(frame.message):
             await self._handle_barge_in()
+        elif isinstance(
+            frame, OutputTransportMessageUrgentFrame
+        ) and _is_session_failover_message(frame.message):
+            await self._handle_session_failover(frame.message["message"])
         elif isinstance(frame, (EndFrame, CancelFrame)):
             if self._player_task is not None:
                 self._player_task.cancel()
@@ -632,6 +738,68 @@ class TTSProcessor(FrameProcessor):
         self._llm_finished = False
         self._reply_in_progress = False
         await self._reset_turn()
+
+    async def _handle_session_failover(self, apology_text: str) -> None:
+        """
+        Item 20g: the session cannot continue (SpeechToTextProcessor's
+        stream crashed, or LLMTurnProcessor's consecutive-failure threshold
+        was crossed) - pushed by either processor, this is the sole
+        consumer. Deliberately bypasses the sentence queue/chunker/
+        generation machinery entirely rather than routing through the
+        normal llm_delta/llm_complete channel: that channel carries real
+        coupling to this feature line's own turn/generation tracking (item
+        20e's _reply_in_progress, item 20f's generation-guarded marks) that
+        a synthetic, non-caller-originated "turn" would either have to fake
+        correctly or silently corrupt - see this feature's spec.
+
+        Cancels whatever reply is in flight, then attempts one bounded,
+        best-effort synthesis of the fixed apology (no retry - the session
+        is ending regardless, and a hung TTS call must not prevent the
+        pipeline from ever closing). If TTS is also unavailable, or itself
+        times out, the apology is simply skipped - EndFrame still follows,
+        since closing the session is the one thing that must always
+        eventually happen.
+        """
+
+        while not self._sentence_queue.empty():
+            self._sentence_queue.get_nowait()
+
+        if self._current_playback is not None:
+            self._current_playback.cancel()
+
+        self._chunker.reset()
+
+        try:
+            gen = self._tts_provider.synthesize(
+                apology_text, voice_id=self._voice_id, speed=self._speech_rate
+            )
+
+            try:
+                first_chunk = await asyncio.wait_for(
+                    gen.__anext__(), timeout=config.TTS_FIRST_BYTE_TIMEOUT_SECONDS
+                )
+            except StopAsyncIteration:
+                first_chunk = None
+
+            if first_chunk is not None:
+                await self.push_frame(
+                    OutputAudioRawFrame(
+                        audio=first_chunk, sample_rate=AUDIO_SAMPLE_RATE_HZ, num_channels=1
+                    )
+                )
+
+                async for chunk in gen:
+                    await self.push_frame(
+                        OutputAudioRawFrame(
+                            audio=chunk, sample_rate=AUDIO_SAMPLE_RATE_HZ, num_channels=1
+                        )
+                    )
+
+            await self.push_frame(TTSStoppedFrame())
+        except (SpeechProviderError, TimeoutError):
+            pass
+
+        await self.push_frame(EndFrame())
 
     async def _maybe_reset_after_reply(self) -> None:
         if (
@@ -737,20 +905,61 @@ class TTSProcessor(FrameProcessor):
             await self._maybe_reset_after_reply()
 
     async def _speak(self, sentence: str) -> None:
-        try:
-            async for chunk in self._tts_provider.synthesize(
-                sentence, voice_id=self._voice_id, speed=self._speech_rate
-            ):
-                # Only the *first* sentence's first chunk of the turn - this
-                # answers "time to first audio," not "time to every
-                # sentence." Guarded on _active_generation (captured once,
-                # at turn_ended) so a stale, already-superseded turn's late
-                # audio can never mark the wrong row.
-                if self._audio_marked_generation != self._active_generation:
-                    self._audio_marked_generation = self._active_generation
-                    self._turn_metrics.mark_tts_first_byte(self._active_generation)
-                    self._turn_metrics.mark_audio_out(self._active_generation)
+        gen = None
+        first_chunk: bytes | None = None
 
+        # Retry loop covers only "get to the first byte" - mirrors
+        # LLMTurnProcessor's own two-phase split and the real bug found
+        # building it (see this feature's spec): retrying a failure that
+        # happens *after* audio has already played would replay this
+        # sentence's already-spoken start.
+        for attempt in range(config.MAX_PROVIDER_RETRIES + 1):
+            try:
+                gen = self._tts_provider.synthesize(
+                    sentence, voice_id=self._voice_id, speed=self._speech_rate
+                )
+
+                try:
+                    first_chunk = await asyncio.wait_for(
+                        gen.__anext__(), timeout=config.TTS_FIRST_BYTE_TIMEOUT_SECONDS
+                    )
+                except StopAsyncIteration:
+                    return  # empty synthesis (e.g. zero-length text) - nothing to play, not an error
+
+                break
+            except (SpeechProviderError, TimeoutError):
+                if attempt < config.MAX_PROVIDER_RETRIES:
+                    continue
+
+                await self.push_frame(
+                    OutputTransportMessageUrgentFrame(
+                        message={"type": "tts_error", "text": _TTS_ERROR_MESSAGE}
+                    )
+                )
+
+                return
+
+        # From here on, a failure means audio has already played (or is
+        # about to) - no retry, matches this pipeline's original,
+        # pre-20g behavior exactly.
+        try:
+            # Only the *first* sentence's first chunk of the turn - this
+            # answers "time to first audio," not "time to every sentence."
+            # Guarded on _active_generation (captured once, at turn_ended)
+            # so a stale, already-superseded turn's late audio can never
+            # mark the wrong row.
+            if self._audio_marked_generation != self._active_generation:
+                self._audio_marked_generation = self._active_generation
+                self._turn_metrics.mark_tts_first_byte(self._active_generation)
+                self._turn_metrics.mark_audio_out(self._active_generation)
+
+            await self.push_frame(
+                OutputAudioRawFrame(
+                    audio=first_chunk, sample_rate=AUDIO_SAMPLE_RATE_HZ, num_channels=1
+                )
+            )
+
+            async for chunk in gen:
                 await self.push_frame(
                     OutputAudioRawFrame(
                         audio=chunk, sample_rate=AUDIO_SAMPLE_RATE_HZ, num_channels=1
@@ -818,6 +1027,9 @@ def build_voice_session_pipeline_worker(
 
     turn_metrics = TurnMetricsRecorder(call_id=call_id)
     turn_detection_processor = TurnDetectionProcessor(turn_detector, turn_metrics)
+    session_resilience = SessionResilienceTracker(
+        max_consecutive_failures=config.MAX_CONSECUTIVE_LLM_FAILURES
+    )
 
     pipeline = Pipeline(
         [
@@ -828,6 +1040,7 @@ def build_voice_session_pipeline_worker(
                 llm_provider,
                 turn_detector,
                 turn_metrics,
+                session_resilience,
                 assistant_id=assistant_id,
                 system_prompt=system_prompt,
                 creativity=creativity,

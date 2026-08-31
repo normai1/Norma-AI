@@ -1,4 +1,5 @@
 import json
+from concurrent.futures import CancelledError as FutureCancelledError
 
 import pytest
 from fastapi.testclient import TestClient
@@ -8,6 +9,7 @@ from pipecat.audio.vad.vad_analyzer import VADState
 
 import app.main as main_module
 import app.media_session as media_session_module
+from app import config
 from app.llm import LLMProviderUnavailable
 from app.main import app
 from app.mock_llm import MockLLM
@@ -1029,3 +1031,335 @@ def test_media_session_disconnecting_before_any_turn_starts_posts_nothing(
         ws.send_bytes(bytes(range(256)) * 5)
 
     assert calls == []
+
+
+def test_media_session_stt_crash_triggers_immediate_session_failover(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """
+    Item 20g: an STT provider that crashes mid-call - the caller is still
+    actively talking, no scripted event or fallback timeout has ended a
+    turn - must not just go silently dead. fail_without_draining lets
+    MockSTT raise without first waiting for the (never-arriving) end of a
+    live connection's audio - see its own docstring.
+    """
+
+    mock_stt = MockSTT(
+        script=[],
+        chunks_before_event=[],
+        failure=SpeechProviderUnavailable("boom"),
+        fail_without_draining=True,
+    )
+
+    monkeypatch.setattr(main_module, "get_stt_provider", lambda: mock_stt)
+    monkeypatch.setattr(main_module, "fetch_glossary_terms", _fake_fetch_glossary_terms)
+    monkeypatch.setattr(main_module, "fetch_turn_sensitivity", _fake_fetch_turn_sensitivity)
+    _patch_session_setup(monkeypatch)
+    _patch_turn_detector_vad(monkeypatch, _ScriptedVADAnalyzer([VADState.QUIET]))
+
+    assistant_id = "00000000-0000-0000-0000-000000000010"
+
+    with (
+        TestClient(app) as client,
+        client.websocket_connect(f"/media/session?assistant_id={assistant_id}") as ws,
+    ):
+        received = []
+
+        while True:
+            entry = _receive_one(ws)
+            received.append(entry)
+
+            if entry[0] == "text" and entry[1]["type"] == "session_failover":
+                break
+
+    assert all(kind == "text" for kind, _ in received)
+    text_messages = [value for _, value in received]
+    assert text_messages == [
+        {
+            "type": "session_failover",
+            "reason": "stt_unavailable",
+            "message": (
+                "I'm sorry, I'm having trouble with the call right now. "
+                "Please try again in a few minutes."
+            ),
+        }
+    ]
+
+
+def _patch_short_llm_timeout(monkeypatch: pytest.MonkeyPatch, *, seconds: float = 0.05) -> None:
+    monkeypatch.setattr(config, "LLM_FIRST_TOKEN_TIMEOUT_SECONDS", seconds)
+
+
+def test_media_session_llm_that_never_responds_is_retried_before_giving_up(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """
+    Item 20g: a provider that only ever times out (never raises) must
+    still be retried the configured number of times, not just abandoned
+    after the first attempt - proven via call_count, since MockLLM's
+    chunk_delay_seconds makes every attempt equally slow.
+    """
+
+    final = TranscriptEvent(text="What are your hours?", is_final=True)
+    mock_stt = MockSTT(script=[final], chunks_before_event=[1])
+    mock_llm = MockLLM(response="We open at nine.", chunk_delay_seconds=0.2)
+
+    monkeypatch.setattr(main_module, "get_stt_provider", lambda: mock_stt)
+    monkeypatch.setattr(main_module, "get_llm_provider", lambda: mock_llm)
+    monkeypatch.setattr(main_module, "fetch_glossary_terms", _fake_fetch_glossary_terms)
+    monkeypatch.setattr(main_module, "fetch_turn_sensitivity", _fake_fetch_turn_sensitivity)
+    _patch_session_setup(monkeypatch)
+    monkeypatch.setattr(
+        media_session_module, "fetch_retrieved_context", _fake_fetch_retrieved_context
+    )
+    _patch_turn_detector_vad(
+        monkeypatch,
+        _ScriptedVADAnalyzer([VADState.SPEAKING, VADState.QUIET, VADState.QUIET]),
+    )
+    _patch_short_llm_timeout(monkeypatch)
+
+    assistant_id = "00000000-0000-0000-0000-000000000011"
+    chunk = bytes(range(256)) * 5
+
+    with (
+        TestClient(app) as client,
+        client.websocket_connect(f"/media/session?assistant_id={assistant_id}") as ws,
+    ):
+        for _ in range(3):
+            ws.send_bytes(chunk)
+
+        received = []
+
+        while True:
+            entry = _receive_one(ws)
+            received.append(entry)
+
+            if entry[0] == "text" and entry[1]["type"] == "llm_error":
+                break
+
+    assert mock_llm.call_count == config.MAX_PROVIDER_RETRIES + 1
+    assert all(kind == "text" for kind, _ in received)
+
+
+def test_media_session_llm_failover_only_after_consecutive_failure_threshold(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """
+    Item 20g: an isolated LLM blip still just gets the existing llm_error -
+    session_failover only appears once MAX_CONSECUTIVE_LLM_FAILURES
+    *separate* turns have all failed in a row.
+    """
+
+    monkeypatch.setattr(config, "MAX_CONSECUTIVE_LLM_FAILURES", 2)
+
+    first_final = TranscriptEvent(text="First question.", is_final=True)
+    second_final = TranscriptEvent(text="Second question.", is_final=True)
+    mock_stt = MockSTT(script=[first_final, second_final], chunks_before_event=[1, 4])
+    mock_llm = MockLLM(response="We open at nine.", chunk_delay_seconds=0.2)
+
+    monkeypatch.setattr(main_module, "get_stt_provider", lambda: mock_stt)
+    monkeypatch.setattr(main_module, "get_llm_provider", lambda: mock_llm)
+    monkeypatch.setattr(main_module, "fetch_glossary_terms", _fake_fetch_glossary_terms)
+    monkeypatch.setattr(main_module, "fetch_turn_sensitivity", _fake_fetch_turn_sensitivity)
+    _patch_session_setup(monkeypatch)
+    monkeypatch.setattr(
+        media_session_module, "fetch_retrieved_context", _fake_fetch_retrieved_context
+    )
+    _patch_turn_detector_vad(
+        monkeypatch,
+        _ScriptedVADAnalyzer(
+            [
+                VADState.SPEAKING,
+                VADState.QUIET,
+                VADState.QUIET,
+                VADState.SPEAKING,
+                VADState.QUIET,
+                VADState.QUIET,
+            ]
+        ),
+    )
+    _patch_short_llm_timeout(monkeypatch)
+
+    assistant_id = "00000000-0000-0000-0000-000000000012"
+    chunk = bytes(range(256)) * 5
+    first_turn_messages = []
+    second_turn_messages = []
+
+    try:
+        with (
+            TestClient(app) as client,
+            client.websocket_connect(f"/media/session?assistant_id={assistant_id}") as ws,
+        ):
+            for _ in range(3):
+                ws.send_bytes(chunk)
+
+            while True:
+                entry = _receive_one(ws)
+                first_turn_messages.append(entry)
+
+                if entry[0] == "text" and entry[1]["type"] == "llm_error":
+                    break
+
+            for _ in range(3):
+                ws.send_bytes(chunk)
+
+            while True:
+                entry = _receive_one(ws)
+                second_turn_messages.append(entry)
+
+                if entry[0] == "text" and entry[1]["type"] == "session_failover":
+                    break
+    except FutureCancelledError:
+        # session_failover leads to TTSProcessor speaking an apology and
+        # ending the pipeline - the same server-initiated-close race
+        # test_media_session_session_failover_speaks_apology_and_closes_the_connection
+        # documents, reachable here too since this test stops reading as
+        # soon as it sees session_failover, without draining the apology
+        # and close that follow. Both message lists are already populated
+        # by this point, so the assertions below are unaffected.
+        pass
+
+    first_turn_types = [value["type"] for kind, value in first_turn_messages if kind == "text"]
+    assert "llm_error" in first_turn_types
+    assert "session_failover" not in first_turn_types
+
+    second_turn_types = [
+        value["type"] for kind, value in second_turn_messages if kind == "text"
+    ]
+    assert "llm_error" in second_turn_types
+    assert "session_failover" in second_turn_types
+
+
+def test_media_session_tts_that_never_responds_is_retried_before_giving_up(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """
+    Item 20g's TTS-side counterpart: a provider that only ever times out
+    (never raises) is still retried the configured number of times before
+    tts_error is pushed for that sentence - proven via call_count, mirroring
+    the LLM-side test above. _play_sentences's own per-sentence loop
+    (proven independently by the pre-existing tts-failure test) is
+    unchanged, so a later sentence continuing normally after this one
+    fails needs no separate proof here.
+    """
+
+    final = TranscriptEvent(text="Can you help me?", is_final=True)
+    mock_stt = MockSTT(script=[final], chunks_before_event=[1])
+    mock_llm = MockLLM(response="Sure thing.")
+    mock_tts = MockTTS(time_to_first_byte_seconds=0.2)
+
+    monkeypatch.setattr(main_module, "get_stt_provider", lambda: mock_stt)
+    monkeypatch.setattr(main_module, "get_llm_provider", lambda: mock_llm)
+    monkeypatch.setattr(main_module, "fetch_glossary_terms", _fake_fetch_glossary_terms)
+    monkeypatch.setattr(main_module, "fetch_turn_sensitivity", _fake_fetch_turn_sensitivity)
+    _patch_session_setup(monkeypatch)
+    monkeypatch.setattr(main_module, "get_tts_provider", lambda: mock_tts)
+    monkeypatch.setattr(
+        media_session_module, "fetch_retrieved_context", _fake_fetch_retrieved_context
+    )
+    _patch_turn_detector_vad(
+        monkeypatch,
+        _ScriptedVADAnalyzer([VADState.SPEAKING, VADState.QUIET, VADState.QUIET]),
+    )
+    monkeypatch.setattr(config, "TTS_FIRST_BYTE_TIMEOUT_SECONDS", 0.05)
+
+    assistant_id = "00000000-0000-0000-0000-000000000013"
+    chunk = bytes(range(256)) * 5
+
+    with (
+        TestClient(app) as client,
+        client.websocket_connect(f"/media/session?assistant_id={assistant_id}") as ws,
+    ):
+        for _ in range(3):
+            ws.send_bytes(chunk)
+
+        received = []
+
+        while True:
+            entry = _receive_one(ws)
+            received.append(entry)
+
+            if entry[0] == "text" and entry[1]["type"] == "tts_error":
+                break
+
+    assert mock_tts.call_count == config.MAX_PROVIDER_RETRIES + 1
+    assert all(kind == "text" for kind, _ in received)
+
+
+def test_media_session_session_failover_speaks_apology_and_closes_the_connection(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """
+    Item 20g's end-to-end proof, driven by the STT-crash trigger (Step 2):
+    the failover apology is actually spoken, and the WebSocket connection
+    genuinely closes server-side afterward - not just "the test stopped
+    reading." A close-type ASGI message has neither a "bytes" nor "text"
+    key, so this reads raw ws.receive() dicts directly rather than through
+    _receive_one, which would raise KeyError on exactly that message.
+
+    Verified empirically before writing this test (see this feature's
+    spec): an EndFrame pushed from inside the pipeline does not, by
+    itself, make the WebSocket close - main.py needed a new
+    on_pipeline_finished handler to actually cancel the WorkerRunner once
+    an EndFrame reaches the sink. Without that handler, this test would
+    hang instead of ever observing the close.
+    """
+
+    mock_stt = MockSTT(
+        script=[],
+        chunks_before_event=[],
+        failure=SpeechProviderUnavailable("boom"),
+        fail_without_draining=True,
+    )
+    mock_tts = MockTTS()
+
+    monkeypatch.setattr(main_module, "get_stt_provider", lambda: mock_stt)
+    monkeypatch.setattr(main_module, "fetch_glossary_terms", _fake_fetch_glossary_terms)
+    monkeypatch.setattr(main_module, "fetch_turn_sensitivity", _fake_fetch_turn_sensitivity)
+    _patch_session_setup(monkeypatch)
+    monkeypatch.setattr(main_module, "get_tts_provider", lambda: mock_tts)
+    _patch_turn_detector_vad(monkeypatch, _ScriptedVADAnalyzer([VADState.QUIET]))
+
+    assistant_id = "00000000-0000-0000-0000-000000000014"
+    received = []
+
+    try:
+        with (
+            TestClient(app) as client,
+            client.websocket_connect(f"/media/session?assistant_id={assistant_id}") as ws,
+        ):
+            while True:
+                message = ws.receive()
+
+                if message["type"] == "websocket.close":
+                    break
+
+                if "bytes" in message:
+                    received.append(("bytes", message["bytes"]))
+                else:
+                    received.append(("text", json.loads(message["text"])))
+    except FutureCancelledError:
+        # TestClient's own __exit__ can intermittently raise this when the
+        # *server* (not the client) initiates the close - verified this is
+        # a test-harness-only artifact, not a real bug: a standalone script
+        # against a real session (see this feature's spec) confirmed the
+        # server-side close behavior itself is correct, and a real
+        # deployment has no analogous "check a background future's result"
+        # step for Uvicorn to race against. received is populated before
+        # this can happen, so the assertions below still run against
+        # whatever was actually captured.
+        pass
+
+    assert received[0] == (
+        "text",
+        {
+            "type": "session_failover",
+            "reason": "stt_unavailable",
+            "message": (
+                "I'm sorry, I'm having trouble with the call right now. "
+                "Please try again in a few minutes."
+            ),
+        },
+    )
+    assert any(kind == "bytes" for kind, _ in received)
+    assert mock_tts.call_count == 1

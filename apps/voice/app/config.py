@@ -36,3 +36,19 @@ ANTHROPIC_API_KEY = os.environ.get("ANTHROPIC_API_KEY", "")
 # Empty means "use the SDK default" - only set for a proxy or custom
 # endpoint.
 ANTHROPIC_BASE_URL = os.environ.get("ANTHROPIC_BASE_URL", "")
+
+# Item 20g's resilience constants. Only the *first* token/first byte is
+# guarded - a stream that already produced output is not hung - see
+# app/media_session.py's TTSProcessor/LLMTurnProcessor docstrings.
+LLM_FIRST_TOKEN_TIMEOUT_SECONDS = float(
+    os.environ.get("LLM_FIRST_TOKEN_TIMEOUT_SECONDS", "8.0")
+)
+TTS_FIRST_BYTE_TIMEOUT_SECONDS = float(os.environ.get("TTS_FIRST_BYTE_TIMEOUT_SECONDS", "5.0"))
+
+# One retry (two total attempts) before giving up on a single LLM turn or
+# TTS sentence.
+MAX_PROVIDER_RETRIES = int(os.environ.get("MAX_PROVIDER_RETRIES", "1"))
+
+# How many *consecutive* fully-failed LLM turns trigger session failover -
+# a single isolated blip still just gets the existing llm_error message.
+MAX_CONSECUTIVE_LLM_FAILURES = int(os.environ.get("MAX_CONSECUTIVE_LLM_FAILURES", "2"))

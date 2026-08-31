@@ -66,14 +66,14 @@
 
 ### Real-time voice engine
 
-- [ ] 20. **Real-time voice session engine** - the core product. Sub-items are independent build slices but the item is only complete when a full spoken conversation works end to end
+- [x] 20. **Real-time voice session engine** - the core product. Sub-items are independent build slices but the item is only complete when a full spoken conversation works end to end
   - [x] 20a. **Framework selection and media transport** - evaluate LiveKit Agents against Pipecat, record the decision, and establish bidirectional streaming audio behind Norma's own interfaces
   - [x] 20b. **Streaming STT integration** - partial and final transcripts with glossary biasing
   - [x] 20c. **Turn detection** - VAD plus semantic end-of-turn classification with operator-configurable sensitivity
   - [x] 20d. **LLM turn loop** - realtime model streaming, assistant configuration and retrieved context assembly, conversation state
   - [x] 20e. **Streaming TTS and barge-in** - sentence-chunked playback starting before the LLM finishes, with immediate cancellation on caller speech
   - [x] 20f. **Latency instrumentation** - per-turn TurnMetric rows across every leg, with a p95 budget enforced in CI
-  - [ ] 20g. **Session resilience** - provider timeouts, retries, and failover to forwarding or message-taking instead of dead air
+  - [x] 20g. **Session resilience** - provider timeouts, retries, and failover to forwarding or message-taking instead of dead air
 - [ ] 21. **In-browser test call** - operators talk to an assistant from the assistant editor with no phone number required, over WebRTC or WebSocket audio
 - [ ] 22. **Voice pipeline test harness** - fixture-audio conversation replay against the full pipeline with mock providers, plus barge-in and turn-detection behavioural tests
 

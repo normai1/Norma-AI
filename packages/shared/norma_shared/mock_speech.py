@@ -22,6 +22,14 @@ class MockSTT:
     integer per script entry, "consume this many audio chunks before
     yielding this event" - switches to interleaved mode instead, so a
     test can prove ordering between audio arrival and transcript events.
+
+    A scripted failure is only ever raised after the audio iterator is
+    fully drained (the caller has stopped sending audio), matching a real
+    provider's contract - but that makes it unusable for testing a
+    provider crash *while the caller is still actively talking* (item
+    20g's session-failover path), since a live connection's audio never
+    ends on its own. fail_without_draining opts out of that drain for
+    exactly that case.
     """
 
     def __init__(
@@ -31,6 +39,7 @@ class MockSTT:
         chunks_before_event: Sequence[int] | None = None,
         event_delay_seconds: float = 0.0,
         failure: SpeechProviderError | None = None,
+        fail_without_draining: bool = False,
     ) -> None:
         self._script = list(script)
         self._chunks_before_event = (
@@ -38,6 +47,7 @@ class MockSTT:
         )
         self._event_delay_seconds = event_delay_seconds
         self._failure = failure
+        self._fail_without_draining = fail_without_draining
         # Records the keywords argument of the most recent stream() call, for
         # a test to assert glossary terms actually reached the provider -
         # mirrors MockEmbeddingProvider.embedded_texts's exact precedent.
@@ -56,8 +66,9 @@ class MockSTT:
             # The scripted transcript does not depend on the audio content,
             # but draining the iterator matches a real provider's contract:
             # the caller is streaming audio in, not just waiting on output.
-            async for _ in audio:
-                pass
+            if not self._fail_without_draining:
+                async for _ in audio:
+                    pass
 
             for event in self._script:
                 if self._event_delay_seconds:
@@ -89,8 +100,9 @@ class MockSTT:
 
             yield event
 
-        async for _ in audio_iterator:
-            pass
+        if not self._fail_without_draining:
+            async for _ in audio_iterator:
+                pass
 
         if self._failure is not None:
             raise self._failure
@@ -119,6 +131,10 @@ class MockTTS:
         self._time_to_first_byte_seconds = time_to_first_byte_seconds
         self._failure = failure
         self.cancelled = False
+        # How many times synthesize() has been called - item 20g's retry
+        # tests assert on this directly, mirroring MockLLM.call_count's
+        # exact precedent.
+        self.call_count = 0
 
     async def synthesize(
         self,
@@ -127,6 +143,8 @@ class MockTTS:
         voice_id: str,
         speed: float = 1.0,
     ) -> AsyncIterator[bytes]:
+        self.call_count += 1
+
         if self._failure is not None:
             raise self._failure
 

@@ -1,6 +1,7 @@
 import uuid
 
 from fastapi import FastAPI, WebSocket
+from pipecat.frames.frames import EndFrame
 from pipecat.workers.runner import WorkerRunner
 
 from app.glossary_client import fetch_glossary_terms
@@ -79,5 +80,27 @@ async def media_session(
     )
     runner = WorkerRunner(handle_sigint=False)
     await runner.add_workers(worker)
+
+    @worker.event_handler("on_pipeline_finished")
+    async def _on_pipeline_finished(_worker: object, frame: object) -> None:
+        # Item 20g: an EndFrame pushed from *inside* the pipeline (a
+        # session-failover apology finishing) reaches the sink and ends the
+        # pipeline's own internal processing, but the WorkerRunner itself
+        # only stops on an *external* signal - runner.run() below would
+        # otherwise never return, and the WebSocket would never close.
+        # Verified empirically: without this handler, the connection hangs
+        # indefinitely once EndFrame reaches the end of the pipeline,
+        # confirmed via a direct receive-loop script against a real
+        # session. runner.end() (graceful), not runner.cancel() (abrupt) -
+        # cancel() was tried first and, while it does close the connection,
+        # it does so by cancelling the runner's own task, which surfaced as
+        # a raw CancelledError out of TestClient's __exit__ in the test
+        # suite; end() is the semantically-correct call for a pipeline that
+        # is ending on its own terms, and does not have that problem.
+        # StopFrame/CancelFrame terminal states already have their own
+        # external trigger (a caller disconnecting), so only EndFrame needs
+        # this.
+        if isinstance(frame, EndFrame):
+            await runner.end(reason="session ended")
 
     await runner.run()
