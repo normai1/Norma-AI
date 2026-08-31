@@ -97,6 +97,41 @@ export function StatusBadge({ status }: { status: string }) {
   );
 }
 
+export function Tabs<TKey extends string>({
+  items,
+  activeKey,
+  onChange,
+}: {
+  items: readonly { key: TKey; label: string }[];
+  activeKey: TKey;
+  onChange: (key: TKey) => void;
+}) {
+  return (
+    <div role="tablist" className="flex gap-6 border-b border-slate-800">
+      {items.map((item) => {
+        const active = item.key === activeKey;
+
+        return (
+          <button
+            key={item.key}
+            type="button"
+            role="tab"
+            aria-selected={active}
+            onClick={() => onChange(item.key)}
+            className={`-mb-px border-b-2 px-1 py-3 text-sm font-medium transition ${
+              active
+                ? "border-white text-white"
+                : "border-transparent text-slate-400 hover:text-slate-200"
+            }`}
+          >
+            {item.label}
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
 type ButtonProps = ButtonHTMLAttributes<HTMLButtonElement> & {
   variant?: "primary" | "secondary" | "danger";
 };

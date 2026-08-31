@@ -12,6 +12,7 @@ import {
   ErrorText,
   LoadingState,
   PageShell,
+  Tabs,
 } from "@/components/organizations/ui";
 import {
   archiveAssistant,
@@ -41,6 +42,15 @@ const STATUS_TONE: Record<string, string> = {
   archived: "border-slate-800 text-slate-500",
 };
 
+const EDITOR_TABS = [
+  { key: "general", label: "General" },
+  { key: "knowledge", label: "Knowledge" },
+  { key: "customPrompt", label: "Custom Prompt" },
+  { key: "technical", label: "Technical" },
+] as const;
+
+type EditorTabKey = (typeof EDITOR_TABS)[number]["key"];
+
 function formatDiffValue(value: unknown): string {
   return value === null || value === undefined ? "(none)" : String(value);
 }
@@ -67,6 +77,8 @@ export default function AssistantEditorPage() {
 
   const [assistant, setAssistant] = useState<Assistant | null>(null);
   const [error, setError] = useState<string | null>(null);
+
+  const [activeTab, setActiveTab] = useState<EditorTabKey>("general");
 
   const [name, setName] = useState("");
   const [renaming, setRenaming] = useState(false);
@@ -678,6 +690,11 @@ export default function AssistantEditorPage() {
       </Card>
 
       <div className="mt-8">
+        <Tabs items={EDITOR_TABS} activeKey={activeTab} onChange={setActiveTab} />
+      </div>
+
+      {activeTab === "general" && (
+      <div className="mt-6">
         <Card>
           <h2 className="text-lg font-semibold">Configuration</h2>
           <p className="mt-1 text-sm text-slate-400">
@@ -805,103 +822,6 @@ export default function AssistantEditorPage() {
                 />
               </div>
 
-              <details className="rounded-lg border border-slate-800 px-4 py-3">
-                <summary className="cursor-pointer text-sm font-medium text-slate-300">
-                  Advanced
-                </summary>
-
-                <div className="mt-4 space-y-4">
-                  <div>
-                    <label
-                      htmlFor="speech_rate"
-                      className="block text-sm font-medium text-slate-200"
-                    >
-                      Speech rate
-                    </label>
-
-                    <input
-                      id="speech_rate"
-                      type="number"
-                      min={0.5}
-                      max={2}
-                      step={0.1}
-                      disabled={savingVersion}
-                      className="mt-2 w-32 rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-white focus:outline-none focus:ring-2 focus:ring-slate-600"
-                      value={speechRate}
-                      onChange={(event) =>
-                        setSpeechRate(event.target.valueAsNumber)
-                      }
-                    />
-                  </div>
-
-                  <div>
-                    <label
-                      htmlFor="turn_sensitivity"
-                      className="block text-sm font-medium text-slate-200"
-                    >
-                      Turn sensitivity
-                    </label>
-
-                    <input
-                      id="turn_sensitivity"
-                      type="number"
-                      min={0}
-                      max={1}
-                      step={0.05}
-                      disabled={savingVersion}
-                      className="mt-2 w-32 rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-white focus:outline-none focus:ring-2 focus:ring-slate-600"
-                      value={turnSensitivity}
-                      onChange={(event) =>
-                        setTurnSensitivity(event.target.valueAsNumber)
-                      }
-                    />
-                  </div>
-
-                  <div>
-                    <label
-                      htmlFor="creativity"
-                      className="block text-sm font-medium text-slate-200"
-                    >
-                      Creativity
-                    </label>
-
-                    <input
-                      id="creativity"
-                      type="number"
-                      min={0}
-                      max={1}
-                      step={0.05}
-                      disabled={savingVersion}
-                      className="mt-2 w-32 rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-white focus:outline-none focus:ring-2 focus:ring-slate-600"
-                      value={creativity}
-                      onChange={(event) =>
-                        setCreativity(event.target.valueAsNumber)
-                      }
-                    />
-                  </div>
-
-                  <div>
-                    <label
-                      htmlFor="ambient_sound"
-                      className="block text-sm font-medium text-slate-200"
-                    >
-                      Ambient sound
-                    </label>
-
-                    <input
-                      id="ambient_sound"
-                      type="text"
-                      maxLength={255}
-                      disabled={savingVersion}
-                      className="mt-2 w-full max-w-md rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-white placeholder:text-slate-500 focus:border-slate-500 focus:outline-none focus:ring-2 focus:ring-slate-600"
-                      placeholder="Optional - e.g. office"
-                      value={ambientSound}
-                      onChange={(event) => setAmbientSound(event.target.value)}
-                    />
-                  </div>
-                </div>
-              </details>
-
               <Button
                 type="submit"
                 disabled={savingVersion || !voiceId || !greeting.trim()}
@@ -912,6 +832,353 @@ export default function AssistantEditorPage() {
           )}
         </Card>
       </div>
+      )}
+
+      {activeTab === "knowledge" && (
+        <div className="mt-6">
+          <Card>
+            <EmptyState message="Knowledge management is coming soon." />
+          </Card>
+        </div>
+      )}
+
+      {activeTab === "customPrompt" && (
+        <div className="mt-6">
+          <Card>
+            <EmptyState message="Prompt template selection is coming soon." />
+          </Card>
+        </div>
+      )}
+
+      {activeTab === "technical" && (
+        <div className="mt-6 space-y-8">
+          <Card>
+            <h2 className="text-lg font-semibold">Speech behavior</h2>
+            <p className="mt-1 text-sm text-slate-400">
+              Saving posts a full new version snapshot - versions are immutable.
+            </p>
+
+            {versionError && (
+              <div className="mt-4">
+                <ErrorText message={versionError} />
+              </div>
+            )}
+            {versionSaved && (
+              <p className="mt-4 text-sm text-green-400">
+                Saved as version {versionSaved.version}.
+              </p>
+            )}
+
+            <form onSubmit={handleSaveVersion} className="mt-4 space-y-4" noValidate>
+              <div>
+                <label
+                  htmlFor="speech_rate"
+                  className="block text-sm font-medium text-slate-200"
+                >
+                  Speech rate
+                </label>
+
+                <input
+                  id="speech_rate"
+                  type="number"
+                  min={0.5}
+                  max={2}
+                  step={0.1}
+                  disabled={savingVersion}
+                  className="mt-2 w-32 rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-white focus:outline-none focus:ring-2 focus:ring-slate-600"
+                  value={speechRate}
+                  onChange={(event) =>
+                    setSpeechRate(event.target.valueAsNumber)
+                  }
+                />
+              </div>
+
+              <div>
+                <label
+                  htmlFor="turn_sensitivity"
+                  className="block text-sm font-medium text-slate-200"
+                >
+                  Turn sensitivity
+                </label>
+
+                <input
+                  id="turn_sensitivity"
+                  type="number"
+                  min={0}
+                  max={1}
+                  step={0.05}
+                  disabled={savingVersion}
+                  className="mt-2 w-32 rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-white focus:outline-none focus:ring-2 focus:ring-slate-600"
+                  value={turnSensitivity}
+                  onChange={(event) =>
+                    setTurnSensitivity(event.target.valueAsNumber)
+                  }
+                />
+              </div>
+
+              <div>
+                <label
+                  htmlFor="creativity"
+                  className="block text-sm font-medium text-slate-200"
+                >
+                  Creativity
+                </label>
+
+                <input
+                  id="creativity"
+                  type="number"
+                  min={0}
+                  max={1}
+                  step={0.05}
+                  disabled={savingVersion}
+                  className="mt-2 w-32 rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-white focus:outline-none focus:ring-2 focus:ring-slate-600"
+                  value={creativity}
+                  onChange={(event) =>
+                    setCreativity(event.target.valueAsNumber)
+                  }
+                />
+              </div>
+
+              <div>
+                <label
+                  htmlFor="ambient_sound"
+                  className="block text-sm font-medium text-slate-200"
+                >
+                  Ambient sound
+                </label>
+
+                <input
+                  id="ambient_sound"
+                  type="text"
+                  maxLength={255}
+                  disabled={savingVersion}
+                  className="mt-2 w-full max-w-md rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-white placeholder:text-slate-500 focus:border-slate-500 focus:outline-none focus:ring-2 focus:ring-slate-600"
+                  placeholder="Optional - e.g. office"
+                  value={ambientSound}
+                  onChange={(event) => setAmbientSound(event.target.value)}
+                />
+              </div>
+
+              <Button
+                type="submit"
+                disabled={savingVersion || !voiceId || !greeting.trim()}
+              >
+                {savingVersion ? "Saving..." : "Save as new version"}
+              </Button>
+            </form>
+          </Card>
+
+          <Card>
+            <h2 className="text-lg font-semibold">Technical Terms</h2>
+            <p className="mt-1 text-sm text-slate-400">
+              Terms, meanings, and phonetic pronunciation overrides for this assistant.
+            </p>
+
+            {deleteError && (
+              <div className="mt-4">
+                <ErrorText message={deleteError} />
+              </div>
+            )}
+
+            {glossaryError && (
+              <div className="mt-4">
+                <ErrorText message={glossaryError} />
+              </div>
+            )}
+
+            {glossaryEntries === null && !glossaryError && (
+              <div className="mt-4">
+                <LoadingState message="Loading technical terms..." />
+              </div>
+            )}
+
+            {glossaryEntries !== null && glossaryEntries.length === 0 && (
+              <div className="mt-4">
+                <EmptyState message="No technical terms yet. Add one below to get started." />
+              </div>
+            )}
+
+            {glossaryEntries !== null && glossaryEntries.length > 0 && (
+              <ul className="mt-4 space-y-3">
+                {glossaryEntries.map((entry) =>
+                  editingId === entry.id ? (
+                    <li
+                      key={entry.id}
+                      className="rounded-xl border border-slate-800 px-4 py-3"
+                    >
+                      {editError && (
+                        <div className="mb-3">
+                          <ErrorText message={editError} />
+                        </div>
+                      )}
+
+                      <div className="flex flex-wrap gap-3">
+                        <input
+                          aria-label="Edit term"
+                          className="min-w-40 flex-1 rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-white focus:border-slate-500 focus:outline-none focus:ring-2 focus:ring-slate-600"
+                          required
+                          disabled={savingEdit}
+                          value={editTerm}
+                          onChange={(event) => setEditTerm(event.target.value)}
+                        />
+
+                        <input
+                          aria-label="Edit meaning"
+                          className="min-w-48 flex-1 rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-white placeholder:text-slate-500 focus:border-slate-500 focus:outline-none focus:ring-2 focus:ring-slate-600"
+                          placeholder="Meaning (optional)"
+                          disabled={savingEdit}
+                          value={editMeaning}
+                          onChange={(event) => setEditMeaning(event.target.value)}
+                        />
+
+                        <input
+                          aria-label="Edit phonetic spelling"
+                          className="min-w-40 flex-1 rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-white placeholder:text-slate-500 focus:border-slate-500 focus:outline-none focus:ring-2 focus:ring-slate-600"
+                          placeholder="Phonetic spelling (optional)"
+                          disabled={savingEdit}
+                          value={editPhoneticSpelling}
+                          onChange={(event) =>
+                            setEditPhoneticSpelling(event.target.value)
+                          }
+                        />
+
+                        <input
+                          aria-label="Edit boost weight"
+                          type="number"
+                          min={0}
+                          max={1}
+                          step={0.05}
+                          className="w-28 rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-white focus:outline-none focus:ring-2 focus:ring-slate-600"
+                          disabled={savingEdit}
+                          value={editBoostWeight}
+                          onChange={(event) =>
+                            setEditBoostWeight(event.target.valueAsNumber)
+                          }
+                        />
+                      </div>
+
+                      <div className="mt-3 flex gap-3">
+                        <Button
+                          disabled={savingEdit || !editTerm.trim()}
+                          onClick={() => handleSaveEdit(entry.id)}
+                        >
+                          {savingEdit ? "Saving..." : "Save"}
+                        </Button>
+                        <Button
+                          variant="secondary"
+                          disabled={savingEdit}
+                          onClick={handleCancelEdit}
+                        >
+                          Cancel
+                        </Button>
+                      </div>
+                    </li>
+                  ) : (
+                    <li
+                      key={entry.id}
+                      className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-slate-800 px-4 py-3"
+                    >
+                      <div>
+                        <span className="font-medium">{entry.term}</span>
+                        {entry.meaning && (
+                          <span className="ml-3 text-sm text-slate-400">
+                            {entry.meaning}
+                          </span>
+                        )}
+                        {entry.phonetic_spelling && (
+                          <span className="ml-3 text-sm text-slate-500">
+                            /{entry.phonetic_spelling}/
+                          </span>
+                        )}
+                        <span className="ml-3 text-sm text-slate-500">
+                          boost {entry.stt_boost_weight}
+                        </span>
+                      </div>
+
+                      <div className="flex gap-2">
+                        <Button
+                          variant="secondary"
+                          disabled={deletingId === entry.id}
+                          onClick={() => handleStartEdit(entry)}
+                        >
+                          Edit
+                        </Button>
+                        <Button
+                          variant="secondary"
+                          disabled={deletingId === entry.id}
+                          onClick={() => handleDeleteEntry(entry.id)}
+                        >
+                          {deletingId === entry.id ? "Deleting..." : "Delete"}
+                        </Button>
+                      </div>
+                    </li>
+                  ),
+                )}
+              </ul>
+            )}
+
+            <form
+              onSubmit={handleCreateEntry}
+              className="mt-6 border-t border-slate-800 pt-4"
+              noValidate
+            >
+              <h3 className="text-sm font-semibold text-slate-300">Add entry</h3>
+
+              {createEntryError && (
+                <div className="mt-3">
+                  <ErrorText message={createEntryError} />
+                </div>
+              )}
+
+              <div className="mt-3 flex flex-wrap gap-3">
+                <input
+                  aria-label="Term"
+                  className="min-w-40 flex-1 rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-white placeholder:text-slate-500 focus:border-slate-500 focus:outline-none focus:ring-2 focus:ring-slate-600"
+                  placeholder="Term"
+                  required
+                  disabled={creatingEntry}
+                  value={newTerm}
+                  onChange={(event) => setNewTerm(event.target.value)}
+                />
+
+                <input
+                  aria-label="Meaning"
+                  className="min-w-48 flex-1 rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-white placeholder:text-slate-500 focus:border-slate-500 focus:outline-none focus:ring-2 focus:ring-slate-600"
+                  placeholder="Meaning (optional)"
+                  disabled={creatingEntry}
+                  value={newMeaning}
+                  onChange={(event) => setNewMeaning(event.target.value)}
+                />
+
+                <input
+                  aria-label="Phonetic spelling"
+                  className="min-w-40 flex-1 rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-white placeholder:text-slate-500 focus:border-slate-500 focus:outline-none focus:ring-2 focus:ring-slate-600"
+                  placeholder="Phonetic spelling (optional)"
+                  disabled={creatingEntry}
+                  value={newPhoneticSpelling}
+                  onChange={(event) => setNewPhoneticSpelling(event.target.value)}
+                />
+
+                <input
+                  aria-label="Boost weight"
+                  type="number"
+                  min={0}
+                  max={1}
+                  step={0.05}
+                  className="w-28 rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-white focus:outline-none focus:ring-2 focus:ring-slate-600"
+                  disabled={creatingEntry}
+                  value={newBoostWeight}
+                  onChange={(event) => setNewBoostWeight(event.target.valueAsNumber)}
+                />
+
+                <Button type="submit" disabled={creatingEntry || !newTerm.trim()}>
+                  {creatingEntry ? "Adding..." : "Add"}
+                </Button>
+              </div>
+            </form>
+          </Card>
+        </div>
+      )}
 
       <div className="mt-8">
         <Card>
@@ -1095,217 +1362,6 @@ export default function AssistantEditorPage() {
         </Card>
       </div>
 
-      <div className="mt-8">
-        <Card>
-          <h2 className="text-lg font-semibold">Glossary</h2>
-          <p className="mt-1 text-sm text-slate-400">
-            Terms, meanings, and phonetic pronunciation overrides for this assistant.
-          </p>
-
-          {deleteError && (
-            <div className="mt-4">
-              <ErrorText message={deleteError} />
-            </div>
-          )}
-
-          {glossaryError && (
-            <div className="mt-4">
-              <ErrorText message={glossaryError} />
-            </div>
-          )}
-
-          {glossaryEntries === null && !glossaryError && (
-            <div className="mt-4">
-              <LoadingState message="Loading glossary..." />
-            </div>
-          )}
-
-          {glossaryEntries !== null && glossaryEntries.length === 0 && (
-            <div className="mt-4">
-              <EmptyState message="No glossary entries yet. Add one below to get started." />
-            </div>
-          )}
-
-          {glossaryEntries !== null && glossaryEntries.length > 0 && (
-            <ul className="mt-4 space-y-3">
-              {glossaryEntries.map((entry) =>
-                editingId === entry.id ? (
-                  <li
-                    key={entry.id}
-                    className="rounded-xl border border-slate-800 px-4 py-3"
-                  >
-                    {editError && (
-                      <div className="mb-3">
-                        <ErrorText message={editError} />
-                      </div>
-                    )}
-
-                    <div className="flex flex-wrap gap-3">
-                      <input
-                        aria-label="Edit term"
-                        className="min-w-40 flex-1 rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-white focus:border-slate-500 focus:outline-none focus:ring-2 focus:ring-slate-600"
-                        required
-                        disabled={savingEdit}
-                        value={editTerm}
-                        onChange={(event) => setEditTerm(event.target.value)}
-                      />
-
-                      <input
-                        aria-label="Edit meaning"
-                        className="min-w-48 flex-1 rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-white placeholder:text-slate-500 focus:border-slate-500 focus:outline-none focus:ring-2 focus:ring-slate-600"
-                        placeholder="Meaning (optional)"
-                        disabled={savingEdit}
-                        value={editMeaning}
-                        onChange={(event) => setEditMeaning(event.target.value)}
-                      />
-
-                      <input
-                        aria-label="Edit phonetic spelling"
-                        className="min-w-40 flex-1 rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-white placeholder:text-slate-500 focus:border-slate-500 focus:outline-none focus:ring-2 focus:ring-slate-600"
-                        placeholder="Phonetic spelling (optional)"
-                        disabled={savingEdit}
-                        value={editPhoneticSpelling}
-                        onChange={(event) =>
-                          setEditPhoneticSpelling(event.target.value)
-                        }
-                      />
-
-                      <input
-                        aria-label="Edit boost weight"
-                        type="number"
-                        min={0}
-                        max={1}
-                        step={0.05}
-                        className="w-28 rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-white focus:outline-none focus:ring-2 focus:ring-slate-600"
-                        disabled={savingEdit}
-                        value={editBoostWeight}
-                        onChange={(event) =>
-                          setEditBoostWeight(event.target.valueAsNumber)
-                        }
-                      />
-                    </div>
-
-                    <div className="mt-3 flex gap-3">
-                      <Button
-                        disabled={savingEdit || !editTerm.trim()}
-                        onClick={() => handleSaveEdit(entry.id)}
-                      >
-                        {savingEdit ? "Saving..." : "Save"}
-                      </Button>
-                      <Button
-                        variant="secondary"
-                        disabled={savingEdit}
-                        onClick={handleCancelEdit}
-                      >
-                        Cancel
-                      </Button>
-                    </div>
-                  </li>
-                ) : (
-                  <li
-                    key={entry.id}
-                    className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-slate-800 px-4 py-3"
-                  >
-                    <div>
-                      <span className="font-medium">{entry.term}</span>
-                      {entry.meaning && (
-                        <span className="ml-3 text-sm text-slate-400">
-                          {entry.meaning}
-                        </span>
-                      )}
-                      {entry.phonetic_spelling && (
-                        <span className="ml-3 text-sm text-slate-500">
-                          /{entry.phonetic_spelling}/
-                        </span>
-                      )}
-                      <span className="ml-3 text-sm text-slate-500">
-                        boost {entry.stt_boost_weight}
-                      </span>
-                    </div>
-
-                    <div className="flex gap-2">
-                      <Button
-                        variant="secondary"
-                        disabled={deletingId === entry.id}
-                        onClick={() => handleStartEdit(entry)}
-                      >
-                        Edit
-                      </Button>
-                      <Button
-                        variant="secondary"
-                        disabled={deletingId === entry.id}
-                        onClick={() => handleDeleteEntry(entry.id)}
-                      >
-                        {deletingId === entry.id ? "Deleting..." : "Delete"}
-                      </Button>
-                    </div>
-                  </li>
-                ),
-              )}
-            </ul>
-          )}
-
-          <form
-            onSubmit={handleCreateEntry}
-            className="mt-6 border-t border-slate-800 pt-4"
-            noValidate
-          >
-            <h3 className="text-sm font-semibold text-slate-300">Add entry</h3>
-
-            {createEntryError && (
-              <div className="mt-3">
-                <ErrorText message={createEntryError} />
-              </div>
-            )}
-
-            <div className="mt-3 flex flex-wrap gap-3">
-              <input
-                aria-label="Term"
-                className="min-w-40 flex-1 rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-white placeholder:text-slate-500 focus:border-slate-500 focus:outline-none focus:ring-2 focus:ring-slate-600"
-                placeholder="Term"
-                required
-                disabled={creatingEntry}
-                value={newTerm}
-                onChange={(event) => setNewTerm(event.target.value)}
-              />
-
-              <input
-                aria-label="Meaning"
-                className="min-w-48 flex-1 rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-white placeholder:text-slate-500 focus:border-slate-500 focus:outline-none focus:ring-2 focus:ring-slate-600"
-                placeholder="Meaning (optional)"
-                disabled={creatingEntry}
-                value={newMeaning}
-                onChange={(event) => setNewMeaning(event.target.value)}
-              />
-
-              <input
-                aria-label="Phonetic spelling"
-                className="min-w-40 flex-1 rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-white placeholder:text-slate-500 focus:border-slate-500 focus:outline-none focus:ring-2 focus:ring-slate-600"
-                placeholder="Phonetic spelling (optional)"
-                disabled={creatingEntry}
-                value={newPhoneticSpelling}
-                onChange={(event) => setNewPhoneticSpelling(event.target.value)}
-              />
-
-              <input
-                aria-label="Boost weight"
-                type="number"
-                min={0}
-                max={1}
-                step={0.05}
-                className="w-28 rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-white focus:outline-none focus:ring-2 focus:ring-slate-600"
-                disabled={creatingEntry}
-                value={newBoostWeight}
-                onChange={(event) => setNewBoostWeight(event.target.valueAsNumber)}
-              />
-
-              <Button type="submit" disabled={creatingEntry || !newTerm.trim()}>
-                {creatingEntry ? "Adding..." : "Add"}
-              </Button>
-            </div>
-          </form>
-        </Card>
-      </div>
     </PageShell>
   );
 }
