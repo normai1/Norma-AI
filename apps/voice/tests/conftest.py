@@ -70,17 +70,35 @@ class _ScriptedVADAnalyzer:
         return state
 
 
-def _patch_turn_detector_vad(monkeypatch: pytest.MonkeyPatch, vad_analyzer) -> None:
+def _patch_turn_detector_vad(
+    monkeypatch: pytest.MonkeyPatch,
+    vad_analyzer,
+    *,
+    clock=None,
+) -> None:
     """
     Substitutes a scripted VAD analyzer into every TurnDetector this test
     creates, without touching the real pipeline construction otherwise -
     the real SileroVADAnalyzer must never load in the test suite.
+
+    clock (build-plan item 22) optionally substitutes TurnDetector's own
+    injectable clock the same way, so a test can exercise
+    FALLBACK_TIMEOUT_SECONDS deterministically through the real pipeline
+    instead of a real multi-second sleep -
+    build_voice_session_pipeline_worker never needed a clock parameter of
+    its own for this, since this same constructor-wrapping technique
+    already reaches every TurnDetector the pipeline creates. None (the
+    default) leaves TurnDetector's own default (time.monotonic) in place.
     """
 
     real_turn_detector = media_session_module.TurnDetector
 
     def _fake_turn_detector(**kwargs):
-        return real_turn_detector(**{**kwargs, "vad_analyzer": vad_analyzer})
+        overrides = {"vad_analyzer": vad_analyzer}
+        if clock is not None:
+            overrides["clock"] = clock
+
+        return real_turn_detector(**{**kwargs, **overrides})
 
     monkeypatch.setattr(media_session_module, "TurnDetector", _fake_turn_detector)
 

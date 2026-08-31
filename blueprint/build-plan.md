@@ -77,7 +77,7 @@
 - [x] 21. **In-browser test call** - operators talk to an assistant from the assistant editor with no phone number required, over WebRTC or WebSocket audio
   - [x] 21a. **Voice session authorization** - a short-lived, workspace-checked ticket the browser exchanges for `/media/session` access, closing the current gap where the WebSocket route trusts a bare client-supplied assistant_id with no authentication at all
   - [x] 21b. **Browser test-call UI** - microphone capture and playback wired to `/media/session` (mic permission, connection state, speaking/listening indicator, client-side barge-in), on the new `/assistants/[id]/test-call` page
-- [ ] 22. **Voice pipeline test harness** - fixture-audio conversation replay against the full pipeline with mock providers, plus barge-in and turn-detection behavioural tests
+- [x] 22. **Voice pipeline test harness** - fixture-audio conversation replay against the full pipeline with mock providers, plus barge-in and turn-detection behavioural tests
 
 ### Telephony
 
