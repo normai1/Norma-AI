@@ -14,6 +14,14 @@ class AssistantVersionCreate(BaseModel):
     turn_sensitivity: float = Field(default=0.5, ge=0.0, le=1.0)
     creativity: float = Field(default=0.3, ge=0.0, le=1.0)
     ambient_sound: str | None = Field(default=None, max_length=255)
+    ambient_sound_volume: float | None = Field(default=None, ge=0.0, le=1.0)
+    # Configuration-only until real call handling (build-plan items 24-28)
+    # exists to enforce them - see current-feature.md's Architecture
+    # decisions. Bounds are sanity checks, not tuned product values.
+    max_call_duration_seconds: int | None = Field(default=None, ge=30, le=3600)
+    max_silence_timeout_seconds: int | None = Field(default=None, ge=5, le=300)
+    record_calls: bool = False
+    auto_delete_on_declined_consent: bool = False
     prompt_template_id: uuid.UUID | None = None
     prompt_version: int | None = Field(default=None, ge=1)
 
@@ -42,6 +50,11 @@ class AssistantVersionResponse(BaseModel):
     turn_sensitivity: float
     creativity: float
     ambient_sound: str | None
+    ambient_sound_volume: float | None
+    max_call_duration_seconds: int | None
+    max_silence_timeout_seconds: int | None
+    record_calls: bool
+    auto_delete_on_declined_consent: bool
     prompt_template_id: uuid.UUID | None
     prompt_version: int | None
     created_at: datetime

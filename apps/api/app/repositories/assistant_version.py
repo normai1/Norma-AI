@@ -82,6 +82,11 @@ async def create(
     turn_sensitivity: float,
     creativity: float,
     ambient_sound: str | None,
+    ambient_sound_volume: float | None = None,
+    max_call_duration_seconds: int | None = None,
+    max_silence_timeout_seconds: int | None = None,
+    record_calls: bool = False,
+    auto_delete_on_declined_consent: bool = False,
     prompt_template_id: uuid.UUID | None = None,
     prompt_version: int | None = None,
 ) -> AssistantVersion:
@@ -100,6 +105,11 @@ async def create(
         turn_sensitivity=turn_sensitivity,
         creativity=creativity,
         ambient_sound=ambient_sound,
+        ambient_sound_volume=ambient_sound_volume,
+        max_call_duration_seconds=max_call_duration_seconds,
+        max_silence_timeout_seconds=max_silence_timeout_seconds,
+        record_calls=record_calls,
+        auto_delete_on_declined_consent=auto_delete_on_declined_consent,
         prompt_template_id=prompt_template_id,
         prompt_version=prompt_version,
     )

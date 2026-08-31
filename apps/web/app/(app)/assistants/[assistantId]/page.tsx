@@ -98,6 +98,11 @@ export default function AssistantEditorPage() {
   const [turnSensitivity, setTurnSensitivity] = useState(0.5);
   const [creativity, setCreativity] = useState(0.3);
   const [ambientSound, setAmbientSound] = useState("");
+  const [ambientSoundVolume, setAmbientSoundVolume] = useState("");
+  const [maxCallDurationSeconds, setMaxCallDurationSeconds] = useState("");
+  const [maxSilenceTimeoutSeconds, setMaxSilenceTimeoutSeconds] = useState("");
+  const [recordCalls, setRecordCalls] = useState(false);
+  const [autoDeleteOnDeclinedConsent, setAutoDeleteOnDeclinedConsent] = useState(false);
   const [savingVersion, setSavingVersion] = useState(false);
   const [versionError, setVersionError] = useState<string | null>(null);
   const [versionSaved, setVersionSaved] = useState<AssistantVersion | null>(
@@ -382,13 +387,26 @@ export default function AssistantEditorPage() {
       return;
     }
 
+    const parsedMaxCallDuration = maxCallDurationSeconds.trim()
+      ? Number(maxCallDurationSeconds)
+      : null;
+    const parsedMaxSilenceTimeout = maxSilenceTimeoutSeconds.trim()
+      ? Number(maxSilenceTimeoutSeconds)
+      : null;
+    const parsedAmbientSoundVolume = ambientSoundVolume.trim()
+      ? Number(ambientSoundVolume)
+      : null;
+
     if (
       !Number.isFinite(speechRate) ||
       !Number.isFinite(turnSensitivity) ||
-      !Number.isFinite(creativity)
+      !Number.isFinite(creativity) ||
+      (parsedMaxCallDuration !== null && !Number.isFinite(parsedMaxCallDuration)) ||
+      (parsedMaxSilenceTimeout !== null && !Number.isFinite(parsedMaxSilenceTimeout)) ||
+      (parsedAmbientSoundVolume !== null && !Number.isFinite(parsedAmbientSoundVolume))
     ) {
       setVersionError(
-        "Speech rate, turn sensitivity, and creativity must be valid numbers.",
+        "Speech rate, turn sensitivity, creativity, and any call/ambient-sound numbers must be valid.",
       );
 
       return;
@@ -412,6 +430,11 @@ export default function AssistantEditorPage() {
           turn_sensitivity: turnSensitivity,
           creativity,
           ambient_sound: ambientSound.trim() ? ambientSound : null,
+          ambient_sound_volume: parsedAmbientSoundVolume,
+          max_call_duration_seconds: parsedMaxCallDuration,
+          max_silence_timeout_seconds: parsedMaxSilenceTimeout,
+          record_calls: recordCalls,
+          auto_delete_on_declined_consent: autoDeleteOnDeclinedConsent,
         },
       );
 
@@ -947,16 +970,123 @@ export default function AssistantEditorPage() {
                   Ambient sound
                 </label>
 
-                <input
+                <select
                   id="ambient_sound"
-                  type="text"
-                  maxLength={255}
                   disabled={savingVersion}
-                  className="mt-2 w-full max-w-md rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-white placeholder:text-slate-500 focus:border-slate-500 focus:outline-none focus:ring-2 focus:ring-slate-600"
-                  placeholder="Optional - e.g. office"
+                  className="mt-2 w-full max-w-md rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-white focus:outline-none focus:ring-2 focus:ring-slate-600"
                   value={ambientSound}
                   onChange={(event) => setAmbientSound(event.target.value)}
+                >
+                  <option value="">None</option>
+                  <option value="office">Office</option>
+                  <option value="conference_room">Conference room</option>
+                </select>
+              </div>
+
+              <div>
+                <label
+                  htmlFor="ambient_sound_volume"
+                  className="block text-sm font-medium text-slate-200"
+                >
+                  Ambient sound volume
+                </label>
+
+                <input
+                  id="ambient_sound_volume"
+                  type="number"
+                  min={0}
+                  max={1}
+                  step={0.05}
+                  disabled={savingVersion || !ambientSound}
+                  className="mt-2 w-32 rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-white placeholder:text-slate-500 focus:border-slate-500 focus:outline-none focus:ring-2 focus:ring-slate-600 disabled:opacity-50"
+                  placeholder="0.0-1.0"
+                  value={ambientSoundVolume}
+                  onChange={(event) => setAmbientSoundVolume(event.target.value)}
                 />
+              </div>
+
+              <div className="rounded-lg border border-slate-800 px-4 py-3">
+                <p className="text-sm font-medium text-slate-300">Call settings</p>
+                <p className="mt-1 text-xs text-slate-500">
+                  Not yet enforced on a real call - configuration only until telephony is built.
+                </p>
+
+                <div className="mt-4 space-y-4">
+                  <div>
+                    <label
+                      htmlFor="max_call_duration_seconds"
+                      className="block text-sm font-medium text-slate-200"
+                    >
+                      Max call duration (seconds)
+                    </label>
+
+                    <input
+                      id="max_call_duration_seconds"
+                      type="number"
+                      min={30}
+                      max={3600}
+                      disabled={savingVersion}
+                      className="mt-2 w-32 rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-white placeholder:text-slate-500 focus:border-slate-500 focus:outline-none focus:ring-2 focus:ring-slate-600"
+                      placeholder="Optional"
+                      value={maxCallDurationSeconds}
+                      onChange={(event) => setMaxCallDurationSeconds(event.target.value)}
+                    />
+                  </div>
+
+                  <div>
+                    <label
+                      htmlFor="max_silence_timeout_seconds"
+                      className="block text-sm font-medium text-slate-200"
+                    >
+                      Max silence timeout (seconds)
+                    </label>
+
+                    <input
+                      id="max_silence_timeout_seconds"
+                      type="number"
+                      min={5}
+                      max={300}
+                      disabled={savingVersion}
+                      className="mt-2 w-32 rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-white placeholder:text-slate-500 focus:border-slate-500 focus:outline-none focus:ring-2 focus:ring-slate-600"
+                      placeholder="Optional"
+                      value={maxSilenceTimeoutSeconds}
+                      onChange={(event) => setMaxSilenceTimeoutSeconds(event.target.value)}
+                    />
+                  </div>
+
+                  <div className="flex items-center gap-2">
+                    <input
+                      id="record_calls"
+                      type="checkbox"
+                      disabled={savingVersion}
+                      className="h-4 w-4 rounded border-slate-700 bg-slate-950 focus:outline-none focus:ring-2 focus:ring-slate-600"
+                      checked={recordCalls}
+                      onChange={(event) => setRecordCalls(event.target.checked)}
+                    />
+                    <label htmlFor="record_calls" className="text-sm text-slate-200">
+                      Record calls
+                    </label>
+                  </div>
+
+                  <div className="flex items-center gap-2">
+                    <input
+                      id="auto_delete_on_declined_consent"
+                      type="checkbox"
+                      disabled={savingVersion}
+                      className="h-4 w-4 rounded border-slate-700 bg-slate-950 focus:outline-none focus:ring-2 focus:ring-slate-600"
+                      checked={autoDeleteOnDeclinedConsent}
+                      onChange={(event) =>
+                        setAutoDeleteOnDeclinedConsent(event.target.checked)
+                      }
+                    />
+                    <label
+                      htmlFor="auto_delete_on_declined_consent"
+                      className="text-sm text-slate-200"
+                    >
+                      Automatically delete the recording if the caller declines consent
+                    </label>
+                  </div>
+                </div>
               </div>
 
               <Button

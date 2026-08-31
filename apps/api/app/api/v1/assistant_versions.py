@@ -84,6 +84,11 @@ async def create_assistant_version(
             turn_sensitivity=payload.turn_sensitivity,
             creativity=payload.creativity,
             ambient_sound=payload.ambient_sound,
+            ambient_sound_volume=payload.ambient_sound_volume,
+            max_call_duration_seconds=payload.max_call_duration_seconds,
+            max_silence_timeout_seconds=payload.max_silence_timeout_seconds,
+            record_calls=payload.record_calls,
+            auto_delete_on_declined_consent=payload.auto_delete_on_declined_consent,
             prompt_template_id=payload.prompt_template_id,
             prompt_version=payload.prompt_version,
         )

@@ -144,6 +144,98 @@ async def test_create_succeeds_and_assigns_version_one(client: AsyncClient) -> N
     assert body["prompt_template_id"] is None
     assert body["prompt_version"] is None
 
+    # A payload that predates item 23b's five new fields still validates and
+    # gets the correct defaults - proving the additive schema change breaks
+    # no existing caller.
+    assert body["ambient_sound_volume"] is None
+    assert body["max_call_duration_seconds"] is None
+    assert body["max_silence_timeout_seconds"] is None
+    assert body["record_calls"] is False
+    assert body["auto_delete_on_declined_consent"] is False
+
+
+async def test_create_with_call_and_recording_settings_echoes_them_back(
+    client: AsyncClient,
+) -> None:
+    organization_id, workspace_id, assistant_id, owner_headers = await _setup_assistant(
+        client,
+        "asstver-callsettings",
+    )
+
+    response = await client.post(
+        _versions_url(organization_id, workspace_id, assistant_id),
+        json={
+            **_VALID_PAYLOAD,
+            "ambient_sound": "office",
+            "ambient_sound_volume": 0.6,
+            "max_call_duration_seconds": 600,
+            "max_silence_timeout_seconds": 20,
+            "record_calls": True,
+            "auto_delete_on_declined_consent": True,
+        },
+        headers=owner_headers,
+    )
+
+    assert response.status_code == 201
+    body = response.json()
+    assert body["ambient_sound"] == "office"
+    assert body["ambient_sound_volume"] == 0.6
+    assert body["max_call_duration_seconds"] == 600
+    assert body["max_silence_timeout_seconds"] == 20
+    assert body["record_calls"] is True
+    assert body["auto_delete_on_declined_consent"] is True
+
+
+async def test_create_rejects_out_of_bounds_max_call_duration(
+    client: AsyncClient,
+) -> None:
+    organization_id, workspace_id, assistant_id, owner_headers = await _setup_assistant(
+        client,
+        "asstver-badduration",
+    )
+
+    response = await client.post(
+        _versions_url(organization_id, workspace_id, assistant_id),
+        json={**_VALID_PAYLOAD, "max_call_duration_seconds": 10},
+        headers=owner_headers,
+    )
+
+    assert response.status_code == 422
+
+
+async def test_create_rejects_out_of_bounds_max_silence_timeout(
+    client: AsyncClient,
+) -> None:
+    organization_id, workspace_id, assistant_id, owner_headers = await _setup_assistant(
+        client,
+        "asstver-badsilence",
+    )
+
+    response = await client.post(
+        _versions_url(organization_id, workspace_id, assistant_id),
+        json={**_VALID_PAYLOAD, "max_silence_timeout_seconds": 1000},
+        headers=owner_headers,
+    )
+
+    assert response.status_code == 422
+
+
+async def test_create_rejects_out_of_bounds_ambient_sound_volume(
+    client: AsyncClient,
+) -> None:
+    organization_id, workspace_id, assistant_id, owner_headers = await _setup_assistant(
+        client,
+        "asstver-badvolume",
+    )
+
+    response = await client.post(
+        _versions_url(organization_id, workspace_id, assistant_id),
+        json={**_VALID_PAYLOAD, "ambient_sound_volume": 1.5},
+        headers=owner_headers,
+    )
+
+    assert response.status_code == 422
+
 
 async def test_second_create_assigns_version_two(client: AsyncClient) -> None:
     organization_id, workspace_id, assistant_id, owner_headers = await _setup_assistant(

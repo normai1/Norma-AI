@@ -1,6 +1,15 @@
 import uuid
 
-from sqlalchemy import ForeignKey, Numeric, String, Text, UniqueConstraint, event
+from sqlalchemy import (
+    Boolean,
+    ForeignKey,
+    Integer,
+    Numeric,
+    String,
+    Text,
+    UniqueConstraint,
+    event,
+)
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -54,6 +63,27 @@ class AssistantVersion(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     )
 
     ambient_sound: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    ambient_sound_volume: Mapped[float | None] = mapped_column(
+        Numeric(3, 2, asdecimal=False),
+        nullable=True,
+    )
+
+    # Item 23b: configuration-only until real call handling (items 24-28)
+    # exists to enforce them - see current-feature.md's Architecture
+    # decisions for why these are nullable (no limit configured) rather
+    # than defaulted.
+    max_call_duration_seconds: Mapped[int | None] = mapped_column(
+        Integer, nullable=True
+    )
+    max_silence_timeout_seconds: Mapped[int | None] = mapped_column(
+        Integer, nullable=True
+    )
+    record_calls: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False
+    )
+    auto_delete_on_declined_consent: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False
+    )
 
     # Which prompt template (and which version of it) this configuration
     # snapshot was based on - both nullable, both-or-neither (enforced in

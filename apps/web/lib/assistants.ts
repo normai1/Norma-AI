@@ -22,6 +22,11 @@ export interface AssistantVersion {
   turn_sensitivity: number;
   creativity: number;
   ambient_sound: string | null;
+  ambient_sound_volume: number | null;
+  max_call_duration_seconds: number | null;
+  max_silence_timeout_seconds: number | null;
+  record_calls: boolean;
+  auto_delete_on_declined_consent: boolean;
   created_at: string;
 }
 
@@ -34,6 +39,11 @@ export interface AssistantVersionInput {
   turn_sensitivity: number;
   creativity: number;
   ambient_sound: string | null;
+  ambient_sound_volume: number | null;
+  max_call_duration_seconds: number | null;
+  max_silence_timeout_seconds: number | null;
+  record_calls: boolean;
+  auto_delete_on_declined_consent: boolean;
 }
 
 export interface AssistantVersionFieldDiff {
