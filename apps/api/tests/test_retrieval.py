@@ -37,16 +37,32 @@ async def _make_org_workspace_assistant(
     return organization, workspace, assistant
 
 
+async def _make_assistant(
+    db: AsyncSession, organization: Organization, workspace: Workspace, name: str
+) -> Assistant:
+    assistant = Assistant(
+        organization_id=organization.id,
+        workspace_id=workspace.id,
+        name=name,
+    )
+    db.add(assistant)
+    await db.flush()
+
+    return assistant
+
+
 async def _make_knowledge_source(
     db: AsyncSession,
     organization: Organization,
     workspace: Workspace,
+    assistant: Assistant,
     *,
     source_type: str = "file",
 ) -> KnowledgeSource:
     source = KnowledgeSource(
         organization_id=organization.id,
         workspace_id=workspace.id,
+        assistant_id=assistant.id,
         type=source_type,
     )
     db.add(source)
@@ -60,6 +76,7 @@ async def _make_chunk(
     organization: Organization,
     workspace: Workspace,
     source: KnowledgeSource,
+    assistant: Assistant,
     *,
     text: str,
     embedding: list[float] | None,
@@ -69,6 +86,7 @@ async def _make_chunk(
     chunk = Chunk(
         organization_id=organization.id,
         workspace_id=workspace.id,
+        assistant_id=assistant.id,
         knowledge_source_id=source.id,
         text=text,
         ordering=ordering,
@@ -90,7 +108,7 @@ async def test_retrieve_ranks_the_exact_text_match_first(db: AsyncSession) -> No
     organization, workspace, assistant = await _make_org_workspace_assistant(
         db, "retrieve-order"
     )
-    source = await _make_knowledge_source(db, organization, workspace)
+    source = await _make_knowledge_source(db, organization, workspace, assistant)
     provider = MockEmbeddingProvider()
 
     query = "What are your business hours?"
@@ -99,13 +117,20 @@ async def test_retrieve_ranks_the_exact_text_match_first(db: AsyncSession) -> No
     [other_vector_2] = await provider.embed(["Completely unrelated text two."])
 
     exact_chunk = await _make_chunk(
-        db, organization, workspace, source, text=query, embedding=exact_vector
+        db,
+        organization,
+        workspace,
+        source,
+        assistant,
+        text=query,
+        embedding=exact_vector,
     )
     await _make_chunk(
         db,
         organization,
         workspace,
         source,
+        assistant,
         text="Completely unrelated text one.",
         embedding=other_vector_1,
         ordering=1,
@@ -115,6 +140,7 @@ async def test_retrieve_ranks_the_exact_text_match_first(db: AsyncSession) -> No
         organization,
         workspace,
         source,
+        assistant,
         text="Completely unrelated text two.",
         embedding=other_vector_2,
         ordering=2,
@@ -139,23 +165,32 @@ async def test_retrieve_excludes_a_sibling_organizations_chunks(
     organization, workspace, assistant = await _make_org_workspace_assistant(
         db, "retrieve-tenant-a"
     )
-    source = await _make_knowledge_source(db, organization, workspace)
+    source = await _make_knowledge_source(db, organization, workspace, assistant)
     provider = MockEmbeddingProvider()
     [vector] = await provider.embed(["Our own chunk."])
     await _make_chunk(
-        db, organization, workspace, source, text="Our own chunk.", embedding=vector
+        db,
+        organization,
+        workspace,
+        source,
+        assistant,
+        text="Our own chunk.",
+        embedding=vector,
     )
 
-    other_org, other_workspace, _other_assistant = await _make_org_workspace_assistant(
+    other_org, other_workspace, other_assistant = await _make_org_workspace_assistant(
         db, "retrieve-tenant-b"
     )
-    other_source = await _make_knowledge_source(db, other_org, other_workspace)
+    other_source = await _make_knowledge_source(
+        db, other_org, other_workspace, other_assistant
+    )
     [other_vector] = await provider.embed(["Someone else's chunk."])
     await _make_chunk(
         db,
         other_org,
         other_workspace,
         other_source,
+        other_assistant,
         text="Someone else's chunk.",
         embedding=other_vector,
     )
@@ -176,17 +211,24 @@ async def test_retrieve_excludes_chunks_with_no_embedding(db: AsyncSession) -> N
     organization, workspace, assistant = await _make_org_workspace_assistant(
         db, "retrieve-null-embedding"
     )
-    source = await _make_knowledge_source(db, organization, workspace)
+    source = await _make_knowledge_source(db, organization, workspace, assistant)
     provider = MockEmbeddingProvider()
     [vector] = await provider.embed(["Embedded chunk."])
     await _make_chunk(
-        db, organization, workspace, source, text="Embedded chunk.", embedding=vector
+        db,
+        organization,
+        workspace,
+        source,
+        assistant,
+        text="Embedded chunk.",
+        embedding=vector,
     )
     await _make_chunk(
         db,
         organization,
         workspace,
         source,
+        assistant,
         text="Never embedded.",
         embedding=None,
         ordering=1,
@@ -209,7 +251,7 @@ async def test_retrieve_respects_top_k(db: AsyncSession) -> None:
     organization, workspace, assistant = await _make_org_workspace_assistant(
         db, "retrieve-top-k"
     )
-    source = await _make_knowledge_source(db, organization, workspace)
+    source = await _make_knowledge_source(db, organization, workspace, assistant)
     provider = MockEmbeddingProvider()
     for i in range(5):
         [vector] = await provider.embed([f"Chunk number {i}."])
@@ -218,6 +260,7 @@ async def test_retrieve_respects_top_k(db: AsyncSession) -> None:
             organization,
             workspace,
             source,
+            assistant,
             text=f"Chunk number {i}.",
             embedding=vector,
             ordering=i,
@@ -278,7 +321,7 @@ async def test_retrieve_reports_each_chunks_source_type(db: AsyncSession) -> Non
         db, "retrieve-source-type"
     )
     website_source = await _make_knowledge_source(
-        db, organization, workspace, source_type="website"
+        db, organization, workspace, assistant, source_type="website"
     )
     provider = MockEmbeddingProvider()
     [vector] = await provider.embed(["Website content."])
@@ -287,6 +330,7 @@ async def test_retrieve_reports_each_chunks_source_type(db: AsyncSession) -> Non
         organization,
         workspace,
         website_source,
+        assistant,
         text="Website content.",
         embedding=vector,
     )
@@ -303,6 +347,52 @@ async def test_retrieve_reports_each_chunks_source_type(db: AsyncSession) -> Non
     assert results[0].source_type == "website"
 
 
+async def test_retrieve_excludes_a_sibling_assistants_chunks_in_the_same_workspace(
+    db: AsyncSession,
+) -> None:
+    organization, workspace, assistant_a = await _make_org_workspace_assistant(
+        db, "retrieve-sibling-assistant"
+    )
+    assistant_b = await _make_assistant(db, organization, workspace, "Other Assistant")
+
+    source_a = await _make_knowledge_source(db, organization, workspace, assistant_a)
+    source_b = await _make_knowledge_source(db, organization, workspace, assistant_b)
+
+    provider = MockEmbeddingProvider()
+    [vector_a] = await provider.embed(["Assistant A's own chunk."])
+    [vector_b] = await provider.embed(["Assistant B's own chunk."])
+    await _make_chunk(
+        db,
+        organization,
+        workspace,
+        source_a,
+        assistant_a,
+        text="Assistant A's own chunk.",
+        embedding=vector_a,
+    )
+    await _make_chunk(
+        db,
+        organization,
+        workspace,
+        source_b,
+        assistant_b,
+        text="Assistant B's own chunk.",
+        embedding=vector_b,
+    )
+
+    results = await retrieve(
+        db,
+        provider,
+        organization_id=organization.id,
+        workspace_id=workspace.id,
+        assistant_id=assistant_a.id,
+        query="anything",
+    )
+
+    assert len(results) == 1
+    assert results[0].text == "Assistant A's own chunk."
+
+
 async def test_retrieve_and_build_context_latency_regression(
     db: AsyncSession,
 ) -> None:
@@ -316,7 +406,7 @@ async def test_retrieve_and_build_context_latency_regression(
     organization, workspace, assistant = await _make_org_workspace_assistant(
         db, "retrieve-latency"
     )
-    source = await _make_knowledge_source(db, organization, workspace)
+    source = await _make_knowledge_source(db, organization, workspace, assistant)
     provider = MockEmbeddingProvider()
     for i in range(20):
         [vector] = await provider.embed([f"Chunk number {i} with some body text."])
@@ -325,6 +415,7 @@ async def test_retrieve_and_build_context_latency_regression(
             organization,
             workspace,
             source,
+            assistant,
             text=f"Chunk number {i} with some body text.",
             embedding=vector,
             ordering=i,

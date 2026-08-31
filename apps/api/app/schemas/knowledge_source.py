@@ -26,10 +26,12 @@ class CrawledPageResponse(BaseModel):
 
 class WebsiteKnowledgeSourceCreate(BaseModel):
     url: HttpUrl
+    assistant_id: uuid.UUID
 
 
 class ManualFaqKnowledgeSourceCreate(BaseModel):
     name: str = Field(min_length=1, max_length=255)
+    assistant_id: uuid.UUID
 
 
 class KnowledgeSourceResponse(BaseModel):
@@ -38,6 +40,7 @@ class KnowledgeSourceResponse(BaseModel):
     id: uuid.UUID
     organization_id: uuid.UUID
     workspace_id: uuid.UUID
+    assistant_id: uuid.UUID | None
     type: str
     status: str
     error_message: str | None

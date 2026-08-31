@@ -89,6 +89,26 @@ def _knowledge_sources_url(organization_id: str, workspace_id: str) -> str:
     return f"{_workspaces_url(organization_id)}/{workspace_id}/knowledge-sources"
 
 
+def _assistants_url(organization_id: str, workspace_id: str) -> str:
+    return f"{_workspaces_url(organization_id)}/{workspace_id}/assistants"
+
+
+async def _create_assistant(
+    client: AsyncClient,
+    organization_id: str,
+    workspace_id: str,
+    headers: dict[str, str],
+    name: str = "Front Desk",
+) -> str:
+    response = await client.post(
+        _assistants_url(organization_id, workspace_id),
+        json={"name": name},
+        headers=headers,
+    )
+
+    return response.json()["id"]
+
+
 def _chunks_url(
     organization_id: str, workspace_id: str, knowledge_source_id: str
 ) -> str:
@@ -102,6 +122,7 @@ async def _upload(
     organization_id: str,
     workspace_id: str,
     headers: dict[str, str],
+    assistant_id: str,
     filename: str = "policy.txt",
     content: bytes = b"hello knowledge base",
     content_type: str = "text/plain",
@@ -109,6 +130,7 @@ async def _upload(
     return await client.post(
         _knowledge_sources_url(organization_id, workspace_id),
         files={"file": (filename, content, content_type)},
+        data={"assistant_id": assistant_id},
         headers=headers,
     )
 
@@ -118,11 +140,12 @@ async def _create_website(
     organization_id: str,
     workspace_id: str,
     headers: dict[str, str],
+    assistant_id: str,
     url: str = "http://example.com/",
 ):
     return await client.post(
         f"{_knowledge_sources_url(organization_id, workspace_id)}/website",
-        json={"url": url},
+        json={"url": url, "assistant_id": assistant_id},
         headers=headers,
     )
 
@@ -134,15 +157,18 @@ async def _setup_org_workspace(client: AsyncClient, prefix: str):
     workspace = await _create_workspace(
         client, organization_id, owner_headers, "Clinic"
     )
+    assistant_id = await _create_assistant(
+        client, organization_id, workspace["id"], owner_headers
+    )
 
-    return organization_id, workspace["id"], owner_headers
+    return organization_id, workspace["id"], assistant_id, owner_headers
 
 
 async def test_uploading_a_valid_txt_produces_chunks_reachable_via_the_api(
     client: AsyncClient,
 ) -> None:
-    organization_id, workspace_id, owner_headers = await _setup_org_workspace(
-        client, "chunk-upload-ok"
+    organization_id, workspace_id, assistant_id, owner_headers = (
+        await _setup_org_workspace(client, "chunk-upload-ok")
     )
 
     upload = await _upload(
@@ -150,6 +176,7 @@ async def test_uploading_a_valid_txt_produces_chunks_reachable_via_the_api(
         organization_id,
         workspace_id,
         owner_headers,
+        assistant_id,
         content=b"hello knowledge base",
     )
 
@@ -176,8 +203,8 @@ async def test_uploading_a_valid_txt_produces_chunks_reachable_via_the_api(
 async def test_uploading_an_unparseable_pdf_marks_failed_with_zero_chunks(
     client: AsyncClient,
 ) -> None:
-    organization_id, workspace_id, owner_headers = await _setup_org_workspace(
-        client, "chunk-upload-fail"
+    organization_id, workspace_id, assistant_id, owner_headers = (
+        await _setup_org_workspace(client, "chunk-upload-fail")
     )
 
     upload = await _upload(
@@ -185,6 +212,7 @@ async def test_uploading_an_unparseable_pdf_marks_failed_with_zero_chunks(
         organization_id,
         workspace_id,
         owner_headers,
+        assistant_id,
         filename="broken.pdf",
         content=b"not a real pdf at all",
         content_type="application/pdf",
@@ -208,11 +236,13 @@ async def test_uploading_an_unparseable_pdf_marks_failed_with_zero_chunks(
 async def test_process_reprocesses_without_duplicating_chunks(
     client: AsyncClient,
 ) -> None:
-    organization_id, workspace_id, owner_headers = await _setup_org_workspace(
-        client, "chunk-process-retry"
+    organization_id, workspace_id, assistant_id, owner_headers = (
+        await _setup_org_workspace(client, "chunk-process-retry")
     )
 
-    upload = await _upload(client, organization_id, workspace_id, owner_headers)
+    upload = await _upload(
+        client, organization_id, workspace_id, owner_headers, assistant_id
+    )
     source_id = upload.json()["id"]
 
     process = await client.post(
@@ -232,13 +262,13 @@ async def test_process_reprocesses_without_duplicating_chunks(
 
 
 async def test_process_422s_for_a_manual_faq_source(client: AsyncClient) -> None:
-    organization_id, workspace_id, owner_headers = await _setup_org_workspace(
-        client, "chunk-process-wrong-type"
+    organization_id, workspace_id, assistant_id, owner_headers = (
+        await _setup_org_workspace(client, "chunk-process-wrong-type")
     )
 
     source = await client.post(
         f"{_knowledge_sources_url(organization_id, workspace_id)}/manual-faq",
-        json={"name": "General FAQ"},
+        json={"name": "General FAQ", "assistant_id": assistant_id},
         headers=owner_headers,
     )
     source_id = source.json()["id"]
@@ -252,10 +282,12 @@ async def test_process_422s_for_a_manual_faq_source(client: AsyncClient) -> None
 
 
 async def test_chunks_requires_authentication(client: AsyncClient) -> None:
-    organization_id, workspace_id, owner_headers = await _setup_org_workspace(
-        client, "chunk-list-anon"
+    organization_id, workspace_id, assistant_id, owner_headers = (
+        await _setup_org_workspace(client, "chunk-list-anon")
     )
-    upload = await _upload(client, organization_id, workspace_id, owner_headers)
+    upload = await _upload(
+        client, organization_id, workspace_id, owner_headers, assistant_id
+    )
 
     response = await client.get(
         _chunks_url(organization_id, workspace_id, upload.json()["id"]),
@@ -286,7 +318,12 @@ async def test_chunks_are_reachable_by_any_workspace_member(
         json={"member_id": member_id},
         headers=owner_headers,
     )
-    upload = await _upload(client, organization_id, workspace["id"], owner_headers)
+    assistant_id = await _create_assistant(
+        client, organization_id, workspace["id"], owner_headers
+    )
+    upload = await _upload(
+        client, organization_id, workspace["id"], owner_headers, assistant_id
+    )
 
     response = await client.get(
         _chunks_url(organization_id, workspace["id"], upload.json()["id"]),
@@ -299,13 +336,15 @@ async def test_chunks_are_reachable_by_any_workspace_member(
 async def test_chunks_404_for_a_source_in_a_sibling_workspace(
     client: AsyncClient,
 ) -> None:
-    organization_id, workspace_id, owner_headers = await _setup_org_workspace(
-        client, "chunk-list-sibling"
+    organization_id, workspace_id, assistant_id, owner_headers = (
+        await _setup_org_workspace(client, "chunk-list-sibling")
     )
     sibling_workspace = await _create_workspace(
         client, organization_id, owner_headers, "Sibling"
     )
-    upload = await _upload(client, organization_id, workspace_id, owner_headers)
+    upload = await _upload(
+        client, organization_id, workspace_id, owner_headers, assistant_id
+    )
 
     response = await client.get(
         _chunks_url(organization_id, sibling_workspace["id"], upload.json()["id"]),
@@ -318,14 +357,14 @@ async def test_chunks_404_for_a_source_in_a_sibling_workspace(
 async def test_creating_a_website_source_produces_chunks_tagged_by_url(
     client: AsyncClient, page_fetcher: MockPageFetcher
 ) -> None:
-    organization_id, workspace_id, owner_headers = await _setup_org_workspace(
-        client, "chunk-website-create"
+    organization_id, workspace_id, assistant_id, owner_headers = (
+        await _setup_org_workspace(client, "chunk-website-create")
     )
     page_fetcher.pages["http://example.com/"] = _page('<a href="/about">About</a>')
     page_fetcher.pages["http://example.com/about"] = _page("About us.")
 
     created = await _create_website(
-        client, organization_id, workspace_id, owner_headers
+        client, organization_id, workspace_id, owner_headers, assistant_id
     )
     source_id = created.json()["id"]
 
@@ -344,14 +383,14 @@ async def test_creating_a_website_source_produces_chunks_tagged_by_url(
 async def test_recrawl_replaces_chunks_for_a_dropped_page(
     client: AsyncClient, page_fetcher: MockPageFetcher
 ) -> None:
-    organization_id, workspace_id, owner_headers = await _setup_org_workspace(
-        client, "chunk-website-recrawl-drop"
+    organization_id, workspace_id, assistant_id, owner_headers = (
+        await _setup_org_workspace(client, "chunk-website-recrawl-drop")
     )
     page_fetcher.pages["http://example.com/"] = _page('<a href="/about">About</a>')
     page_fetcher.pages["http://example.com/about"] = _page("About us.")
 
     created = await _create_website(
-        client, organization_id, workspace_id, owner_headers
+        client, organization_id, workspace_id, owner_headers, assistant_id
     )
     source_id = created.json()["id"]
 
@@ -381,11 +420,12 @@ async def _create_manual_faq_source(
     organization_id: str,
     workspace_id: str,
     headers: dict[str, str],
+    assistant_id: str,
     name: str = "General FAQ",
 ):
     return await client.post(
         f"{_knowledge_sources_url(organization_id, workspace_id)}/manual-faq",
-        json={"name": name},
+        json={"name": name, "assistant_id": assistant_id},
         headers=headers,
     )
 
@@ -399,11 +439,11 @@ def _faq_entries_url(
 
 
 async def test_creating_a_faq_entry_produces_one_chunk(client: AsyncClient) -> None:
-    organization_id, workspace_id, owner_headers = await _setup_org_workspace(
-        client, "chunk-faq-create"
+    organization_id, workspace_id, assistant_id, owner_headers = (
+        await _setup_org_workspace(client, "chunk-faq-create")
     )
     source = await _create_manual_faq_source(
-        client, organization_id, workspace_id, owner_headers
+        client, organization_id, workspace_id, owner_headers, assistant_id
     )
     source_id = source.json()["id"]
 
@@ -426,11 +466,11 @@ async def test_creating_a_faq_entry_produces_one_chunk(client: AsyncClient) -> N
 async def test_updating_a_faq_entry_updates_its_chunk_in_place(
     client: AsyncClient,
 ) -> None:
-    organization_id, workspace_id, owner_headers = await _setup_org_workspace(
-        client, "chunk-faq-update"
+    organization_id, workspace_id, assistant_id, owner_headers = (
+        await _setup_org_workspace(client, "chunk-faq-update")
     )
     source = await _create_manual_faq_source(
-        client, organization_id, workspace_id, owner_headers
+        client, organization_id, workspace_id, owner_headers, assistant_id
     )
     source_id = source.json()["id"]
 
@@ -458,11 +498,11 @@ async def test_updating_a_faq_entry_updates_its_chunk_in_place(
 
 
 async def test_deleting_a_faq_entry_removes_its_chunk(client: AsyncClient) -> None:
-    organization_id, workspace_id, owner_headers = await _setup_org_workspace(
-        client, "chunk-faq-delete"
+    organization_id, workspace_id, assistant_id, owner_headers = (
+        await _setup_org_workspace(client, "chunk-faq-delete")
     )
     source = await _create_manual_faq_source(
-        client, organization_id, workspace_id, owner_headers
+        client, organization_id, workspace_id, owner_headers, assistant_id
     )
     source_id = source.json()["id"]
 
@@ -489,12 +529,17 @@ async def test_deleting_a_faq_entry_removes_its_chunk(client: AsyncClient) -> No
 async def test_uploading_a_valid_txt_embeds_every_chunk(
     client: AsyncClient, db: AsyncSession
 ) -> None:
-    organization_id, workspace_id, owner_headers = await _setup_org_workspace(
-        client, "embed-upload-ok"
+    organization_id, workspace_id, assistant_id, owner_headers = (
+        await _setup_org_workspace(client, "embed-upload-ok")
     )
 
     upload = await _upload(
-        client, organization_id, workspace_id, owner_headers, content=b"hello there"
+        client,
+        organization_id,
+        workspace_id,
+        owner_headers,
+        assistant_id,
+        content=b"hello there",
     )
     assert upload.json()["status"] == "completed"
 
@@ -510,12 +555,14 @@ async def test_embedding_failure_marks_the_file_source_failed_and_keeps_no_chunk
     db: AsyncSession,
     embedding_provider: MockEmbeddingProvider,
 ) -> None:
-    organization_id, workspace_id, owner_headers = await _setup_org_workspace(
-        client, "embed-upload-fail"
+    organization_id, workspace_id, assistant_id, owner_headers = (
+        await _setup_org_workspace(client, "embed-upload-fail")
     )
     embedding_provider.failure = EmbeddingProviderUnavailable("simulated outage")
 
-    upload = await _upload(client, organization_id, workspace_id, owner_headers)
+    upload = await _upload(
+        client, organization_id, workspace_id, owner_headers, assistant_id
+    )
 
     assert upload.json()["status"] == "failed"
     assert upload.json()["error_message"]
@@ -530,11 +577,13 @@ async def test_reprocessing_after_an_embedding_failure_keeps_prior_chunks(
     db: AsyncSession,
     embedding_provider: MockEmbeddingProvider,
 ) -> None:
-    organization_id, workspace_id, owner_headers = await _setup_org_workspace(
-        client, "embed-reprocess-recovers"
+    organization_id, workspace_id, assistant_id, owner_headers = (
+        await _setup_org_workspace(client, "embed-reprocess-recovers")
     )
 
-    upload = await _upload(client, organization_id, workspace_id, owner_headers)
+    upload = await _upload(
+        client, organization_id, workspace_id, owner_headers, assistant_id
+    )
     source_id = upload.json()["id"]
     original_chunks = await _chunks_for_source(db, source_id)
     assert len(original_chunks) == 1
@@ -555,13 +604,13 @@ async def test_reprocessing_after_an_embedding_failure_keeps_prior_chunks(
 async def test_creating_a_website_source_embeds_every_chunk(
     client: AsyncClient, db: AsyncSession, page_fetcher: MockPageFetcher
 ) -> None:
-    organization_id, workspace_id, owner_headers = await _setup_org_workspace(
-        client, "embed-website-create"
+    organization_id, workspace_id, assistant_id, owner_headers = (
+        await _setup_org_workspace(client, "embed-website-create")
     )
     page_fetcher.pages["http://example.com/"] = _page("Hello from the homepage.")
 
     created = await _create_website(
-        client, organization_id, workspace_id, owner_headers
+        client, organization_id, workspace_id, owner_headers, assistant_id
     )
 
     chunks = await _chunks_for_source(db, created.json()["id"])
@@ -576,14 +625,14 @@ async def test_embedding_failure_marks_the_website_source_failed(
     embedding_provider: MockEmbeddingProvider,
     page_fetcher: MockPageFetcher,
 ) -> None:
-    organization_id, workspace_id, owner_headers = await _setup_org_workspace(
-        client, "embed-website-fail"
+    organization_id, workspace_id, assistant_id, owner_headers = (
+        await _setup_org_workspace(client, "embed-website-fail")
     )
     page_fetcher.pages["http://example.com/"] = _page("Hello from the homepage.")
     embedding_provider.failure = EmbeddingProviderUnavailable("simulated outage")
 
     created = await _create_website(
-        client, organization_id, workspace_id, owner_headers
+        client, organization_id, workspace_id, owner_headers, assistant_id
     )
 
     assert created.json()["status"] == "failed"
@@ -593,11 +642,11 @@ async def test_embedding_failure_marks_the_website_source_failed(
 async def test_creating_a_faq_entry_embeds_its_chunk(
     client: AsyncClient, db: AsyncSession
 ) -> None:
-    organization_id, workspace_id, owner_headers = await _setup_org_workspace(
-        client, "embed-faq-create"
+    organization_id, workspace_id, assistant_id, owner_headers = (
+        await _setup_org_workspace(client, "embed-faq-create")
     )
     source = await _create_manual_faq_source(
-        client, organization_id, workspace_id, owner_headers
+        client, organization_id, workspace_id, owner_headers, assistant_id
     )
     source_id = source.json()["id"]
 
@@ -618,11 +667,11 @@ async def test_creating_a_faq_entry_fails_with_503_when_embedding_fails(
     db: AsyncSession,
     embedding_provider: MockEmbeddingProvider,
 ) -> None:
-    organization_id, workspace_id, owner_headers = await _setup_org_workspace(
-        client, "embed-faq-create-fail"
+    organization_id, workspace_id, assistant_id, owner_headers = (
+        await _setup_org_workspace(client, "embed-faq-create-fail")
     )
     source = await _create_manual_faq_source(
-        client, organization_id, workspace_id, owner_headers
+        client, organization_id, workspace_id, owner_headers, assistant_id
     )
     source_id = source.json()["id"]
     embedding_provider.failure = EmbeddingProviderUnavailable("simulated outage")
@@ -646,11 +695,11 @@ async def test_creating_a_faq_entry_fails_with_503_when_embedding_fails(
 async def test_updating_a_faq_entry_updates_its_chunks_embedding(
     client: AsyncClient, db: AsyncSession
 ) -> None:
-    organization_id, workspace_id, owner_headers = await _setup_org_workspace(
-        client, "embed-faq-update"
+    organization_id, workspace_id, assistant_id, owner_headers = (
+        await _setup_org_workspace(client, "embed-faq-update")
     )
     source = await _create_manual_faq_source(
-        client, organization_id, workspace_id, owner_headers
+        client, organization_id, workspace_id, owner_headers, assistant_id
     )
     source_id = source.json()["id"]
     created = await client.post(
@@ -682,11 +731,11 @@ async def test_updating_a_faq_entry_leaves_it_untouched_when_embedding_fails(
     client: AsyncClient,
     embedding_provider: MockEmbeddingProvider,
 ) -> None:
-    organization_id, workspace_id, owner_headers = await _setup_org_workspace(
-        client, "embed-faq-update-fail"
+    organization_id, workspace_id, assistant_id, owner_headers = (
+        await _setup_org_workspace(client, "embed-faq-update-fail")
     )
     source = await _create_manual_faq_source(
-        client, organization_id, workspace_id, owner_headers
+        client, organization_id, workspace_id, owner_headers, assistant_id
     )
     source_id = source.json()["id"]
     created = await client.post(

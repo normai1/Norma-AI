@@ -1,7 +1,7 @@
 import uuid
 from typing import Annotated
 
-from fastapi import APIRouter, File, HTTPException, UploadFile, status
+from fastapi import APIRouter, File, Form, HTTPException, UploadFile, status
 
 from app.api.deps import (
     DbSession,
@@ -12,6 +12,7 @@ from app.api.deps import (
 from app.api.org_deps import CanManageKnowledge
 from app.api.workspace_deps import CurrentWorkspace
 from app.core.exceptions import (
+    AssistantNotFound,
     FileTooLarge,
     InvalidKnowledgeSourceType,
     KnowledgeSourceNotFound,
@@ -44,6 +45,11 @@ _WORKSPACE_NOT_FOUND = HTTPException(
     detail="Workspace not found",
 )
 
+_ASSISTANT_NOT_FOUND = HTTPException(
+    status_code=status.HTTP_404_NOT_FOUND,
+    detail="Assistant not found",
+)
+
 _UNSUPPORTED_FILE_TYPE = HTTPException(
     status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
     detail="Unsupported file type. Accepted: .pdf, .docx, .md, .txt",
@@ -71,6 +77,7 @@ def _to_response(
         id=knowledge_source.id,
         organization_id=knowledge_source.organization_id,
         workspace_id=knowledge_source.workspace_id,
+        assistant_id=knowledge_source.assistant_id,
         type=knowledge_source.type,
         status=knowledge_source.status,
         error_message=knowledge_source.error_message,
@@ -99,9 +106,11 @@ async def upload_knowledge_source(
     storage: StorageProviderDep,
     embedding_provider: EmbeddingProviderDep,
     file: Annotated[UploadFile, File()],
+    assistant_id: Annotated[uuid.UUID, Form()],
 ) -> KnowledgeSourceResponse:
     """
-    Upload a file as a new knowledge source. Owners and admins only.
+    Upload a file as a new knowledge source, assigned to one assistant.
+    Owners and admins only.
     """
 
     content = await file.read()
@@ -116,12 +125,15 @@ async def upload_knowledge_source(
             embedding_provider,
             organization_id=membership.organization_id,
             workspace_id=workspace_id,
+            assistant_id=assistant_id,
             owner_user_id=membership.user_id,
             filename=file.filename or "",
             content=content,
         )
     except WorkspaceNotFound as exc:
         raise _WORKSPACE_NOT_FOUND from exc
+    except AssistantNotFound as exc:
+        raise _ASSISTANT_NOT_FOUND from exc
     except UnsupportedFileType as exc:
         raise _UNSUPPORTED_FILE_TYPE from exc
     except FileTooLarge as exc:
@@ -161,11 +173,14 @@ async def create_website_knowledge_source(
             embedding_provider,
             organization_id=membership.organization_id,
             workspace_id=workspace_id,
+            assistant_id=payload.assistant_id,
             owner_user_id=membership.user_id,
             url=str(payload.url),
         )
     except WorkspaceNotFound as exc:
         raise _WORKSPACE_NOT_FOUND from exc
+    except AssistantNotFound as exc:
+        raise _ASSISTANT_NOT_FOUND from exc
 
     await db.commit()
 
@@ -233,12 +248,15 @@ async def create_manual_faq_knowledge_source(
                 db,
                 organization_id=membership.organization_id,
                 workspace_id=workspace_id,
+                assistant_id=payload.assistant_id,
                 owner_user_id=membership.user_id,
                 name=payload.name,
             )
         )
     except WorkspaceNotFound as exc:
         raise _WORKSPACE_NOT_FOUND from exc
+    except AssistantNotFound as exc:
+        raise _ASSISTANT_NOT_FOUND from exc
 
     await db.commit()
 

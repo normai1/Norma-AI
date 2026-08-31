@@ -20,6 +20,7 @@ from app.repositories import crawled_page as crawled_page_repo
 from app.repositories import knowledge_source as knowledge_source_repo
 from app.repositories import workspace as workspace_repo
 from app.repositories.chunk import ChunkWrite
+from app.services import assistant as assistant_service
 from app.services.chunker import ChunkSpan, chunk_text
 from app.services.document_parser import DocumentParseError, parse_document
 from app.services.web_crawler import crawl_website
@@ -96,6 +97,7 @@ async def create_manual_faq_knowledge_source(
     *,
     organization_id: uuid.UUID,
     workspace_id: uuid.UUID,
+    assistant_id: uuid.UUID,
     owner_user_id: uuid.UUID,
     name: str,
 ) -> KnowledgeSource:
@@ -110,10 +112,17 @@ async def create_manual_faq_knowledge_source(
         organization_id=organization_id,
         workspace_id=workspace_id,
     )
+    await assistant_service.get_assistant(
+        db,
+        organization_id=organization_id,
+        workspace_id=workspace_id,
+        assistant_id=assistant_id,
+    )
 
     knowledge_source = KnowledgeSource(
         organization_id=organization_id,
         workspace_id=workspace_id,
+        assistant_id=assistant_id,
         type=knowledge_source_repo.MANUAL_FAQ_TYPE,
         owner_user_id=owner_user_id,
         name=name,
@@ -177,6 +186,7 @@ async def _parse_and_chunk_document(
         db,
         organization_id=knowledge_source.organization_id,
         workspace_id=knowledge_source.workspace_id,
+        assistant_id=knowledge_source.assistant_id,
         knowledge_source_id=knowledge_source.id,
         chunks=[
             ChunkWrite(
@@ -240,6 +250,7 @@ async def upload_knowledge_source(
     *,
     organization_id: uuid.UUID,
     workspace_id: uuid.UUID,
+    assistant_id: uuid.UUID,
     owner_user_id: uuid.UUID,
     filename: str,
     content: bytes,
@@ -254,6 +265,12 @@ async def upload_knowledge_source(
         db,
         organization_id=organization_id,
         workspace_id=workspace_id,
+    )
+    await assistant_service.get_assistant(
+        db,
+        organization_id=organization_id,
+        workspace_id=workspace_id,
+        assistant_id=assistant_id,
     )
 
     extension = _extension_of(filename)
@@ -278,6 +295,7 @@ async def upload_knowledge_source(
             db,
             organization_id=organization_id,
             workspace_id=workspace_id,
+            assistant_id=assistant_id,
             owner_user_id=owner_user_id,
             filename=filename,
             content_type=content_type,
@@ -439,6 +457,7 @@ async def _crawl_and_reconcile(
         db,
         organization_id=knowledge_source.organization_id,
         workspace_id=knowledge_source.workspace_id,
+        assistant_id=knowledge_source.assistant_id,
         knowledge_source_id=knowledge_source.id,
         chunks=[
             ChunkWrite(
@@ -470,6 +489,7 @@ async def create_website_knowledge_source(
     *,
     organization_id: uuid.UUID,
     workspace_id: uuid.UUID,
+    assistant_id: uuid.UUID,
     owner_user_id: uuid.UUID,
     url: str,
 ) -> tuple[KnowledgeSource, list[CrawledPage]]:
@@ -482,10 +502,17 @@ async def create_website_knowledge_source(
         organization_id=organization_id,
         workspace_id=workspace_id,
     )
+    await assistant_service.get_assistant(
+        db,
+        organization_id=organization_id,
+        workspace_id=workspace_id,
+        assistant_id=assistant_id,
+    )
 
     knowledge_source = KnowledgeSource(
         organization_id=organization_id,
         workspace_id=workspace_id,
+        assistant_id=assistant_id,
         type=knowledge_source_repo.WEBSITE_TYPE,
         owner_user_id=owner_user_id,
         source_url=url,

@@ -51,10 +51,9 @@ async def retrieve(
 ) -> list[RetrievedChunk]:
     """
     Embed query and return the top_k most similar chunks in this
-    organization/workspace, most similar first. assistant_id is validated
-    (must belong to workspace_id) but is not yet a further narrowing
-    filter beyond organization+workspace - no feature yet assigns a
-    knowledge source to one specific assistant (see feature 19's spec).
+    organization/workspace/assistant, most similar first. assistant_id is
+    validated (must belong to workspace_id) and narrows the search to only
+    that assistant's own knowledge sources (feature 23d).
     """
 
     await _assert_assistant_in_workspace(
@@ -67,6 +66,7 @@ async def retrieve(
         db,
         organization_id=organization_id,
         workspace_id=workspace_id,
+        assistant_id=assistant_id,
         query_vector=query_vector,
         top_k=top_k,
     )

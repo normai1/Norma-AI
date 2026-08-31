@@ -78,6 +78,7 @@ async def create_with_document(
     *,
     organization_id: uuid.UUID,
     workspace_id: uuid.UUID,
+    assistant_id: uuid.UUID,
     owner_user_id: uuid.UUID,
     filename: str,
     content_type: str,
@@ -90,6 +91,7 @@ async def create_with_document(
     knowledge_source = KnowledgeSource(
         organization_id=organization_id,
         workspace_id=workspace_id,
+        assistant_id=assistant_id,
         type=FILE_TYPE,
         owner_user_id=owner_user_id,
     )

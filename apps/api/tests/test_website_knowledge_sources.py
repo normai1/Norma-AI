@@ -72,42 +72,68 @@ def _knowledge_sources_url(organization_id: str, workspace_id: str) -> str:
     return f"{_workspaces_url(organization_id)}/{workspace_id}/knowledge-sources"
 
 
+def _assistants_url(organization_id: str, workspace_id: str) -> str:
+    return f"{_workspaces_url(organization_id)}/{workspace_id}/assistants"
+
+
+async def _create_assistant(
+    client: AsyncClient,
+    organization_id: str,
+    workspace_id: str,
+    headers: dict[str, str],
+    name: str = "Front Desk",
+) -> str:
+    response = await client.post(
+        _assistants_url(organization_id, workspace_id),
+        json={"name": name},
+        headers=headers,
+    )
+
+    return response.json()["id"]
+
+
 async def _create_website(
     client: AsyncClient,
     organization_id: str,
     workspace_id: str,
     headers: dict[str, str],
+    assistant_id: str,
     url: str = "http://example.com/",
 ):
     return await client.post(
         f"{_knowledge_sources_url(organization_id, workspace_id)}/website",
-        json={"url": url},
+        json={"url": url, "assistant_id": assistant_id},
         headers=headers,
     )
 
 
-async def _setup_workspace(client: AsyncClient, prefix: str) -> tuple[str, str, dict]:
+async def _setup_workspace(
+    client: AsyncClient, prefix: str
+) -> tuple[str, str, str, dict]:
     owner_headers, organization_id = await _org_with_owner(
         client, f"{prefix}@example.com"
     )
     workspace = await _create_workspace(
         client, organization_id, owner_headers, "Clinic"
     )
+    assistant_id = await _create_assistant(
+        client, organization_id, workspace["id"], owner_headers
+    )
 
-    return organization_id, workspace["id"], owner_headers
+    return organization_id, workspace["id"], assistant_id, owner_headers
 
 
 async def test_create_website_source_succeeds_for_an_owner(
     client: AsyncClient, page_fetcher: MockPageFetcher
 ) -> None:
-    organization_id, workspace_id, owner_headers = await _setup_workspace(
-        client, "ws-create-owner"
+    organization_id, workspace_id, assistant_id, owner_headers = (
+        await _setup_workspace(client, "ws-create-owner")
     )
     page_fetcher.pages["http://example.com/"] = _page('<a href="/about">About</a>')
     page_fetcher.pages["http://example.com/about"] = _page("About us.")
 
     response = await _create_website(
-        client, organization_id, workspace_id, owner_headers
+        client, organization_id, workspace_id, owner_headers, assistant_id
     )
 
     assert response.status_code == 201
@@ -124,8 +150,8 @@ async def test_create_website_source_succeeds_for_an_owner(
 async def test_create_website_source_with_an_unreachable_root_fails(
     client: AsyncClient, page_fetcher: MockPageFetcher
 ) -> None:
-    organization_id, workspace_id, owner_headers = await _setup_workspace(
-        client, "ws-create-unreachable"
+    organization_id, workspace_id, assistant_id, owner_headers = (
+        await _setup_workspace(client, "ws-create-unreachable")
     )
     # Deliberately nothing registered for this URL in page_fetcher.
 
@@ -134,6 +160,7 @@ async def test_create_website_source_with_an_unreachable_root_fails(
         organization_id,
         workspace_id,
         owner_headers,
+        assistant_id,
         url="http://unreachable.example/",
     )
 
@@ -147,8 +174,8 @@ async def test_create_website_source_with_an_unreachable_root_fails(
 async def test_create_website_source_enforces_the_page_count_cap(
     client: AsyncClient, page_fetcher: MockPageFetcher
 ) -> None:
-    organization_id, workspace_id, owner_headers = await _setup_workspace(
-        client, "ws-create-cap"
+    organization_id, workspace_id, assistant_id, owner_headers = (
+        await _setup_workspace(client, "ws-create-cap")
     )
     links = "".join(f'<a href="/page{i}">p{i}</a>' for i in range(30))
     page_fetcher.pages["http://example.com/"] = _page(links)
@@ -156,7 +183,7 @@ async def test_create_website_source_enforces_the_page_count_cap(
         page_fetcher.pages[f"http://example.com/page{i}"] = _page(f"Page {i}.")
 
     response = await _create_website(
-        client, organization_id, workspace_id, owner_headers
+        client, organization_id, workspace_id, owner_headers, assistant_id
     )
 
     assert response.status_code == 201
@@ -166,7 +193,9 @@ async def test_create_website_source_enforces_the_page_count_cap(
 async def test_create_website_source_requires_authentication(
     client: AsyncClient,
 ) -> None:
-    organization_id, workspace_id, _ = await _setup_workspace(client, "ws-create-anon")
+    organization_id, workspace_id, _, _ = await _setup_workspace(
+        client, "ws-create-anon"
+    )
 
     response = await client.post(
         f"{_knowledge_sources_url(organization_id, workspace_id)}/website",
@@ -185,9 +214,12 @@ async def test_create_website_source_is_forbidden_for_a_member(
     workspace = await _create_workspace(
         client, organization_id, owner_headers, "Clinic"
     )
+    assistant_id = await _create_assistant(
+        client, organization_id, workspace["id"], owner_headers
+    )
 
     response = await _create_website(
-        client, organization_id, workspace["id"], member_headers
+        client, organization_id, workspace["id"], member_headers, assistant_id
     )
 
     assert response.status_code == 403
@@ -196,14 +228,16 @@ async def test_create_website_source_is_forbidden_for_a_member(
 async def test_recrawl_updates_only_the_changed_page(
     client: AsyncClient, page_fetcher: MockPageFetcher
 ) -> None:
-    organization_id, workspace_id, owner_headers = await _setup_workspace(
-        client, "ws-recrawl-changed"
+    organization_id, workspace_id, assistant_id, owner_headers = (
+        await _setup_workspace(client, "ws-recrawl-changed")
     )
     page_fetcher.pages["http://example.com/"] = _page('<a href="/about">About</a>')
     page_fetcher.pages["http://example.com/about"] = _page("About us, version one.")
 
     created = (
-        await _create_website(client, organization_id, workspace_id, owner_headers)
+        await _create_website(
+            client, organization_id, workspace_id, owner_headers, assistant_id
+        )
     ).json()
     original_root_hash = next(
         p["content_hash"]
@@ -243,7 +277,7 @@ async def test_recrawl_updates_only_the_changed_page(
 async def test_recrawl_is_not_found_for_a_nonexistent_source(
     client: AsyncClient,
 ) -> None:
-    organization_id, workspace_id, owner_headers = await _setup_workspace(
+    organization_id, workspace_id, _, owner_headers = await _setup_workspace(
         client, "ws-recrawl-missing"
     )
 
@@ -258,13 +292,14 @@ async def test_recrawl_is_not_found_for_a_nonexistent_source(
 async def test_recrawl_is_not_found_for_a_file_type_source(
     client: AsyncClient,
 ) -> None:
-    organization_id, workspace_id, owner_headers = await _setup_workspace(
-        client, "ws-recrawl-wrongtype"
+    organization_id, workspace_id, assistant_id, owner_headers = (
+        await _setup_workspace(client, "ws-recrawl-wrongtype")
     )
     uploaded = (
         await client.post(
             _knowledge_sources_url(organization_id, workspace_id),
             files={"file": ("a.txt", b"hello", "text/plain")},
+            data={"assistant_id": assistant_id},
             headers=owner_headers,
         )
     ).json()
@@ -286,9 +321,14 @@ async def test_recrawl_is_forbidden_for_a_member(
     workspace = await _create_workspace(
         client, organization_id, owner_headers, "Clinic"
     )
+    assistant_id = await _create_assistant(
+        client, organization_id, workspace["id"], owner_headers
+    )
     page_fetcher.pages["http://example.com/"] = _page("Hello.")
     created = (
-        await _create_website(client, organization_id, workspace["id"], owner_headers)
+        await _create_website(
+            client, organization_id, workspace["id"], owner_headers, assistant_id
+        )
     ).json()
 
     base_url = _knowledge_sources_url(organization_id, workspace["id"])
@@ -302,20 +342,42 @@ async def test_recrawl_is_forbidden_for_a_member(
 async def test_website_source_in_one_workspace_is_not_reachable_through_a_sibling(
     client: AsyncClient, page_fetcher: MockPageFetcher
 ) -> None:
-    organization_id, workspace_a_id, owner_headers = await _setup_workspace(
-        client, "ws-sibling-workspace"
+    organization_id, workspace_a_id, assistant_id, owner_headers = (
+        await _setup_workspace(client, "ws-sibling-workspace")
     )
     workspace_b = await _create_workspace(
         client, organization_id, owner_headers, "Clinic B"
     )
     page_fetcher.pages["http://example.com/"] = _page("Hello.")
     created = (
-        await _create_website(client, organization_id, workspace_a_id, owner_headers)
+        await _create_website(
+            client, organization_id, workspace_a_id, owner_headers, assistant_id
+        )
     ).json()
 
     base_url = _knowledge_sources_url(organization_id, workspace_b["id"])
     response = await client.post(
         f"{base_url}/{created['id']}/recrawl", headers=owner_headers
+    )
+
+    assert response.status_code == 404
+
+
+async def test_create_website_with_an_assistant_id_from_a_sibling_workspace_404s(
+    client: AsyncClient,
+) -> None:
+    organization_id, workspace_a_id, _, owner_headers = await _setup_workspace(
+        client, "ws-assistant-sibling-workspace"
+    )
+    workspace_b = await _create_workspace(
+        client, organization_id, owner_headers, "Clinic B"
+    )
+    assistant_in_b = await _create_assistant(
+        client, organization_id, workspace_b["id"], owner_headers
+    )
+
+    response = await _create_website(
+        client, organization_id, workspace_a_id, owner_headers, assistant_in_b
     )
 
     assert response.status_code == 404

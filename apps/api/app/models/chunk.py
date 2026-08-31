@@ -46,6 +46,18 @@ class Chunk(UUIDPrimaryKeyMixin, TimestampMixin, Base):
         index=True,
     )
 
+    # Item 23d: denormalized from the parent KnowledgeSource, mirroring
+    # organization_id/workspace_id's own precedent above - retrieval
+    # filters directly on it on the hot in-call path. Set once at
+    # chunk-write time by reading knowledge_source.assistant_id, never
+    # threaded independently, so it can never drift from its source.
+    assistant_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("assistants.id", ondelete="CASCADE"),
+        nullable=True,
+        index=True,
+    )
+
     text: Mapped[str] = mapped_column(Text, nullable=False)
 
     ordering: Mapped[int] = mapped_column(Integer, nullable=False)

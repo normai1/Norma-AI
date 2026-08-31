@@ -41,7 +41,10 @@ async def test_returns_a_matching_chunk_in_the_context_string(
         db, "internal-retrieve-ok"
     )
     source = KnowledgeSource(
-        organization_id=organization.id, workspace_id=workspace.id, type="file"
+        organization_id=organization.id,
+        workspace_id=workspace.id,
+        assistant_id=assistant.id,
+        type="file",
     )
     db.add(source)
     await db.flush()
@@ -52,6 +55,7 @@ async def test_returns_a_matching_chunk_in_the_context_string(
         Chunk(
             organization_id=organization.id,
             workspace_id=workspace.id,
+            assistant_id=assistant.id,
             knowledge_source_id=source.id,
             text=query,
             ordering=0,

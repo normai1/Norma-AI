@@ -36,6 +36,7 @@ async def replace_for_source(
     *,
     organization_id: uuid.UUID,
     workspace_id: uuid.UUID,
+    assistant_id: uuid.UUID | None,
     knowledge_source_id: uuid.UUID,
     chunks: list[ChunkWrite],
 ) -> list[Chunk]:
@@ -56,6 +57,7 @@ async def replace_for_source(
         Chunk(
             organization_id=organization_id,
             workspace_id=workspace_id,
+            assistant_id=assistant_id,
             knowledge_source_id=knowledge_source_id,
             text=write.text,
             ordering=ordering,
@@ -94,6 +96,7 @@ async def upsert_for_faq_entry(
     *,
     organization_id: uuid.UUID,
     workspace_id: uuid.UUID,
+    assistant_id: uuid.UUID | None,
     knowledge_source_id: uuid.UUID,
     faq_entry_id: uuid.UUID,
     text: str,
@@ -119,6 +122,7 @@ async def upsert_for_faq_entry(
     chunk = Chunk(
         organization_id=organization_id,
         workspace_id=workspace_id,
+        assistant_id=assistant_id,
         knowledge_source_id=knowledge_source_id,
         text=text,
         ordering=0,
@@ -155,15 +159,16 @@ async def search_by_similarity(
     *,
     organization_id: uuid.UUID,
     workspace_id: uuid.UUID,
+    assistant_id: uuid.UUID,
     query_vector: list[float],
     top_k: int,
 ) -> list[tuple[Chunk, str, float]]:
     """
     The top_k chunks closest to query_vector (cosine distance, ascending -
-    nearest first), scoped to one organization/workspace, excluding chunks
-    with no embedding yet (item 18 leaves embedding NULL until it succeeds).
-    Joins KnowledgeSource for its type, so the caller gets full source
-    attribution without a second query per result.
+    nearest first), scoped to one organization/workspace/assistant, excluding
+    chunks with no embedding yet (item 18 leaves embedding NULL until it
+    succeeds). Joins KnowledgeSource for its type, so the caller gets full
+    source attribution without a second query per result.
     """
 
     distance = Chunk.embedding.cosine_distance(query_vector)
@@ -174,6 +179,7 @@ async def search_by_similarity(
         .where(
             Chunk.organization_id == organization_id,
             Chunk.workspace_id == workspace_id,
+            Chunk.assistant_id == assistant_id,
             Chunk.embedding.isnot(None),
         )
         .order_by(distance)

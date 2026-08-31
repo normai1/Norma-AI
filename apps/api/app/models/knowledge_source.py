@@ -46,6 +46,18 @@ class KnowledgeSource(UUIDPrimaryKeyMixin, TimestampMixin, Base):
         index=True,
     )
 
+    # Item 23d: nullable at the DB level (a small number of rows created
+    # before this feature existed have no sensible assistant to assign),
+    # but required by every creation path going forward - see
+    # current-feature.md's Architecture decisions. NULL means "not usable
+    # by any assistant's retrieval," not "shared by all."
+    assistant_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("assistants.id", ondelete="CASCADE"),
+        nullable=True,
+        index=True,
+    )
+
     type: Mapped[str] = mapped_column(String(20), nullable=False)
 
     status: Mapped[str] = mapped_column(

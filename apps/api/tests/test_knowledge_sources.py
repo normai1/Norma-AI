@@ -68,11 +68,32 @@ def _knowledge_sources_url(organization_id: str, workspace_id: str) -> str:
     return f"{_workspaces_url(organization_id)}/{workspace_id}/knowledge-sources"
 
 
+def _assistants_url(organization_id: str, workspace_id: str) -> str:
+    return f"{_workspaces_url(organization_id)}/{workspace_id}/assistants"
+
+
+async def _create_assistant(
+    client: AsyncClient,
+    organization_id: str,
+    workspace_id: str,
+    headers: dict[str, str],
+    name: str = "Front Desk",
+) -> str:
+    response = await client.post(
+        _assistants_url(organization_id, workspace_id),
+        json={"name": name},
+        headers=headers,
+    )
+
+    return response.json()["id"]
+
+
 async def _upload(
     client: AsyncClient,
     organization_id: str,
     workspace_id: str,
     headers: dict[str, str],
+    assistant_id: str,
     filename: str = "policy.txt",
     content: bytes = b"hello world",
     content_type: str = "text/plain",
@@ -80,6 +101,7 @@ async def _upload(
     return await client.post(
         _knowledge_sources_url(organization_id, workspace_id),
         files={"file": (filename, content, content_type)},
+        data={"assistant_id": assistant_id},
         headers=headers,
     )
 
@@ -111,21 +133,26 @@ async def _grant_workspace_access(
     )
 
 
-async def _setup_workspace(client: AsyncClient, prefix: str) -> tuple[str, str, dict]:
+async def _setup_workspace(
+    client: AsyncClient, prefix: str
+) -> tuple[str, str, str, dict]:
     owner_headers, organization_id = await _org_with_owner(
         client, f"{prefix}@example.com"
     )
     workspace = await _create_workspace(
         client, organization_id, owner_headers, "Clinic"
     )
+    assistant_id = await _create_assistant(
+        client, organization_id, workspace["id"], owner_headers
+    )
 
-    return organization_id, workspace["id"], owner_headers
+    return organization_id, workspace["id"], assistant_id, owner_headers
 
 
 async def test_upload_succeeds_for_an_owner(
     client: AsyncClient, storage: MockStorage
 ) -> None:
-    organization_id, workspace_id, owner_headers = await _setup_workspace(
+    organization_id, workspace_id, assistant_id, owner_headers = await _setup_workspace(
         client, "ks-upload-owner"
     )
 
@@ -134,6 +161,7 @@ async def test_upload_succeeds_for_an_owner(
         organization_id,
         workspace_id,
         owner_headers,
+        assistant_id,
         filename="policy.txt",
         content=b"the actual file bytes",
         content_type="text/plain",
@@ -161,7 +189,7 @@ async def test_upload_succeeds_for_an_owner(
 
 
 async def test_upload_accepts_every_supported_extension(client: AsyncClient) -> None:
-    organization_id, workspace_id, owner_headers = await _setup_workspace(
+    organization_id, workspace_id, assistant_id, owner_headers = await _setup_workspace(
         client, "ks-upload-extensions"
     )
 
@@ -179,6 +207,7 @@ async def test_upload_accepts_every_supported_extension(client: AsyncClient) -> 
             organization_id,
             workspace_id,
             owner_headers,
+            assistant_id,
             filename=filename,
             content_type=content_type,
         )
@@ -187,7 +216,7 @@ async def test_upload_accepts_every_supported_extension(client: AsyncClient) -> 
 
 
 async def test_upload_rejects_an_unsupported_extension(client: AsyncClient) -> None:
-    organization_id, workspace_id, owner_headers = await _setup_workspace(
+    organization_id, workspace_id, assistant_id, owner_headers = await _setup_workspace(
         client, "ks-upload-badext"
     )
 
@@ -196,6 +225,7 @@ async def test_upload_rejects_an_unsupported_extension(client: AsyncClient) -> N
         organization_id,
         workspace_id,
         owner_headers,
+        assistant_id,
         filename="virus.exe",
         content_type="application/octet-stream",
     )
@@ -204,7 +234,7 @@ async def test_upload_rejects_an_unsupported_extension(client: AsyncClient) -> N
 
 
 async def test_upload_rejects_a_file_over_the_size_cap(client: AsyncClient) -> None:
-    organization_id, workspace_id, owner_headers = await _setup_workspace(
+    organization_id, workspace_id, assistant_id, owner_headers = await _setup_workspace(
         client, "ks-upload-toolarge"
     )
 
@@ -215,6 +245,7 @@ async def test_upload_rejects_a_file_over_the_size_cap(client: AsyncClient) -> N
         organization_id,
         workspace_id,
         owner_headers,
+        assistant_id,
         filename="big.txt",
         content=oversized,
         content_type="text/plain",
@@ -224,7 +255,9 @@ async def test_upload_rejects_a_file_over_the_size_cap(client: AsyncClient) -> N
 
 
 async def test_upload_requires_authentication(client: AsyncClient) -> None:
-    organization_id, workspace_id, _ = await _setup_workspace(client, "ks-upload-anon")
+    organization_id, workspace_id, _, _ = await _setup_workspace(
+        client, "ks-upload-anon"
+    )
 
     response = await client.post(
         _knowledge_sources_url(organization_id, workspace_id),
@@ -241,8 +274,13 @@ async def test_upload_is_forbidden_for_a_member(client: AsyncClient) -> None:
     workspace = await _create_workspace(
         client, organization_id, owner_headers, "Clinic"
     )
+    assistant_id = await _create_assistant(
+        client, organization_id, workspace["id"], owner_headers
+    )
 
-    response = await _upload(client, organization_id, workspace["id"], member_headers)
+    response = await _upload(
+        client, organization_id, workspace["id"], member_headers, assistant_id
+    )
 
     assert response.status_code == 403
 
@@ -254,14 +292,19 @@ async def test_upload_is_forbidden_for_a_viewer(client: AsyncClient) -> None:
     workspace = await _create_workspace(
         client, organization_id, owner_headers, "Clinic"
     )
+    assistant_id = await _create_assistant(
+        client, organization_id, workspace["id"], owner_headers
+    )
 
-    response = await _upload(client, organization_id, workspace["id"], viewer_headers)
+    response = await _upload(
+        client, organization_id, workspace["id"], viewer_headers, assistant_id
+    )
 
     assert response.status_code == 403
 
 
 async def test_list_returns_empty_for_a_new_workspace(client: AsyncClient) -> None:
-    organization_id, workspace_id, owner_headers = await _setup_workspace(
+    organization_id, workspace_id, assistant_id, owner_headers = await _setup_workspace(
         client, "ks-list-empty"
     )
 
@@ -289,8 +332,13 @@ async def test_list_and_get_are_reachable_by_an_explicit_workspace_member(
     await _grant_workspace_access(
         client, organization_id, workspace["id"], owner_headers, member_id
     )
+    assistant_id = await _create_assistant(
+        client, organization_id, workspace["id"], owner_headers
+    )
     created = (
-        await _upload(client, organization_id, workspace["id"], owner_headers)
+        await _upload(
+            client, organization_id, workspace["id"], owner_headers, assistant_id
+        )
     ).json()
 
     list_response = await client.get(
@@ -312,7 +360,7 @@ async def test_list_and_get_are_reachable_by_an_explicit_workspace_member(
 async def test_get_is_not_found_for_a_nonexistent_knowledge_source(
     client: AsyncClient,
 ) -> None:
-    organization_id, workspace_id, owner_headers = await _setup_workspace(
+    organization_id, workspace_id, assistant_id, owner_headers = await _setup_workspace(
         client, "ks-get-missing"
     )
 
@@ -325,14 +373,16 @@ async def test_get_is_not_found_for_a_nonexistent_knowledge_source(
 async def test_knowledge_source_in_one_workspace_is_not_reachable_through_a_sibling(
     client: AsyncClient,
 ) -> None:
-    organization_id, workspace_a_id, owner_headers = await _setup_workspace(
-        client, "ks-sibling-workspace"
+    organization_id, workspace_a_id, assistant_id, owner_headers = (
+        await _setup_workspace(client, "ks-sibling-workspace")
     )
     workspace_b = await _create_workspace(
         client, organization_id, owner_headers, "Clinic B"
     )
     created = (
-        await _upload(client, organization_id, workspace_a_id, owner_headers)
+        await _upload(
+            client, organization_id, workspace_a_id, owner_headers, assistant_id
+        )
     ).json()
 
     base_url = _knowledge_sources_url(organization_id, workspace_b["id"])
@@ -344,17 +394,39 @@ async def test_knowledge_source_in_one_workspace_is_not_reachable_through_a_sibl
 async def test_knowledge_source_in_one_organization_is_not_reachable_through_another(
     client: AsyncClient,
 ) -> None:
-    organization_a_id, workspace_id, owner_a_headers = await _setup_workspace(
-        client, "ks-sibling-org-a"
+    organization_a_id, workspace_id, assistant_id, owner_a_headers = (
+        await _setup_workspace(client, "ks-sibling-org-a")
     )
     owner_b_headers, organization_b_id = await _org_with_owner(
         client, "ks-sibling-org-b@example.com"
     )
     created = (
-        await _upload(client, organization_a_id, workspace_id, owner_a_headers)
+        await _upload(
+            client, organization_a_id, workspace_id, owner_a_headers, assistant_id
+        )
     ).json()
 
     base_url = _knowledge_sources_url(organization_b_id, workspace_id)
     response = await client.get(f"{base_url}/{created['id']}", headers=owner_b_headers)
+
+    assert response.status_code == 404
+
+
+async def test_upload_with_an_assistant_id_from_a_sibling_workspace_404s(
+    client: AsyncClient,
+) -> None:
+    organization_id, workspace_a_id, _, owner_headers = await _setup_workspace(
+        client, "ks-assistant-sibling-workspace"
+    )
+    workspace_b = await _create_workspace(
+        client, organization_id, owner_headers, "Clinic B"
+    )
+    assistant_in_b = await _create_assistant(
+        client, organization_id, workspace_b["id"], owner_headers
+    )
+
+    response = await _upload(
+        client, organization_id, workspace_a_id, owner_headers, assistant_in_b
+    )
 
     assert response.status_code == 404

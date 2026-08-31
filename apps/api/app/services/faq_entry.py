@@ -16,13 +16,13 @@ def _faq_chunk_text(question: str, answer: str) -> str:
     return f"Q: {question}\nA: {answer}"
 
 
-async def _resolve_manual_faq_source_id(
+async def _resolve_manual_faq_source(
     db: AsyncSession,
     *,
     organization_id: uuid.UUID,
     workspace_id: uuid.UUID,
     knowledge_source_id: uuid.UUID,
-) -> uuid.UUID:
+):
     """
     Confirm the knowledge source exists in the caller's workspace and is
     type='manual_faq' before any FAQ entry operation touches it. A missing
@@ -44,7 +44,7 @@ async def _resolve_manual_faq_source_id(
     if knowledge_source.type != knowledge_source_repo.MANUAL_FAQ_TYPE:
         raise FaqEntryNotFound
 
-    return knowledge_source.id
+    return knowledge_source
 
 
 async def resolve_faq_entry(
@@ -60,7 +60,7 @@ async def resolve_faq_entry(
     knowledge source.
     """
 
-    source_id = await _resolve_manual_faq_source_id(
+    knowledge_source = await _resolve_manual_faq_source(
         db,
         organization_id=organization_id,
         workspace_id=workspace_id,
@@ -69,7 +69,7 @@ async def resolve_faq_entry(
 
     faq_entry = await faq_entry_repo.get_by_id(db, faq_entry_id)
 
-    if faq_entry is None or faq_entry.knowledge_source_id != source_id:
+    if faq_entry is None or faq_entry.knowledge_source_id != knowledge_source.id:
         raise FaqEntryNotFound
 
     return faq_entry
@@ -93,7 +93,7 @@ async def create_faq_entry(
     since the caller's db.commit() runs after this returns.
     """
 
-    source_id = await _resolve_manual_faq_source_id(
+    knowledge_source = await _resolve_manual_faq_source(
         db,
         organization_id=organization_id,
         workspace_id=workspace_id,
@@ -104,7 +104,7 @@ async def create_faq_entry(
 
     faq_entry = await faq_entry_repo.create(
         db,
-        knowledge_source_id=source_id,
+        knowledge_source_id=knowledge_source.id,
         question=question,
         answer=answer,
     )
@@ -113,7 +113,8 @@ async def create_faq_entry(
         db,
         organization_id=organization_id,
         workspace_id=workspace_id,
-        knowledge_source_id=source_id,
+        assistant_id=knowledge_source.assistant_id,
+        knowledge_source_id=knowledge_source.id,
         faq_entry_id=faq_entry.id,
         text=_faq_chunk_text(faq_entry.question, faq_entry.answer),
         embedding=vector,
@@ -134,14 +135,14 @@ async def list_faq_entries(
     the caller's workspace.
     """
 
-    source_id = await _resolve_manual_faq_source_id(
+    knowledge_source = await _resolve_manual_faq_source(
         db,
         organization_id=organization_id,
         workspace_id=workspace_id,
         knowledge_source_id=knowledge_source_id,
     )
 
-    return await faq_entry_repo.list_for_source(db, source_id)
+    return await faq_entry_repo.list_for_source(db, knowledge_source.id)
 
 
 async def update_faq_entry(
@@ -180,10 +181,18 @@ async def update_faq_entry(
         db, faq_entry, question=question, answer=answer
     )
 
+    knowledge_source = await _resolve_manual_faq_source(
+        db,
+        organization_id=organization_id,
+        workspace_id=workspace_id,
+        knowledge_source_id=knowledge_source_id,
+    )
+
     await chunk_repo.upsert_for_faq_entry(
         db,
         organization_id=organization_id,
         workspace_id=workspace_id,
+        assistant_id=knowledge_source.assistant_id,
         knowledge_source_id=faq_entry.knowledge_source_id,
         faq_entry_id=faq_entry.id,
         text=_faq_chunk_text(faq_entry.question, faq_entry.answer),

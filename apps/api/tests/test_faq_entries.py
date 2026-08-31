@@ -67,16 +67,37 @@ def _knowledge_sources_url(organization_id: str, workspace_id: str) -> str:
     return f"{_workspaces_url(organization_id)}/{workspace_id}/knowledge-sources"
 
 
+def _assistants_url(organization_id: str, workspace_id: str) -> str:
+    return f"{_workspaces_url(organization_id)}/{workspace_id}/assistants"
+
+
+async def _create_assistant(
+    client: AsyncClient,
+    organization_id: str,
+    workspace_id: str,
+    headers: dict[str, str],
+    name: str = "Front Desk",
+) -> str:
+    response = await client.post(
+        _assistants_url(organization_id, workspace_id),
+        json={"name": name},
+        headers=headers,
+    )
+
+    return response.json()["id"]
+
+
 async def _create_manual_faq_source(
     client: AsyncClient,
     organization_id: str,
     workspace_id: str,
     headers: dict[str, str],
+    assistant_id: str,
     name: str = "General FAQ",
 ):
     return await client.post(
         f"{_knowledge_sources_url(organization_id, workspace_id)}/manual-faq",
-        json={"name": name},
+        json={"name": name, "assistant_id": assistant_id},
         headers=headers,
     )
 
@@ -98,9 +119,12 @@ async def _setup_manual_faq_source(
     workspace = await _create_workspace(
         client, organization_id, owner_headers, "Clinic"
     )
+    assistant_id = await _create_assistant(
+        client, organization_id, workspace["id"], owner_headers
+    )
     created = (
         await _create_manual_faq_source(
-            client, organization_id, workspace["id"], owner_headers
+            client, organization_id, workspace["id"], owner_headers, assistant_id
         )
     ).json()
 
@@ -116,9 +140,17 @@ async def test_create_manual_faq_source_returns_expected_shape(
     workspace = await _create_workspace(
         client, organization_id, owner_headers, "Clinic"
     )
+    assistant_id = await _create_assistant(
+        client, organization_id, workspace["id"], owner_headers
+    )
 
     response = await _create_manual_faq_source(
-        client, organization_id, workspace["id"], owner_headers, name="General FAQ"
+        client,
+        organization_id,
+        workspace["id"],
+        owner_headers,
+        assistant_id,
+        name="General FAQ",
     )
 
     assert response.status_code == 201
@@ -155,9 +187,12 @@ async def test_create_manual_faq_source_is_forbidden_for_a_member(
     workspace = await _create_workspace(
         client, organization_id, owner_headers, "Clinic"
     )
+    assistant_id = await _create_assistant(
+        client, organization_id, workspace["id"], owner_headers
+    )
 
     response = await _create_manual_faq_source(
-        client, organization_id, workspace["id"], member_headers
+        client, organization_id, workspace["id"], member_headers, assistant_id
     )
 
     assert response.status_code == 403
@@ -204,9 +239,12 @@ async def test_create_entry_is_forbidden_for_a_member(client: AsyncClient) -> No
     workspace = await _create_workspace(
         client, organization_id, owner_headers, "Clinic"
     )
+    assistant_id = await _create_assistant(
+        client, organization_id, workspace["id"], owner_headers
+    )
     source = (
         await _create_manual_faq_source(
-            client, organization_id, workspace["id"], owner_headers
+            client, organization_id, workspace["id"], owner_headers, assistant_id
         )
     ).json()
 
@@ -258,9 +296,12 @@ async def test_list_is_reachable_by_an_explicit_workspace_member(
         json={"member_id": member_id},
         headers=owner_headers,
     )
+    assistant_id = await _create_assistant(
+        client, organization_id, workspace["id"], owner_headers
+    )
     source = (
         await _create_manual_faq_source(
-            client, organization_id, workspace["id"], owner_headers
+            client, organization_id, workspace["id"], owner_headers, assistant_id
         )
     ).json()
     url = _faq_entries_url(organization_id, workspace["id"], source["id"])
@@ -311,9 +352,12 @@ async def test_update_is_forbidden_for_a_member(client: AsyncClient) -> None:
     workspace = await _create_workspace(
         client, organization_id, owner_headers, "Clinic"
     )
+    assistant_id = await _create_assistant(
+        client, organization_id, workspace["id"], owner_headers
+    )
     source = (
         await _create_manual_faq_source(
-            client, organization_id, workspace["id"], owner_headers
+            client, organization_id, workspace["id"], owner_headers, assistant_id
         )
     ).json()
     url = _faq_entries_url(organization_id, workspace["id"], source["id"])
@@ -380,9 +424,12 @@ async def test_delete_is_forbidden_for_a_member(client: AsyncClient) -> None:
     workspace = await _create_workspace(
         client, organization_id, owner_headers, "Clinic"
     )
+    assistant_id = await _create_assistant(
+        client, organization_id, workspace["id"], owner_headers
+    )
     source = (
         await _create_manual_faq_source(
-            client, organization_id, workspace["id"], owner_headers
+            client, organization_id, workspace["id"], owner_headers, assistant_id
         )
     ).json()
     url = _faq_entries_url(organization_id, workspace["id"], source["id"])
@@ -420,10 +467,14 @@ async def test_entry_routes_404_for_a_file_type_source(client: AsyncClient) -> N
     workspace = await _create_workspace(
         client, organization_id, owner_headers, "Clinic"
     )
+    assistant_id = await _create_assistant(
+        client, organization_id, workspace["id"], owner_headers
+    )
     uploaded = (
         await client.post(
             _knowledge_sources_url(organization_id, workspace["id"]),
             files={"file": ("a.txt", b"hello", "text/plain")},
+            data={"assistant_id": assistant_id},
             headers=owner_headers,
         )
     ).json()
