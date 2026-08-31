@@ -1,5 +1,7 @@
 from httpx import AsyncClient
+from norma_shared.voice_session_ticket import decode_voice_session_ticket
 
+from app.core.config import settings
 from tests.conftest import _org_with_owner, _signed_in
 
 ORGS = "/api/v1/organizations"
@@ -718,6 +720,130 @@ async def test_publish_rejects_an_archived_assistant(client: AsyncClient) -> Non
     )
 
     assert response.status_code == 409
+
+
+def _test_call_token_url(
+    organization_id: str, workspace_id: str, assistant_id: str
+) -> str:
+    base = _assistants_url(organization_id, workspace_id)
+    return f"{base}/{assistant_id}/test-call-token"
+
+
+async def test_test_call_token_succeeds_for_a_member(client: AsyncClient) -> None:
+    organization_id, owner_headers, member_headers = await _org_with_member(
+        client,
+        "asst-ticket-member",
+        "member",
+    )
+    workspace = await _create_workspace(
+        client, organization_id, owner_headers, "Clinic"
+    )
+    member_id = await _org_member_id(
+        client,
+        organization_id,
+        owner_headers,
+        "asst-ticket-member-member@example.com",
+    )
+    await _grant_workspace_access(
+        client,
+        organization_id,
+        workspace["id"],
+        owner_headers,
+        member_id,
+    )
+    created = await _create_assistant(
+        client,
+        organization_id,
+        workspace["id"],
+        owner_headers,
+        "Front Desk",
+    )
+
+    response = await client.post(
+        _test_call_token_url(organization_id, workspace["id"], created["id"]),
+        headers=member_headers,
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["expires_in"] > 0
+    assistant_id = decode_voice_session_ticket(
+        body["ticket"],
+        secret_key=settings.secret_key,
+        algorithm=settings.jwt_algorithm,
+    )
+    assert assistant_id == created["id"]
+
+
+async def test_test_call_token_requires_authentication(client: AsyncClient) -> None:
+    owner_headers, organization_id = await _org_with_owner(
+        client,
+        "asst-ticket-anon@example.com",
+    )
+    workspace = await _create_workspace(
+        client, organization_id, owner_headers, "Clinic"
+    )
+    created = await _create_assistant(
+        client,
+        organization_id,
+        workspace["id"],
+        owner_headers,
+        "Front Desk",
+    )
+
+    response = await client.post(
+        _test_call_token_url(organization_id, workspace["id"], created["id"]),
+    )
+
+    assert response.status_code == 401
+
+
+async def test_test_call_token_is_not_found_for_a_nonexistent_assistant(
+    client: AsyncClient,
+) -> None:
+    owner_headers, organization_id = await _org_with_owner(
+        client,
+        "asst-ticket-missing@example.com",
+    )
+    workspace = await _create_workspace(
+        client, organization_id, owner_headers, "Clinic"
+    )
+
+    response = await client.post(
+        _test_call_token_url(organization_id, workspace["id"], _MISSING_ID),
+        headers=owner_headers,
+    )
+
+    assert response.status_code == 404
+
+
+async def test_test_call_token_sibling_workspace_is_not_reachable(
+    client: AsyncClient,
+) -> None:
+    owner_headers, organization_id = await _org_with_owner(
+        client,
+        "asst-ticket-sibling@example.com",
+    )
+    workspace_a = await _create_workspace(
+        client, organization_id, owner_headers, "Clinic A"
+    )
+    workspace_b = await _create_workspace(
+        client, organization_id, owner_headers, "Clinic B"
+    )
+    created = await _create_assistant(
+        client,
+        organization_id,
+        workspace_a["id"],
+        owner_headers,
+        "Front Desk",
+    )
+
+    response = await client.post(
+        _test_call_token_url(organization_id, workspace_b["id"], created["id"]),
+        headers=owner_headers,
+    )
+
+    assert response.status_code == 404
 
 
 async def test_publish_in_one_workspace_is_not_reachable_through_a_sibling_workspace(

@@ -10,6 +10,7 @@ import uuid
 
 import pytest
 from norma_shared.mock_speech import MockTTS
+from norma_shared.voice_session_ticket import create_voice_session_ticket
 from pipecat.audio.vad.vad_analyzer import VADState
 
 import app.main as main_module
@@ -17,6 +18,35 @@ import app.media_session as media_session_module
 from app.llm_config_client import LLMConfig
 from app.tts_config_client import TTSConfig
 from app.turn_metrics import TurnMetricRecord
+
+# Item 21a: a fixed test secret/algorithm, monkeypatched into app.main by
+# _patch_session_setup below so every test's ticket, built with the same
+# values, verifies without depending on a real SECRET_KEY being set in the
+# test environment.
+_TEST_SECRET_KEY = "test-secret-key-for-voice-session-tickets"
+_TEST_JWT_ALGORITHM = "HS256"
+
+
+def _test_ticket(assistant_id, *, ttl_seconds: float = 60) -> str:
+    return create_voice_session_ticket(
+        secret_key=_TEST_SECRET_KEY,
+        algorithm=_TEST_JWT_ALGORITHM,
+        assistant_id=str(assistant_id),
+        ttl_seconds=ttl_seconds,
+    )
+
+
+def _media_session_url(assistant_id, *, ticket: str | None = None) -> str:
+    """
+    Builds a /media/session URL with a valid ticket for assistant_id, unless
+    an explicit (possibly invalid) ticket is passed - for the rejection-path
+    tests that need to connect with a bad or missing ticket.
+    """
+
+    if ticket is None:
+        ticket = _test_ticket(assistant_id)
+
+    return f"/media/session?ticket={ticket}"
 
 
 class _ScriptedVADAnalyzer:
@@ -137,6 +167,8 @@ def _patch_session_setup(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(main_module, "fetch_tts_config", _fake_fetch_tts_config)
     monkeypatch.setattr(main_module, "get_tts_provider", _silent_tts)
     monkeypatch.setattr(media_session_module, "record_turn_metric", _noop_record_turn_metric)
+    monkeypatch.setattr(main_module, "SECRET_KEY", _TEST_SECRET_KEY)
+    monkeypatch.setattr(main_module, "JWT_ALGORITHM", _TEST_JWT_ALGORITHM)
 
 
 def _receive_one(ws) -> tuple[str, object]:

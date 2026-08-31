@@ -52,3 +52,11 @@ MAX_PROVIDER_RETRIES = int(os.environ.get("MAX_PROVIDER_RETRIES", "1"))
 # How many *consecutive* fully-failed LLM turns trigger session failover -
 # a single isolated blip still just gets the existing llm_error message.
 MAX_CONSECUTIVE_LLM_FAILURES = int(os.environ.get("MAX_CONSECUTIVE_LLM_FAILURES", "2"))
+
+# Item 21a: verifies the voice-session ticket apps/api issues for a browser
+# test call. Shared with apps/api via docker-compose.yml's env_file - both
+# planes must agree on the same secret/algorithm for a ticket to ever
+# validate. No default for SECRET_KEY: an empty or missing value must fail
+# ticket verification loudly, never fall back to a guessable default.
+SECRET_KEY = os.environ.get("SECRET_KEY", "")
+JWT_ALGORITHM = os.environ.get("JWT_ALGORITHM", "HS256")

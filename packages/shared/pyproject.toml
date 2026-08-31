@@ -10,6 +10,7 @@ requires-python = ">=3.12"
 dependencies = [
     "httpx",
     "websockets",
+    "PyJWT",
 ]
 
 [tool.setuptools]

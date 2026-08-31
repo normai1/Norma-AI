@@ -17,7 +17,9 @@ from app.schemas.assistant import (
     AssistantResponse,
     AssistantUpdate,
 )
+from app.schemas.voice_session import VoiceSessionTicketResponse
 from app.services import assistant as assistant_service
+from app.services import voice_session as voice_session_service
 
 router = APIRouter(tags=["assistants"])
 
@@ -117,6 +119,35 @@ async def get_assistant(
         raise _ASSISTANT_NOT_FOUND from exc
 
     return AssistantResponse.model_validate(assistant)
+
+
+@router.post(
+    "/organizations/{organization_id}/workspaces/{workspace_id}"
+    "/assistants/{assistant_id}/test-call-token",
+    response_model=VoiceSessionTicketResponse,
+)
+async def issue_test_call_token(
+    assistant_id: uuid.UUID,
+    workspace: CurrentWorkspace,
+    db: DbSession,
+) -> VoiceSessionTicketResponse:
+    """
+    Issue a short-lived ticket authorizing a browser test call against this
+    assistant. Any workspace member may request one, matching
+    get_assistant's own "any member may see it" precedent.
+    """
+
+    try:
+        ticket, expires_in = await voice_session_service.issue_test_call_ticket(
+            db,
+            organization_id=workspace.organization_id,
+            workspace_id=workspace.id,
+            assistant_id=assistant_id,
+        )
+    except AssistantNotFound as exc:
+        raise _ASSISTANT_NOT_FOUND from exc
+
+    return VoiceSessionTicketResponse(ticket=ticket, expires_in=expires_in)
 
 
 @router.patch(

@@ -1,11 +1,13 @@
 import json
 from concurrent.futures import CancelledError as FutureCancelledError
 
+import jwt
 import pytest
 from fastapi.testclient import TestClient
 from norma_shared.mock_speech import MockSTT, MockTTS
 from norma_shared.speech import SpeechProviderUnavailable, TranscriptEvent
 from pipecat.audio.vad.vad_analyzer import VADState
+from starlette.websockets import WebSocketDisconnect
 
 import app.main as main_module
 import app.media_session as media_session_module
@@ -14,14 +16,18 @@ from app.llm import LLMProviderUnavailable
 from app.main import app
 from app.mock_llm import MockLLM
 from tests.conftest import (
+    _TEST_JWT_ALGORITHM,
+    _TEST_SECRET_KEY,
     _capturing_record_turn_metric,
     _fake_fetch_glossary_terms,
     _fake_fetch_retrieved_context,
     _fake_fetch_turn_sensitivity,
+    _media_session_url,
     _patch_session_setup,
     _patch_turn_detector_vad,
     _receive_one,
     _ScriptedVADAnalyzer,
+    _test_ticket,
 )
 
 
@@ -49,7 +55,7 @@ def test_media_session_streams_partial_then_final_transcripts(
 
     with (
         TestClient(app) as client,
-        client.websocket_connect(f"/media/session?assistant_id={assistant_id}") as ws,
+        client.websocket_connect(_media_session_url(assistant_id)) as ws,
     ):
         # Large enough to clear the output/input chunking machinery, split
         # across several sends so MockSTT's chunks_before_event has audio
@@ -86,7 +92,7 @@ def test_media_session_passes_glossary_terms_to_the_provider(
 
     with (
         TestClient(app) as client,
-        client.websocket_connect(f"/media/session?assistant_id={assistant_id}") as ws,
+        client.websocket_connect(_media_session_url(assistant_id)) as ws,
     ):
         ws.send_bytes(bytes(range(256)) * 20)
         ws.receive_text()
@@ -124,7 +130,7 @@ def test_media_session_emits_turn_ended_after_silence_follows_a_final_transcript
 
     with (
         TestClient(app) as client,
-        client.websocket_connect(f"/media/session?assistant_id={assistant_id}") as ws,
+        client.websocket_connect(_media_session_url(assistant_id)) as ws,
     ):
         chunk = bytes(range(256)) * 5
         for _ in range(3):
@@ -187,7 +193,7 @@ def test_media_session_streams_an_llm_reply_after_a_turn_ends(
 
     with (
         TestClient(app) as client,
-        client.websocket_connect(f"/media/session?assistant_id={assistant_id}") as ws,
+        client.websocket_connect(_media_session_url(assistant_id)) as ws,
     ):
         chunk = bytes(range(256)) * 5
         for _ in range(3):
@@ -249,7 +255,7 @@ def test_media_session_emits_llm_error_when_the_provider_fails(
 
     with (
         TestClient(app) as client,
-        client.websocket_connect(f"/media/session?assistant_id={assistant_id}") as ws,
+        client.websocket_connect(_media_session_url(assistant_id)) as ws,
     ):
         chunk = bytes(range(256)) * 5
         for _ in range(3):
@@ -318,7 +324,7 @@ def test_media_session_detects_and_answers_a_second_independent_turn(
 
     with (
         TestClient(app) as client,
-        client.websocket_connect(f"/media/session?assistant_id={assistant_id}") as ws,
+        client.websocket_connect(_media_session_url(assistant_id)) as ws,
     ):
         for _ in range(3):
             ws.send_bytes(chunk)
@@ -392,7 +398,7 @@ def test_media_session_emits_caller_speech_started_on_a_genuine_onset_edge(
 
     with (
         TestClient(app) as client,
-        client.websocket_connect(f"/media/session?assistant_id={assistant_id}") as ws,
+        client.websocket_connect(_media_session_url(assistant_id)) as ws,
     ):
         for _ in range(4):
             ws.send_bytes(chunk)
@@ -447,7 +453,7 @@ def test_media_session_cancels_an_in_flight_llm_call_on_caller_speech_started(
 
     with (
         TestClient(app) as client,
-        client.websocket_connect(f"/media/session?assistant_id={assistant_id}") as ws,
+        client.websocket_connect(_media_session_url(assistant_id)) as ws,
     ):
         ws.send_bytes(chunk)
         ws.send_bytes(chunk)
@@ -520,7 +526,7 @@ def test_media_session_streams_sentence_audio_before_the_llm_finishes(
 
     with (
         TestClient(app) as client,
-        client.websocket_connect(f"/media/session?assistant_id={assistant_id}") as ws,
+        client.websocket_connect(_media_session_url(assistant_id)) as ws,
     ):
         for _ in range(3):
             ws.send_bytes(chunk)
@@ -610,7 +616,7 @@ def test_media_session_emits_tts_error_when_the_provider_fails(
 
     with (
         TestClient(app) as client,
-        client.websocket_connect(f"/media/session?assistant_id={assistant_id}") as ws,
+        client.websocket_connect(_media_session_url(assistant_id)) as ws,
     ):
         for _ in range(3):
             ws.send_bytes(chunk)
@@ -678,7 +684,7 @@ def test_media_session_barge_in_stops_pending_tts_before_any_audio_and_starts_a_
 
     with (
         TestClient(app) as client,
-        client.websocket_connect(f"/media/session?assistant_id={assistant_id}") as ws,
+        client.websocket_connect(_media_session_url(assistant_id)) as ws,
     ):
         for _ in range(3):
             ws.send_bytes(chunk)
@@ -762,7 +768,7 @@ def test_media_session_records_turn_metrics_for_a_normal_reply(
 
     with (
         TestClient(app) as client,
-        client.websocket_connect(f"/media/session?assistant_id={assistant_id}") as ws,
+        client.websocket_connect(_media_session_url(assistant_id)) as ws,
     ):
         for _ in range(3):
             ws.send_bytes(chunk)
@@ -824,7 +830,7 @@ def test_media_session_records_a_null_audio_leg_on_tts_failure(
 
     with (
         TestClient(app) as client,
-        client.websocket_connect(f"/media/session?assistant_id={assistant_id}") as ws,
+        client.websocket_connect(_media_session_url(assistant_id)) as ws,
     ):
         for _ in range(3):
             ws.send_bytes(chunk)
@@ -891,7 +897,7 @@ def test_media_session_barge_in_posts_two_separate_turn_metric_records(
 
     with (
         TestClient(app) as client,
-        client.websocket_connect(f"/media/session?assistant_id={assistant_id}") as ws,
+        client.websocket_connect(_media_session_url(assistant_id)) as ws,
     ):
         for _ in range(3):
             ws.send_bytes(chunk)
@@ -974,7 +980,7 @@ def test_media_session_disconnecting_mid_reply_still_posts_a_partial_record(
 
     with (
         TestClient(app) as client,
-        client.websocket_connect(f"/media/session?assistant_id={assistant_id}") as ws,
+        client.websocket_connect(_media_session_url(assistant_id)) as ws,
     ):
         for _ in range(3):
             ws.send_bytes(chunk)
@@ -1026,7 +1032,7 @@ def test_media_session_disconnecting_before_any_turn_starts_posts_nothing(
 
     with (
         TestClient(app) as client,
-        client.websocket_connect(f"/media/session?assistant_id={assistant_id}") as ws,
+        client.websocket_connect(_media_session_url(assistant_id)) as ws,
     ):
         ws.send_bytes(bytes(range(256)) * 5)
 
@@ -1061,7 +1067,7 @@ def test_media_session_stt_crash_triggers_immediate_session_failover(
 
     with (
         TestClient(app) as client,
-        client.websocket_connect(f"/media/session?assistant_id={assistant_id}") as ws,
+        client.websocket_connect(_media_session_url(assistant_id)) as ws,
     ):
         received = []
 
@@ -1123,7 +1129,7 @@ def test_media_session_llm_that_never_responds_is_retried_before_giving_up(
 
     with (
         TestClient(app) as client,
-        client.websocket_connect(f"/media/session?assistant_id={assistant_id}") as ws,
+        client.websocket_connect(_media_session_url(assistant_id)) as ws,
     ):
         for _ in range(3):
             ws.send_bytes(chunk)
@@ -1188,7 +1194,7 @@ def test_media_session_llm_failover_only_after_consecutive_failure_threshold(
     try:
         with (
             TestClient(app) as client,
-            client.websocket_connect(f"/media/session?assistant_id={assistant_id}") as ws,
+            client.websocket_connect(_media_session_url(assistant_id)) as ws,
         ):
             for _ in range(3):
                 ws.send_bytes(chunk)
@@ -1268,7 +1274,7 @@ def test_media_session_tts_that_never_responds_is_retried_before_giving_up(
 
     with (
         TestClient(app) as client,
-        client.websocket_connect(f"/media/session?assistant_id={assistant_id}") as ws,
+        client.websocket_connect(_media_session_url(assistant_id)) as ws,
     ):
         for _ in range(3):
             ws.send_bytes(chunk)
@@ -1326,7 +1332,7 @@ def test_media_session_session_failover_speaks_apology_and_closes_the_connection
     try:
         with (
             TestClient(app) as client,
-            client.websocket_connect(f"/media/session?assistant_id={assistant_id}") as ws,
+            client.websocket_connect(_media_session_url(assistant_id)) as ws,
         ):
             while True:
                 message = ws.receive()
@@ -1363,3 +1369,86 @@ def test_media_session_session_failover_speaks_apology_and_closes_the_connection
     )
     assert any(kind == "bytes" for kind, _ in received)
     assert mock_tts.call_count == 1
+
+
+def test_media_session_rejects_a_connection_with_no_ticket(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """
+    ticket is a required query parameter - FastAPI itself refuses the
+    handshake before app code (and therefore before .accept()) ever runs,
+    which is an even stronger guarantee than main.py's own rejection path
+    below for a present-but-invalid ticket.
+    """
+
+    _patch_session_setup(monkeypatch)
+
+    with (
+        pytest.raises(WebSocketDisconnect),
+        TestClient(app) as client,
+        client.websocket_connect("/media/session") as ws,
+    ):
+        ws.receive()
+
+
+def test_media_session_rejects_an_expired_ticket(monkeypatch: pytest.MonkeyPatch) -> None:
+    _patch_session_setup(monkeypatch)
+
+    assistant_id = "00000000-0000-0000-0000-000000000015"
+    expired_ticket = _test_ticket(assistant_id, ttl_seconds=-1)
+
+    with (
+        pytest.raises(WebSocketDisconnect) as exc_info,
+        TestClient(app) as client,
+        client.websocket_connect(_media_session_url(assistant_id, ticket=expired_ticket)) as ws,
+    ):
+        ws.receive()
+
+    assert exc_info.value.code == 4401
+
+
+def test_media_session_rejects_a_tampered_ticket(monkeypatch: pytest.MonkeyPatch) -> None:
+    _patch_session_setup(monkeypatch)
+
+    assistant_id = "00000000-0000-0000-0000-000000000016"
+    ticket = _test_ticket(assistant_id)
+    # Flip a character well inside the signature segment - see
+    # test_voice_session_ticket.py's identical precedent for why not the
+    # very last character.
+    tampered = ticket[:-5] + ("A" if ticket[-5] != "A" else "B") + ticket[-4:]
+
+    with (
+        pytest.raises(WebSocketDisconnect) as exc_info,
+        TestClient(app) as client,
+        client.websocket_connect(_media_session_url(assistant_id, ticket=tampered)) as ws,
+    ):
+        ws.receive()
+
+    assert exc_info.value.code == 4401
+
+
+def test_media_session_rejects_a_token_of_the_wrong_type(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """
+    A well-formed, correctly-signed token that simply is not a voice-session
+    ticket (an apps/api access token, say) must not be accepted either.
+    """
+
+    _patch_session_setup(monkeypatch)
+
+    assistant_id = "00000000-0000-0000-0000-000000000017"
+    other_token = jwt.encode(
+        {"sub": assistant_id, "type": "access", "exp": 9999999999},
+        _TEST_SECRET_KEY,
+        algorithm=_TEST_JWT_ALGORITHM,
+    )
+
+    with (
+        pytest.raises(WebSocketDisconnect) as exc_info,
+        TestClient(app) as client,
+        client.websocket_connect(_media_session_url(assistant_id, ticket=other_token)) as ws,
+    ):
+        ws.receive()
+
+    assert exc_info.value.code == 4401

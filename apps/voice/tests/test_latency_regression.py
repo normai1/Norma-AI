@@ -25,6 +25,7 @@ from tests.conftest import (
     _fake_fetch_glossary_terms,
     _fake_fetch_retrieved_context,
     _fake_fetch_turn_sensitivity,
+    _media_session_url,
     _patch_session_setup,
     _patch_turn_detector_vad,
     _receive_one,
@@ -74,7 +75,7 @@ def test_time_to_first_audio_stays_within_budget_across_many_turns(
 
     with (
         TestClient(app) as client,
-        client.websocket_connect(f"/media/session?assistant_id={assistant_id}") as ws,
+        client.websocket_connect(_media_session_url(assistant_id)) as ws,
     ):
         for turn in range(_TURN_COUNT):
             for _ in range(3):

@@ -1,9 +1,14 @@
 import uuid
 
 from fastapi import FastAPI, WebSocket
+from norma_shared.voice_session_ticket import (
+    InvalidVoiceSessionTicket,
+    decode_voice_session_ticket,
+)
 from pipecat.frames.frames import EndFrame
 from pipecat.workers.runner import WorkerRunner
 
+from app.config import JWT_ALGORITHM, SECRET_KEY
 from app.glossary_client import fetch_glossary_terms
 from app.llm_config_client import fetch_llm_config
 from app.llm_provider_factory import get_llm_provider
@@ -11,6 +16,12 @@ from app.media_session import build_voice_session_pipeline_worker
 from app.provider_factory import get_stt_provider, get_tts_provider
 from app.tts_config_client import fetch_tts_config
 from app.turn_detection_client import fetch_turn_sensitivity
+
+# Closes a rejected connection before it is ever accepted (CLAUDE.md section
+# 7: "a browser test call must prove workspace access before audio flows").
+# 4401 is in the private-use WebSocket close-code range (4000-4999); there is
+# no standard code for "invalid application-level credential".
+_TICKET_REJECTED_CLOSE_CODE = 4401
 
 app = FastAPI(title="Norma AI Voice")
 
@@ -36,7 +47,7 @@ async def health() -> dict[str, object]:
 @app.websocket("/media/session")
 async def media_session(
     websocket: WebSocket,
-    assistant_id: uuid.UUID,
+    ticket: str,
     language: str = "en",
 ) -> None:
     """
@@ -48,7 +59,23 @@ async def media_session(
     app/media_session.py) - and runs it until the caller disconnects. Not a
     real call - 20f-20g add latency instrumentation and resilience; this
     route exists to prove the turn loop itself works end to end.
+
+    Item 21a: the caller does not supply assistant_id directly - it is
+    derived from a short-lived ticket apps/api issues only to a signed-in
+    user with real workspace access to that assistant (CLAUDE.md section
+    36: never trust a client-provided identifier without authorization).
+    The connection is closed before being accepted for any invalid ticket -
+    missing, expired, tampered, or the wrong type - with the same close
+    code for every reason, so no rejection leaks which check failed.
     """
+
+    try:
+        assistant_id = uuid.UUID(
+            decode_voice_session_ticket(ticket, secret_key=SECRET_KEY, algorithm=JWT_ALGORITHM)
+        )
+    except (InvalidVoiceSessionTicket, ValueError):
+        await websocket.close(code=_TICKET_REJECTED_CLOSE_CODE)
+        return
 
     await websocket.accept()
 
