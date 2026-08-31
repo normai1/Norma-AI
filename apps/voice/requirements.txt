@@ -8,6 +8,7 @@ uvicorn[standard]
 
 pipecat-ai[websocket]
 anthropic
+groq
 
 pytest
 pytest-asyncio

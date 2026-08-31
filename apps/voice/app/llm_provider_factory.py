@@ -6,10 +6,11 @@ tier provider has no consumer yet (item 36, apps/worker, unbuilt).
 
 from app import config
 from app.anthropic_llm import AnthropicLLM
+from app.groq_llm import GroqLLM
 from app.llm import LLMProvider
 from app.mock_llm import MockLLM
 
-_VALID_PROVIDER_NAMES = "'mock', 'anthropic'"
+_VALID_PROVIDER_NAMES = "'mock', 'anthropic', 'groq'"
 
 
 class UnknownLLMProviderError(ValueError):
@@ -23,6 +24,14 @@ class MissingAnthropicApiKeyError(ValueError):
     The "anthropic" provider was selected but ANTHROPIC_API_KEY is unset.
     Fails at construction, not on the first stream() call - the same
     reasoning MissingElevenLabsApiKeyError already established.
+    """
+
+
+class MissingGroqApiKeyError(ValueError):
+    """
+    The "groq" provider was selected but GROQ_API_KEY is unset. Fails at
+    construction, not on the first stream() call - the same reasoning
+    MissingAnthropicApiKeyError already established.
     """
 
 
@@ -47,6 +56,17 @@ def get_llm_provider(name: str | None = None) -> LLMProvider:
             api_key=config.ANTHROPIC_API_KEY,
             model=config.LLM_REALTIME_MODEL,
             base_url=config.ANTHROPIC_BASE_URL or None,
+        )
+
+    if provider_name == "groq":
+        if not config.GROQ_API_KEY:
+            raise MissingGroqApiKeyError(
+                "GROQ_API_KEY is not set. The 'groq' LLM provider requires it.",
+            )
+
+        return GroqLLM(
+            api_key=config.GROQ_API_KEY,
+            model=config.LLM_REALTIME_MODEL,
         )
 
     raise UnknownLLMProviderError(

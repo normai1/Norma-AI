@@ -37,6 +37,8 @@ ANTHROPIC_API_KEY = os.environ.get("ANTHROPIC_API_KEY", "")
 # endpoint.
 ANTHROPIC_BASE_URL = os.environ.get("ANTHROPIC_BASE_URL", "")
 
+GROQ_API_KEY = os.environ.get("GROQ_API_KEY", "")
+
 # Item 20g's resilience constants. Only the *first* token/first byte is
 # guarded - a stream that already produced output is not hung - see
 # app/media_session.py's TTSProcessor/LLMTurnProcessor docstrings.

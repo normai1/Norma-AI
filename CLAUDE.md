@@ -361,10 +361,10 @@ Every abstraction needs a deterministic mock. The test suite must run with zero 
 
 ```text
 Realtime turn model   — latency-critical, small, streaming
-                        claude-haiku-4-5 class
+                        openai/gpt-oss-120b (served via Groq)
 Post-call model       — quality-critical, latency-tolerant
                         summaries, extraction, learning candidates
-                        claude-sonnet-5 class
+                        gemini-2.5-flash-lite (served via Google)
 ```
 
 A frontier model in the per-turn conversation loop is **explicitly rejected**. First-token latency dominates perceived call quality and makes the p95 budget unreachable. If you find a large model configured for the realtime tier, that is a bug.
