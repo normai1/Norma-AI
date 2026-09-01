@@ -148,6 +148,11 @@ export default function AssistantEditorPage() {
 
   const [voices, setVoices] = useState<Voice[] | null>(null);
   const [voicesError, setVoicesError] = useState<string | null>(null);
+  const [previewingVoiceId, setPreviewingVoiceId] = useState<string | null>(
+    null,
+  );
+  const [voicePreviewAudio, setVoicePreviewAudio] =
+    useState<HTMLAudioElement | null>(null);
 
   const [voiceId, setVoiceId] = useState("");
   const [language, setLanguage] = useState(
@@ -453,6 +458,12 @@ export default function AssistantEditorPage() {
       cancelled = true;
     };
   }, []);
+
+  useEffect(() => {
+    return () => {
+      voicePreviewAudio?.pause();
+    };
+  }, [voicePreviewAudio]);
 
   const fetchAssistant = useCallback(async () => {
     if (!activeWorkspace) {
@@ -1214,6 +1225,34 @@ export default function AssistantEditorPage() {
     }
   }
 
+  function handleTogglePreviewVoice(voice: Voice) {
+    if (voicePreviewAudio) {
+      voicePreviewAudio.pause();
+      setVoicePreviewAudio(null);
+    }
+
+    if (previewingVoiceId === voice.id) {
+      setPreviewingVoiceId(null);
+      return;
+    }
+
+    if (!voice.preview_url) {
+      return;
+    }
+
+    const audio = new Audio(voice.preview_url);
+    audio.addEventListener("ended", () => {
+      setPreviewingVoiceId(null);
+      setVoicePreviewAudio(null);
+    });
+    audio.play().catch(() => {
+      setPreviewingVoiceId(null);
+      setVoicePreviewAudio(null);
+    });
+    setVoicePreviewAudio(audio);
+    setPreviewingVoiceId(voice.id);
+  }
+
   async function handleSaveVersion(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
 
@@ -1609,22 +1648,44 @@ export default function AssistantEditorPage() {
                   Voice
                 </label>
 
-                <select
-                  id="voice_id"
-                  className="mt-2 w-full max-w-md rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-white focus:outline-none focus:ring-2 focus:ring-slate-600"
-                  disabled={savingVersion}
-                  value={voiceId}
-                  onChange={(event) => setVoiceId(event.target.value)}
-                >
-                  <option value="" disabled>
-                    Select a voice
-                  </option>
-                  {voices.map((voice) => (
-                    <option key={voice.id} value={voice.id}>
-                      {voice.name} ({voice.language})
+                <div className="mt-2 flex max-w-md items-center gap-2">
+                  <select
+                    id="voice_id"
+                    className="w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-white focus:outline-none focus:ring-2 focus:ring-slate-600"
+                    disabled={savingVersion}
+                    value={voiceId}
+                    onChange={(event) => setVoiceId(event.target.value)}
+                  >
+                    <option value="" disabled>
+                      Select a voice
                     </option>
-                  ))}
-                </select>
+                    {voices.map((voice) => (
+                      <option key={voice.id} value={voice.id}>
+                        {voice.name} ({voice.language})
+                      </option>
+                    ))}
+                  </select>
+
+                  {(() => {
+                    const selectedVoice = voices.find(
+                      (voice) => voice.id === voiceId,
+                    );
+
+                    return (
+                      <Button
+                        type="button"
+                        variant="secondary"
+                        className="shrink-0"
+                        disabled={!selectedVoice?.preview_url}
+                        onClick={() =>
+                          selectedVoice && handleTogglePreviewVoice(selectedVoice)
+                        }
+                      >
+                        {previewingVoiceId === voiceId ? "Stop" : "Play"}
+                      </Button>
+                    );
+                  })()}
+                </div>
               </div>
 
               <div>
