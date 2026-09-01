@@ -236,8 +236,19 @@ class TurnDetector:
             return
 
         if self._clock() - self._silence_since >= FALLBACK_TIMEOUT_SECONDS:
-            self._ended_turn_text = self._pending_transcript
-            self._pending_transcript = ""
-            self._turn_ended = True
+            # An empty pending_transcript here means VAD found "speech" that
+            # STT never actually transcribed anything for - a false
+            # trigger (background noise, a mic pop, a breath, the
+            # assistant's own TTS bleeding into the mic), not a caller who
+            # trailed off mid-sentence. Ending a turn on nothing would send
+            # an empty message to the LLM and produce a reply to silence -
+            # the exact bug this guards against. A genuinely incomplete but
+            # non-empty transcript (e.g. "and") still ends the turn as
+            # before; only a transcript with no real content is withheld.
+            if self._pending_transcript.strip():
+                self._ended_turn_text = self._pending_transcript
+                self._pending_transcript = ""
+                self._turn_ended = True
+
             self._ever_spoken = False
             self._silence_since = None

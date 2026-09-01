@@ -123,6 +123,46 @@ async def test_the_fallback_timeout_ends_the_turn_despite_an_incomplete_transcri
     assert detector.turn_ended() is True
 
 
+async def test_the_fallback_timeout_does_not_end_the_turn_on_an_empty_transcript() -> None:
+    """
+    Regression guard for a real reported bug: a VAD false trigger (background
+    noise, a mic pop, a breath, the assistant's own TTS bleeding into the
+    mic) sets ever_spoken without the caller ever saying anything STT could
+    transcribe. The fallback timeout must not end a turn - and send an empty
+    message to the LLM - over silence; it should only fire for a transcript
+    that actually has content, however incomplete.
+    """
+
+    clock = _FakeClock()
+    vad = _ScriptedVADAnalyzer(
+        [VADState.SPEAKING, VADState.QUIET, VADState.QUIET, VADState.SPEAKING, VADState.QUIET]
+    )
+    detector = TurnDetector(sensitivity=0.5, sample_rate=16_000, vad_analyzer=vad, clock=clock)
+
+    await detector.feed_audio(b"noise")
+
+    clock.value = 1.0
+    await detector.feed_audio(b"silence")
+    assert detector.turn_ended() is False
+
+    clock.value = 1.0 + FALLBACK_TIMEOUT_SECONDS
+    await detector.feed_audio(b"still silence")
+
+    assert detector.turn_ended() is False
+
+    # Detection cleanly rearms for the caller's real next turn rather than
+    # getting stuck - a fresh speech/silence cycle still ends a turn once a
+    # real transcript arrives.
+    clock.value = 2.0 + FALLBACK_TIMEOUT_SECONDS
+    await detector.feed_audio(b"real speech")
+    clock.value = 2.5 + FALLBACK_TIMEOUT_SECONDS
+    await detector.feed_audio(b"real silence")
+    detector.feed_transcript("Hello there.", is_final=True)
+
+    assert detector.turn_ended() is True
+    assert detector.last_final_transcript == "Hello there."
+
+
 async def test_a_partial_transcript_never_ends_the_turn_on_its_own() -> None:
     clock = _FakeClock()
     vad = _ScriptedVADAnalyzer([VADState.SPEAKING, VADState.QUIET])
