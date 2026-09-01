@@ -3023,191 +3023,188 @@ export default function AssistantEditorPage() {
               </div>
             </form>
           </Card>
+
+          <Card>
+            <h2 className="text-lg font-semibold">Version history</h2>
+
+            {publishError && (
+              <div className="mt-4">
+                <ErrorText message={publishError} />
+              </div>
+            )}
+
+            {versionsError && (
+              <div className="mt-4">
+                <ErrorText message={versionsError} />
+              </div>
+            )}
+
+            {versions === null && !versionsError && (
+              <div className="mt-4">
+                <LoadingState message="Loading versions..." />
+              </div>
+            )}
+
+            {versions !== null && versions.length === 0 && (
+              <div className="mt-4">
+                <EmptyState message="No versions saved yet. Save one above to get started." />
+              </div>
+            )}
+
+            {versions !== null && versions.length > 0 && (
+              <ul className="mt-4 space-y-3">
+                {versions.map((version) => {
+                  const isCurrent = version.id === assistant.current_version_id;
+
+                  return (
+                    <li
+                      key={version.id}
+                      className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-slate-800 px-4 py-3"
+                    >
+                      <div>
+                        <span className="font-medium">Version {version.version}</span>
+                        <span className="ml-3 text-sm text-slate-500">
+                          {new Date(version.created_at).toLocaleString()}
+                        </span>
+                      </div>
+
+                      {isCurrent ? (
+                        <span className="rounded-full border border-green-800 px-2.5 py-0.5 text-xs font-medium text-green-300">
+                          Current
+                        </span>
+                      ) : (
+                        <Button
+                          variant="secondary"
+                          disabled={archived || publishingVersion !== null}
+                          onClick={() => handlePublish(version.version)}
+                        >
+                          {publishingVersion === version.version
+                            ? "Publishing..."
+                            : "Publish"}
+                        </Button>
+                      )}
+                    </li>
+                  );
+                })}
+              </ul>
+            )}
+
+            {versions !== null && versions.length > 1 && (
+              <div className="mt-6 border-t border-slate-800 pt-4">
+                <h3 className="text-sm font-semibold text-slate-300">
+                  Compare versions
+                </h3>
+
+                <form
+                  onSubmit={handleDiff}
+                  className="mt-3 flex flex-wrap items-end gap-3"
+                  noValidate
+                >
+                  <div>
+                    <label
+                      htmlFor="diff_from"
+                      className="block text-sm font-medium text-slate-200"
+                    >
+                      From
+                    </label>
+
+                    <select
+                      id="diff_from"
+                      className="mt-2 rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-white focus:outline-none focus:ring-2 focus:ring-slate-600"
+                      value={diffFrom}
+                      onChange={(event) => setDiffFrom(event.target.value)}
+                    >
+                      <option value="" disabled>
+                        Select a version
+                      </option>
+                      {versions.map((version) => (
+                        <option key={version.id} value={version.version}>
+                          Version {version.version}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+
+                  <div>
+                    <label
+                      htmlFor="diff_to"
+                      className="block text-sm font-medium text-slate-200"
+                    >
+                      To
+                    </label>
+
+                    <select
+                      id="diff_to"
+                      className="mt-2 rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-white focus:outline-none focus:ring-2 focus:ring-slate-600"
+                      value={diffTo}
+                      onChange={(event) => setDiffTo(event.target.value)}
+                    >
+                      <option value="" disabled>
+                        Select a version
+                      </option>
+                      {versions.map((version) => (
+                        <option key={version.id} value={version.version}>
+                          Version {version.version}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+
+                  <Button type="submit" disabled={diffLoading || !diffFrom || !diffTo}>
+                    {diffLoading ? "Comparing..." : "Show diff"}
+                  </Button>
+                </form>
+
+                {diffError && (
+                  <div className="mt-4">
+                    <ErrorText message={diffError} />
+                  </div>
+                )}
+
+                {diffResult && Object.keys(diffResult.changes).length === 0 && (
+                  <p className="mt-4 text-sm text-slate-400">
+                    No differences between version {diffResult.from_version} and
+                    version {diffResult.to_version}.
+                  </p>
+                )}
+
+                {diffResult && Object.keys(diffResult.changes).length > 0 && (
+                  <div className="mt-4 overflow-x-auto">
+                    <table className="w-full text-left text-sm">
+                      <thead>
+                        <tr className="text-slate-400">
+                          <th className="pb-2 pr-4 font-medium">Field</th>
+                          <th className="pb-2 pr-4 font-medium">
+                            Version {diffResult.from_version}
+                          </th>
+                          <th className="pb-2 font-medium">
+                            Version {diffResult.to_version}
+                          </th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {Object.entries(diffResult.changes).map(
+                          ([field, change]) => (
+                            <tr key={field} className="border-t border-slate-800">
+                              <td className="py-2 pr-4 font-medium">{field}</td>
+                              <td className="py-2 pr-4 text-slate-400">
+                                {formatDiffValue(change.previous)}
+                              </td>
+                              <td className="py-2 text-slate-200">
+                                {formatDiffValue(change.current)}
+                              </td>
+                            </tr>
+                          ),
+                        )}
+                      </tbody>
+                    </table>
+                  </div>
+                )}
+              </div>
+            )}
+          </Card>
         </div>
       )}
-
-      <div className="mt-8">
-        <Card>
-          <h2 className="text-lg font-semibold">Version history</h2>
-
-          {publishError && (
-            <div className="mt-4">
-              <ErrorText message={publishError} />
-            </div>
-          )}
-
-          {versionsError && (
-            <div className="mt-4">
-              <ErrorText message={versionsError} />
-            </div>
-          )}
-
-          {versions === null && !versionsError && (
-            <div className="mt-4">
-              <LoadingState message="Loading versions..." />
-            </div>
-          )}
-
-          {versions !== null && versions.length === 0 && (
-            <div className="mt-4">
-              <EmptyState message="No versions saved yet. Save one above to get started." />
-            </div>
-          )}
-
-          {versions !== null && versions.length > 0 && (
-            <ul className="mt-4 space-y-3">
-              {versions.map((version) => {
-                const isCurrent = version.id === assistant.current_version_id;
-
-                return (
-                  <li
-                    key={version.id}
-                    className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-slate-800 px-4 py-3"
-                  >
-                    <div>
-                      <span className="font-medium">Version {version.version}</span>
-                      <span className="ml-3 text-sm text-slate-500">
-                        {new Date(version.created_at).toLocaleString()}
-                      </span>
-                    </div>
-
-                    {isCurrent ? (
-                      <span className="rounded-full border border-green-800 px-2.5 py-0.5 text-xs font-medium text-green-300">
-                        Current
-                      </span>
-                    ) : (
-                      <Button
-                        variant="secondary"
-                        disabled={archived || publishingVersion !== null}
-                        onClick={() => handlePublish(version.version)}
-                      >
-                        {publishingVersion === version.version
-                          ? "Publishing..."
-                          : "Publish"}
-                      </Button>
-                    )}
-                  </li>
-                );
-              })}
-            </ul>
-          )}
-
-          {versions !== null && versions.length > 1 && (
-            <div className="mt-6 border-t border-slate-800 pt-4">
-              <h3 className="text-sm font-semibold text-slate-300">
-                Compare versions
-              </h3>
-
-              <form
-                onSubmit={handleDiff}
-                className="mt-3 flex flex-wrap items-end gap-3"
-                noValidate
-              >
-                <div>
-                  <label
-                    htmlFor="diff_from"
-                    className="block text-sm font-medium text-slate-200"
-                  >
-                    From
-                  </label>
-
-                  <select
-                    id="diff_from"
-                    className="mt-2 rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-white focus:outline-none focus:ring-2 focus:ring-slate-600"
-                    value={diffFrom}
-                    onChange={(event) => setDiffFrom(event.target.value)}
-                  >
-                    <option value="" disabled>
-                      Select a version
-                    </option>
-                    {versions.map((version) => (
-                      <option key={version.id} value={version.version}>
-                        Version {version.version}
-                      </option>
-                    ))}
-                  </select>
-                </div>
-
-                <div>
-                  <label
-                    htmlFor="diff_to"
-                    className="block text-sm font-medium text-slate-200"
-                  >
-                    To
-                  </label>
-
-                  <select
-                    id="diff_to"
-                    className="mt-2 rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-white focus:outline-none focus:ring-2 focus:ring-slate-600"
-                    value={diffTo}
-                    onChange={(event) => setDiffTo(event.target.value)}
-                  >
-                    <option value="" disabled>
-                      Select a version
-                    </option>
-                    {versions.map((version) => (
-                      <option key={version.id} value={version.version}>
-                        Version {version.version}
-                      </option>
-                    ))}
-                  </select>
-                </div>
-
-                <Button type="submit" disabled={diffLoading || !diffFrom || !diffTo}>
-                  {diffLoading ? "Comparing..." : "Show diff"}
-                </Button>
-              </form>
-
-              {diffError && (
-                <div className="mt-4">
-                  <ErrorText message={diffError} />
-                </div>
-              )}
-
-              {diffResult && Object.keys(diffResult.changes).length === 0 && (
-                <p className="mt-4 text-sm text-slate-400">
-                  No differences between version {diffResult.from_version} and
-                  version {diffResult.to_version}.
-                </p>
-              )}
-
-              {diffResult && Object.keys(diffResult.changes).length > 0 && (
-                <div className="mt-4 overflow-x-auto">
-                  <table className="w-full text-left text-sm">
-                    <thead>
-                      <tr className="text-slate-400">
-                        <th className="pb-2 pr-4 font-medium">Field</th>
-                        <th className="pb-2 pr-4 font-medium">
-                          Version {diffResult.from_version}
-                        </th>
-                        <th className="pb-2 font-medium">
-                          Version {diffResult.to_version}
-                        </th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {Object.entries(diffResult.changes).map(
-                        ([field, change]) => (
-                          <tr key={field} className="border-t border-slate-800">
-                            <td className="py-2 pr-4 font-medium">{field}</td>
-                            <td className="py-2 pr-4 text-slate-400">
-                              {formatDiffValue(change.previous)}
-                            </td>
-                            <td className="py-2 text-slate-200">
-                              {formatDiffValue(change.current)}
-                            </td>
-                          </tr>
-                        ),
-                      )}
-                    </tbody>
-                  </table>
-                </div>
-              )}
-            </div>
-          )}
-        </Card>
-      </div>
-
     </PageShell>
   );
 }
