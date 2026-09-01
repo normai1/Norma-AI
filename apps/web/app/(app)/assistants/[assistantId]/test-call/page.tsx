@@ -100,6 +100,13 @@ export default function TestCallPage() {
   const transcriptIdRef = useRef(0);
   const partialCallerLineIdRef = useRef<number | null>(null);
   const partialAssistantLineIdRef = useRef<number | null>(null);
+  // STT and Norma's own VAD-driven turn detection are independent async
+  // pipelines with no ordering guarantee once a turn ends - a "transcript"
+  // message can straggle in just after turn_ended has already closed the
+  // caller's line. Gating on this (true only from caller_speech_started
+  // until turn_ended) stops that straggler from spuriously opening a second,
+  // duplicate line for the same thing the caller already said once.
+  const callerTurnOpenRef = useRef(false);
 
   const fetchAssistant = useCallback(async () => {
     if (!activeWorkspace) {
@@ -216,25 +223,41 @@ export default function TestCallPage() {
     };
   }, []);
 
-  const setCallerLine = useCallback((text: string, final: boolean) => {
+  /**
+   * ElevenLabs' commit_strategy=vad finalizes (is_final: true) on its own
+   * internal pauses, a finer-grained boundary than Norma's own turn
+   * boundary (Silero VAD + stop_secs/fallback) - a single continuous
+   * utterance with a natural mid-sentence pause can arrive as several
+   * separate is_final:true "transcript" messages. Every "transcript"
+   * message therefore updates the same open caller line regardless of
+   * is_final; only turn_ended (below), the authoritative Norma-level turn
+   * boundary, closes it and readies a new one for the caller's next turn.
+   */
+  const setCallerLine = useCallback((text: string) => {
     setTranscript((lines) => {
       const id = partialCallerLineIdRef.current;
 
       if (id !== null) {
-        const updated = lines.map((line) => (line.id === id ? { ...line, text } : line));
-
-        if (final) {
-          partialCallerLineIdRef.current = null;
-        }
-
-        return updated;
+        return lines.map((line) => (line.id === id ? { ...line, text } : line));
       }
 
       const newId = transcriptIdRef.current++;
+      partialCallerLineIdRef.current = newId;
 
-      if (!final) {
-        partialCallerLineIdRef.current = newId;
+      return [...lines, { id: newId, speaker: "caller" as const, text }];
+    });
+  }, []);
+
+  const finalizeCallerLine = useCallback((text: string) => {
+    setTranscript((lines) => {
+      const id = partialCallerLineIdRef.current;
+      partialCallerLineIdRef.current = null;
+
+      if (id !== null) {
+        return lines.map((line) => (line.id === id ? { ...line, text } : line));
       }
+
+      const newId = transcriptIdRef.current++;
 
       return [...lines, { id: newId, speaker: "caller" as const, text }];
     });
@@ -289,7 +312,13 @@ export default function TestCallPage() {
 
       switch (message.type) {
         case "transcript":
-          setCallerLine(message.text, message.is_final);
+          if (callerTurnOpenRef.current) {
+            setCallerLine(message.text);
+          }
+          break;
+        case "turn_ended":
+          callerTurnOpenRef.current = false;
+          finalizeCallerLine(message.text);
           break;
         case "llm_delta":
           appendAssistantDelta(message.text);
@@ -298,6 +327,7 @@ export default function TestCallPage() {
           finalizeAssistantLine(message.text);
           break;
         case "caller_speech_started":
+          callerTurnOpenRef.current = true;
           flushPlayback();
           break;
         case "reply_finished":
@@ -314,7 +344,14 @@ export default function TestCallPage() {
           break;
       }
     },
-    [playAudioChunk, setCallerLine, appendAssistantDelta, finalizeAssistantLine, flushPlayback],
+    [
+      playAudioChunk,
+      setCallerLine,
+      finalizeCallerLine,
+      appendAssistantDelta,
+      finalizeAssistantLine,
+      flushPlayback,
+    ],
   );
 
   const startCall = useCallback(async () => {
@@ -327,6 +364,7 @@ export default function TestCallPage() {
     transcriptIdRef.current = 0;
     partialCallerLineIdRef.current = null;
     partialAssistantLineIdRef.current = null;
+    callerTurnOpenRef.current = false;
 
     setCallStatus("loading-ticket");
     setStatusMessage(null);
