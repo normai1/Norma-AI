@@ -63,6 +63,72 @@ interface TranscriptLine {
   id: number;
   speaker: "caller" | "assistant";
   text: string;
+  /**
+   * Whether this line is finished and must never be appended to again. The
+   * transcript updaters below are pure functions of the previous lines - they
+   * decide "extend the last line" vs. "start a new one" from this flag rather
+   * than from a ref mutated inside the updater. React double-invokes state
+   * updaters in development, so a ref mutated in there made the second pass
+   * take a different branch and append a duplicate line - the real cause of
+   * one spoken sentence showing up twice.
+   */
+  closed: boolean;
+}
+
+/** Pure: next id from the existing lines, never a mutable counter. */
+function nextLineId(lines: TranscriptLine[]): number {
+  return lines.reduce((highest, line) => Math.max(highest, line.id), -1) + 1;
+}
+
+/**
+ * Index of that speaker's most recent still-open line, or -1. Deliberately
+ * not just "the last line": the caller's line stays open across their turn
+ * while the assistant's reply can be appended after it, and a turn_ended for
+ * one turn can arrive after the next turn's transcripts have started. Looking
+ * only at the trailing line made those cases append a duplicate.
+ */
+function lastOpenIndex(
+  lines: TranscriptLine[],
+  speaker: TranscriptLine["speaker"],
+): number {
+  for (let index = lines.length - 1; index >= 0; index -= 1) {
+    if (lines[index].speaker === speaker && !lines[index].closed) {
+      return index;
+    }
+  }
+
+  return -1;
+}
+
+/** Index of that speaker's most recent line regardless of state, or -1. */
+function lastIndexFor(
+  lines: TranscriptLine[],
+  speaker: TranscriptLine["speaker"],
+): number {
+  for (let index = lines.length - 1; index >= 0; index -= 1) {
+    if (lines[index].speaker === speaker) {
+      return index;
+    }
+  }
+
+  return -1;
+}
+
+function replaceAt(
+  lines: TranscriptLine[],
+  target: number,
+  changes: Partial<TranscriptLine>,
+): TranscriptLine[] {
+  return lines.map((line, index) => (index === target ? { ...line, ...changes } : line));
+}
+
+function appendLine(
+  lines: TranscriptLine[],
+  speaker: TranscriptLine["speaker"],
+  text: string,
+  closed: boolean,
+): TranscriptLine[] {
+  return [...lines, { id: nextLineId(lines), speaker, text, closed }];
 }
 
 type ServerMessage =
@@ -97,16 +163,6 @@ export default function TestCallPage() {
   const micStreamRef = useRef<MediaStream | null>(null);
   const playbackQueueRef = useRef<AudioBufferSourceNode[]>([]);
   const nextPlaybackTimeRef = useRef(0);
-  const transcriptIdRef = useRef(0);
-  const partialCallerLineIdRef = useRef<number | null>(null);
-  const partialAssistantLineIdRef = useRef<number | null>(null);
-  // STT and Norma's own VAD-driven turn detection are independent async
-  // pipelines with no ordering guarantee once a turn ends - a "transcript"
-  // message can straggle in just after turn_ended has already closed the
-  // caller's line. Gating on this (true only from caller_speech_started
-  // until turn_ended) stops that straggler from spuriously opening a second,
-  // duplicate line for the same thing the caller already said once.
-  const callerTurnOpenRef = useRef(false);
 
   const fetchAssistant = useCallback(async () => {
     if (!activeWorkspace) {
@@ -233,65 +289,73 @@ export default function TestCallPage() {
    * is_final; only turn_ended (below), the authoritative Norma-level turn
    * boundary, closes it and readies a new one for the caller's next turn.
    */
+  /**
+   * STT and Norma's VAD-driven turn detection are independent async
+   * pipelines, so a transcript for a turn that already ended can still
+   * straggle in afterwards. Repeating the text of the caller line that was
+   * just closed is exactly that straggler and is dropped; anything else is
+   * genuinely new speech and opens a new line, so nothing the caller says is
+   * ever silently discarded.
+   */
   const setCallerLine = useCallback((text: string) => {
     setTranscript((lines) => {
-      const id = partialCallerLineIdRef.current;
+      const open = lastOpenIndex(lines, "caller");
 
-      if (id !== null) {
-        return lines.map((line) => (line.id === id ? { ...line, text } : line));
+      if (open !== -1) {
+        return replaceAt(lines, open, { text });
       }
 
-      const newId = transcriptIdRef.current++;
-      partialCallerLineIdRef.current = newId;
+      // No open caller line: either a straggler repeating the turn that just
+      // closed (dropped), or genuinely new speech (starts a new line, so
+      // nothing the caller says is ever silently discarded).
+      const previous = lastIndexFor(lines, "caller");
 
-      return [...lines, { id: newId, speaker: "caller" as const, text }];
+      if (previous !== -1 && lines[previous].text === text) {
+        return lines;
+      }
+
+      return appendLine(lines, "caller", text, false);
     });
   }, []);
 
   const finalizeCallerLine = useCallback((text: string) => {
     setTranscript((lines) => {
-      const id = partialCallerLineIdRef.current;
-      partialCallerLineIdRef.current = null;
+      const open = lastOpenIndex(lines, "caller");
 
-      if (id !== null) {
-        return lines.map((line) => (line.id === id ? { ...line, text } : line));
+      // Close the line, keeping whatever text the transcript stream last put
+      // there - turn_ended can arrive after the next turn's transcripts have
+      // begun, and its (older) text would otherwise overwrite newer words.
+      if (open !== -1) {
+        return replaceAt(lines, open, { closed: true });
       }
 
-      const newId = transcriptIdRef.current++;
+      const previous = lastIndexFor(lines, "caller");
 
-      return [...lines, { id: newId, speaker: "caller" as const, text }];
+      if (previous !== -1 && lines[previous].text === text) {
+        return lines;
+      }
+
+      return appendLine(lines, "caller", text, true);
     });
   }, []);
 
   const appendAssistantDelta = useCallback((delta: string) => {
     setTranscript((lines) => {
-      const id = partialAssistantLineIdRef.current;
+      const open = lastOpenIndex(lines, "assistant");
 
-      if (id !== null) {
-        return lines.map((line) =>
-          line.id === id ? { ...line, text: line.text + delta } : line,
-        );
-      }
-
-      const newId = transcriptIdRef.current++;
-      partialAssistantLineIdRef.current = newId;
-
-      return [...lines, { id: newId, speaker: "assistant" as const, text: delta }];
+      return open === -1
+        ? appendLine(lines, "assistant", delta, false)
+        : replaceAt(lines, open, { text: lines[open].text + delta });
     });
   }, []);
 
   const finalizeAssistantLine = useCallback((fullText: string) => {
     setTranscript((lines) => {
-      const id = partialAssistantLineIdRef.current;
-      partialAssistantLineIdRef.current = null;
+      const open = lastOpenIndex(lines, "assistant");
 
-      if (id !== null) {
-        return lines.map((line) => (line.id === id ? { ...line, text: fullText } : line));
-      }
-
-      const newId = transcriptIdRef.current++;
-
-      return [...lines, { id: newId, speaker: "assistant" as const, text: fullText }];
+      return open === -1
+        ? appendLine(lines, "assistant", fullText, true)
+        : replaceAt(lines, open, { text: fullText, closed: true });
     });
   }, []);
 
@@ -312,13 +376,17 @@ export default function TestCallPage() {
 
       switch (message.type) {
         case "transcript":
-          if (callerTurnOpenRef.current) {
+          // ElevenLabs emits committed transcripts with empty text (confirmed
+          // against the live API). Rendering one would blank out what the
+          // caller actually said, which looked like "no transcript at all".
+          if (message.text.trim()) {
             setCallerLine(message.text);
           }
           break;
         case "turn_ended":
-          callerTurnOpenRef.current = false;
-          finalizeCallerLine(message.text);
+          if (message.text.trim()) {
+            finalizeCallerLine(message.text);
+          }
           break;
         case "llm_delta":
           appendAssistantDelta(message.text);
@@ -327,7 +395,6 @@ export default function TestCallPage() {
           finalizeAssistantLine(message.text);
           break;
         case "caller_speech_started":
-          callerTurnOpenRef.current = true;
           flushPlayback();
           break;
         case "reply_finished":
@@ -360,11 +427,9 @@ export default function TestCallPage() {
     }
 
     setInlineNotice(null);
+    // Line identity is derived from this array itself, so clearing it is the
+    // whole reset - there are no counters or partial-line refs to unwind.
     setTranscript([]);
-    transcriptIdRef.current = 0;
-    partialCallerLineIdRef.current = null;
-    partialAssistantLineIdRef.current = null;
-    callerTurnOpenRef.current = false;
 
     setCallStatus("loading-ticket");
     setStatusMessage(null);

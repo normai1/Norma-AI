@@ -153,7 +153,19 @@ class TurnDetector:
         self._recompute()
 
     def feed_transcript(self, text: str, *, is_final: bool) -> None:
-        if is_final:
+        """
+        A final transcript with no content is discarded rather than stored.
+        ElevenLabs' realtime STT really does emit committed_transcript
+        events with empty text (confirmed directly against the live API,
+        not assumed) - typically trailing a genuine one. Letting one
+        overwrite _pending_transcript would erase what the caller actually
+        said, and _recompute() would then refuse to end the turn at all
+        (an empty transcript is never semantically complete, and the
+        fallback timeout deliberately withholds empty turns), leaving the
+        caller in permanent silence with a reply that never comes.
+        """
+
+        if is_final and text.strip():
             self._pending_transcript = text
 
         self._recompute()

@@ -163,6 +163,52 @@ async def test_the_fallback_timeout_does_not_end_the_turn_on_an_empty_transcript
     assert detector.last_final_transcript == "Hello there."
 
 
+async def test_an_empty_final_transcript_does_not_erase_what_the_caller_said() -> None:
+    """
+    Regression guard for a real reported bug: ElevenLabs' realtime STT emits
+    committed_transcript events with empty text (verified directly against
+    the live API), often trailing a genuine one. Letting an empty final
+    overwrite the pending transcript erased the caller's actual words, and
+    the turn could then never end - no reply, and a blank transcript.
+    """
+
+    clock = _FakeClock()
+    vad = _ScriptedVADAnalyzer([VADState.SPEAKING, VADState.QUIET])
+    detector = TurnDetector(sensitivity=0.5, sample_rate=16_000, vad_analyzer=vad, clock=clock)
+
+    await detector.feed_audio(b"speech")
+    detector.feed_transcript("Hello there.", is_final=True)
+    detector.feed_transcript("", is_final=True)
+
+    clock.value = 0.5
+    await detector.feed_audio(b"silence")
+
+    assert detector.turn_ended() is True
+    assert detector.last_final_transcript == "Hello there."
+
+
+async def test_an_empty_final_transcript_alone_still_never_ends_a_turn() -> None:
+    """
+    The empty-final guard must not resurrect the "replies to silence" bug:
+    an empty final with nothing before it still leaves nothing to say.
+    """
+
+    clock = _FakeClock()
+    vad = _ScriptedVADAnalyzer([VADState.SPEAKING, VADState.QUIET, VADState.QUIET])
+    detector = TurnDetector(sensitivity=0.5, sample_rate=16_000, vad_analyzer=vad, clock=clock)
+
+    await detector.feed_audio(b"noise")
+    detector.feed_transcript("", is_final=True)
+
+    clock.value = 1.0
+    await detector.feed_audio(b"silence")
+
+    clock.value = 1.0 + FALLBACK_TIMEOUT_SECONDS
+    await detector.feed_audio(b"still silence")
+
+    assert detector.turn_ended() is False
+
+
 async def test_a_partial_transcript_never_ends_the_turn_on_its_own() -> None:
     clock = _FakeClock()
     vad = _ScriptedVADAnalyzer([VADState.SPEAKING, VADState.QUIET])
