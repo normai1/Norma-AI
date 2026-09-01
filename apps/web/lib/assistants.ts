@@ -27,8 +27,7 @@ export interface AssistantVersion {
   max_silence_timeout_seconds: number | null;
   record_calls: boolean;
   auto_delete_on_declined_consent: boolean;
-  prompt_template_id: string | null;
-  prompt_version: number | null;
+  custom_prompt: string | null;
   created_at: string;
 }
 
@@ -46,8 +45,7 @@ export interface AssistantVersionInput {
   max_silence_timeout_seconds: number | null;
   record_calls: boolean;
   auto_delete_on_declined_consent: boolean;
-  prompt_template_id: string | null;
-  prompt_version: number | null;
+  custom_prompt: string | null;
 }
 
 export interface AssistantVersionFieldDiff {

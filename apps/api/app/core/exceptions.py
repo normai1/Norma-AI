@@ -167,41 +167,6 @@ class AssistantArchived(AssistantError):
     """
 
 
-class PromptTemplateError(Exception):
-    """
-    Base class for prompt template failures.
-    """
-
-
-class PromptTemplateNotFound(PromptTemplateError):
-    """
-    No such prompt template in this workspace.
-    """
-
-
-class PromptVersionNotFound(PromptTemplateError):
-    """
-    No such version of this prompt template.
-    """
-
-
-class PromptVersionImmutable(PromptTemplateError):
-    """
-    A PromptVersion row was about to be updated in place. Versions are
-    immutable content snapshots - 12b's variable-interpolation renderer and
-    whichever assistant references a version by id must never see it change
-    under them.
-    """
-
-
-class PromptTemplateArchived(PromptTemplateError):
-    """
-    The prompt template is archived - a terminal lifecycle state in this
-    codebase (no restore/un-archive path exists yet), so it cannot be
-    published.
-    """
-
-
 class PromptRenderError(Exception):
     """
     A `{{namespace.field}}` placeholder in a prompt named a namespace or

@@ -50,10 +50,11 @@
   - [x] 11c. **Versioning** - immutable version snapshots, diffing, and rollback
   - [x] 11d. **Assistant editor UI** - simple and advanced modes over the same configuration
   - [x] 11e. **Assistant hard delete** - a real, irreversible DELETE endpoint (cascading to the assistant's KnowledgeSource/Chunk/AssistantVersion/GlossaryEntry rows via their existing CASCADE FKs), a service function, cross-tenant negative tests, and a confirmation dialog in the UI. Archive stays as the separate, reversible, non-destructive option.
-- [x] 12. **Prompt templates and versioning** - reusable use-case templates (receptionist, support, scheduling, answering machine, field service, order intake) with versions, variable interpolation, and rollback
-  - [x] 12a. **Prompt template backend** - PromptTemplate and PromptVersion tables, CRUD, immutable versioning, publish/rollback, and diff, mirroring item 11's proven Assistant/AssistantVersion pattern
-  - [x] 12b. **Variable interpolation and assistant wiring** - a pure `{{namespace.field}}` renderer over assistant/workspace/caller context, plus the additive `prompt_template_id`/`prompt_version` columns on `AssistantVersion`
-  - [x] 12c. **Prompt template editor UI** - list, editor, version history, publish/rollback, and diff, mirroring 11d
+- [x] 12. **Prompt templates and versioning** - reusable use-case templates (receptionist, support, scheduling, answering machine, field service, order intake) with versions, variable interpolation, and rollback - superseded by 12d
+  - [x] 12a. **Prompt template backend** - PromptTemplate and PromptVersion tables, CRUD, immutable versioning, publish/rollback, and diff, mirroring item 11's proven Assistant/AssistantVersion pattern - removed by 12d
+  - [x] 12b. **Variable interpolation and assistant wiring** - a pure `{{namespace.field}}` renderer over assistant/workspace/caller context, plus the additive `prompt_template_id`/`prompt_version` columns on `AssistantVersion` - the renderer itself (`app/services/prompt_rendering.py`) survives 12d and is reused directly; the columns were replaced
+  - [x] 12c. **Prompt template editor UI** - list, editor, version history, publish/rollback, and diff, mirroring 11d - removed by 12d
+  - [x] 12d. **Simplify to a single custom prompt field** - a product decision to make the Custom Prompt tab "just a prompt, nothing else": removes the whole PromptTemplate/PromptVersion system (12a-c and 23f's relocation of it) - models, repos, services, routes, and the standalone editor UI - in favor of one free-text `custom_prompt` column directly on `AssistantVersion`, still rendered through 12b's own `{{namespace.field}}` interpolation and falling back to `persona` then a fixed default. A new migration drops `prompt_templates`/`prompt_versions` and `assistant_versions.prompt_template_id`/`prompt_version`, adding `assistant_versions.custom_prompt` in their place.
 - [x] 13. **Glossary and pronunciation** - per-assistant terms, abbreviations, and phonetic overrides, applied as STT biasing and TTS pronunciation
   - [x] 13a. **Glossary backend** - GlossaryEntry model and CRUD, scoped to organization, workspace, and assistant
   - [x] 13b. **Glossary UI** - a glossary section on the assistant editor page (list, add, edit, delete)
@@ -87,7 +88,7 @@
   - [x] 23c. **Custom Prompt tab** - prompt-template picker using the existing prompt_template_id/prompt_version fields
   - [x] 23d. **Knowledge tab backend** - assistant_id scoping on KnowledgeSource/Chunk and a retrieval filter update, closing the gap item 19 deferred
   - [x] 23e. **Knowledge tab UI** - file upload, website ingestion, manual FAQ, and processing status management inside the assistant editor
-  - [x] 23f. **Custom Prompt tab: full template management** - relocates prompt-template CRUD (list, create, edit, version history, publish/rollback, diff) from the standalone /prompt-templates page into the assistant editor's Custom Prompt tab, replacing today's bare picker; removes the standalone page and its nav link. Prompt templates remain a shared, workspace-scoped, reusable data model - UI relocation only, no data-model change.
+  - [x] 23f. **Custom Prompt tab: full template management** - relocates prompt-template CRUD (list, create, edit, version history, publish/rollback, diff) from the standalone /prompt-templates page into the assistant editor's Custom Prompt tab, replacing today's bare picker; removes the standalone page and its nav link. Prompt templates remain a shared, workspace-scoped, reusable data model - UI relocation only, no data-model change. Superseded by 12d, which removes the whole template system this relocated.
 
 ### Telephony
 

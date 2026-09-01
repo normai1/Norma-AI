@@ -87,8 +87,7 @@ async def create(
     max_silence_timeout_seconds: int | None = None,
     record_calls: bool = False,
     auto_delete_on_declined_consent: bool = False,
-    prompt_template_id: uuid.UUID | None = None,
-    prompt_version: int | None = None,
+    custom_prompt: str | None = None,
 ) -> AssistantVersion:
     """
     Insert a new, immutable version snapshot.
@@ -110,8 +109,7 @@ async def create(
         max_silence_timeout_seconds=max_silence_timeout_seconds,
         record_calls=record_calls,
         auto_delete_on_declined_consent=auto_delete_on_declined_consent,
-        prompt_template_id=prompt_template_id,
-        prompt_version=prompt_version,
+        custom_prompt=custom_prompt,
     )
 
     db.add(assistant_version)

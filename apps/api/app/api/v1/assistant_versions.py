@@ -8,8 +8,6 @@ from app.api.workspace_deps import CurrentWorkspace
 from app.core.exceptions import (
     AssistantNotFound,
     AssistantVersionNotFound,
-    PromptTemplateNotFound,
-    PromptVersionNotFound,
     WorkspaceNotFound,
 )
 from app.schemas.assistant_version import (
@@ -35,16 +33,6 @@ _ASSISTANT_VERSION_NOT_FOUND = HTTPException(
 _WORKSPACE_NOT_FOUND = HTTPException(
     status_code=status.HTTP_404_NOT_FOUND,
     detail="Workspace not found",
-)
-
-_PROMPT_TEMPLATE_NOT_FOUND = HTTPException(
-    status_code=status.HTTP_404_NOT_FOUND,
-    detail="Prompt template not found",
-)
-
-_PROMPT_VERSION_NOT_FOUND = HTTPException(
-    status_code=status.HTTP_404_NOT_FOUND,
-    detail="Prompt version not found",
 )
 
 _PREFIX = (
@@ -89,17 +77,12 @@ async def create_assistant_version(
             max_silence_timeout_seconds=payload.max_silence_timeout_seconds,
             record_calls=payload.record_calls,
             auto_delete_on_declined_consent=payload.auto_delete_on_declined_consent,
-            prompt_template_id=payload.prompt_template_id,
-            prompt_version=payload.prompt_version,
+            custom_prompt=payload.custom_prompt,
         )
     except WorkspaceNotFound as exc:
         raise _WORKSPACE_NOT_FOUND from exc
     except AssistantNotFound as exc:
         raise _ASSISTANT_NOT_FOUND from exc
-    except PromptTemplateNotFound as exc:
-        raise _PROMPT_TEMPLATE_NOT_FOUND from exc
-    except PromptVersionNotFound as exc:
-        raise _PROMPT_VERSION_NOT_FOUND from exc
 
     await db.commit()
 

@@ -79,7 +79,7 @@ Target segments: medical/dental/veterinary practices, tradespeople and field ser
 - Authentication, organizations, workspaces, RBAC
 - Assistant configuration and versioning
 - Voice and language catalogue
-- Prompt templates and versioning
+- Custom prompt per assistant
 - Glossary and pronunciation
 - Knowledge: file upload, website ingestion, manual FAQ
 - Chunking, embeddings, pgvector, low-latency retrieval
@@ -499,11 +499,10 @@ Operator-configurable without code: name, voice, language, greeting and whether 
 
 Prompts:
 
-- Reusable templates per use case (receptionist, support, scheduling, answering machine, field service, order intake).
-- Versioned with rollback.
-- Variables interpolated from assistant, workspace, and caller context.
+- Each `AssistantVersion` carries a single free-text `custom_prompt` field - a deliberate product simplification (superseding the earlier reusable/versioned PromptTemplate system from build-plan items 12/12a-c/23f, which is fully removed). No template picker, no per-prompt version history or publish/rollback, no sharing a prompt across assistants - "just a prompt, nothing else." Falls back to `persona`, then a fixed default, if unset or unable to render.
+- Prompt-level history/rollback still exists, just at the `AssistantVersion` grain: every saved version is its own immutable snapshot, and republishing an older `AssistantVersion` is how a prompt change gets rolled back.
+- Variables interpolated from assistant, workspace, and caller context (`{{namespace.field}}`, `app/services/prompt_rendering.py`).
 - Never embed large production prompts inside route handlers or voice workers.
-- Treat prompt changes like code changes: review, test, version, never silently replace a production version.
 
 ---
 

@@ -108,7 +108,7 @@ this one.
 10. **Voice and language catalogue** - browsable voice list with language/gender metadata, in-browser preview.
 11. **Assistant foundation** - Assistant/AssistantVersion tables, CRUD, immutable configuration snapshots, version pinning per call.
     - 11a model + CRUD, 11b configuration schema, 11c versioning, 11d editor UI (simple + advanced modes), 11e real irreversible hard delete alongside the existing reversible archive.
-12. **Prompt templates and versioning** - reusable use-case templates, versions, variable interpolation, rollback.
+12. **Prompt templates and versioning** - originally reusable use-case templates, versions, variable interpolation, rollback; simplified by 12d to a single free-text `custom_prompt` field per `AssistantVersion` ("just a prompt, nothing else") - the PromptTemplate/PromptVersion system is fully removed, the `{{namespace.field}}` renderer survives and applies to `custom_prompt` directly.
 13. **Glossary and pronunciation** - per-assistant terms/abbreviations/phonetic overrides, applied as STT biasing and TTS pronunciation.
 14. **Knowledge source foundation** - KnowledgeSource model, PDF/DOCX/Markdown/TXT upload, S3-backed storage, processing status/error surfacing.
 15. **Website ingestion** - crawl a supplied domain, extract page content, handle recrawl and content-hash dedup.
@@ -120,7 +120,7 @@ this one.
     - 20a framework selection + media transport (LiveKit Agents vs Pipecat, decided here), 20b streaming STT w/ glossary biasing, 20c turn detection (VAD + semantic, operator-configurable sensitivity), 20d LLM turn loop, 20e streaming TTS + barge-in, 20f latency instrumentation (p95 budget enforced in CI), 20g session resilience (provider timeouts/retries/failover).
 21. **In-browser test call** - talk to an assistant with no phone number required, over WebRTC or WebSocket audio.
 22. **Voice pipeline test harness** - fixture-audio conversation replay against the full pipeline with mock providers, plus barge-in and turn-detection behavioral tests.
-23. **Assistant editor redesign: General/Knowledge/Custom Prompt/Technical tabs** - reorganizes the assistant editor into four tabs; Knowledge adds full knowledge-source management and closes the assistant-scoping gap retrieval (item 19) has deferred; Custom Prompt adds full prompt-template management (picker, then relocated CRUD - list, create, edit, version history, publish/rollback, diff - replacing the standalone /prompt-templates page); Technical relocates speech rate/sensitivity/creativity and Glossary (renamed Technical Terms), and adds configuration-only call-duration/silence-timeout limits, a recording toggle, auto-delete-on-declined-consent, and ambient-sound presets with volume - pending enforcement until telephony (items 24-28) exists.
+23. **Assistant editor redesign: General/Knowledge/Custom Prompt/Technical tabs** - reorganizes the assistant editor into four tabs; Knowledge adds full knowledge-source management and closes the assistant-scoping gap retrieval (item 19) has deferred; Custom Prompt originally added full prompt-template management (picker, then relocated CRUD - list, create, edit, version history, publish/rollback, diff - replacing the standalone /prompt-templates page), since simplified by 12d to a single free-text prompt field, nothing else; Technical relocates speech rate/sensitivity/creativity and Glossary (renamed Technical Terms), and adds configuration-only call-duration/silence-timeout limits, a recording toggle, auto-delete-on-declined-consent, and ambient-sound presets with volume - pending enforcement until telephony (items 24-28) exists.
 24. **Telephony provider abstraction** - `TelephonyProvider` interface, verified webhook signature handling, a mock provider simulating the full call lifecycle.
 25. **Phone number provisioning** - search/claim numbers by country and area, surface regulatory document requirements, assign numbers to assistants, release numbers.
 26. **Inbound call handling** - answer an inbound call, route it to the correct assistant version, hold a complete conversation.
@@ -296,7 +296,9 @@ pivot. Do not alter this shape without a real requirement.
 - `business_hours_behavior` (JSONB)
 - `fallback_behavior` (JSONB) - what to do when the assistant cannot resolve the request
 - `enabled_skills` (JSONB) - the tool-permission set feature 34 enforces
-- `prompt_template_id`, `prompt_version` (nullable) - which prompt this version used
+- `custom_prompt` (text, nullable) - free-text system prompt, rendered through the same
+  `{{namespace.field}}` interpolation as everything else; falls back to `persona`, then a fixed
+  default, if unset or unable to render
 
 > **Immutable.** Every call records exactly which `AssistantVersion` answered it (item 20). Never
 > mutate a version in place; publishing a change creates a new version.

@@ -85,21 +85,13 @@ class AssistantVersion(UUIDPrimaryKeyMixin, TimestampMixin, Base):
         Boolean, nullable=False, default=False
     )
 
-    # Which prompt template (and which version of it) this configuration
-    # snapshot was based on - both nullable, both-or-neither (enforced in
-    # the schema, not here). No ondelete cascade: deleting a prompt template
-    # is not a capability that exists yet, and must never cascade-delete an
-    # assistant version that references it.
-    prompt_template_id: Mapped[uuid.UUID | None] = mapped_column(
-        UUID(as_uuid=True),
-        ForeignKey(
-            "prompt_templates.id",
-            name="fk_assistant_versions_prompt_template_id",
-        ),
-        nullable=True,
-    )
-
-    prompt_version: Mapped[int | None] = mapped_column(nullable=True)
+    # Free-text system prompt for this assistant, rendered through the same
+    # {{namespace.field}} interpolation as everything else (CLAUDE.md section
+    # 12) - mirrors persona's own shape exactly. Replaces the earlier shared,
+    # versioned PromptTemplate/PromptVersion system (build-plan items
+    # 12/12a-c/23f): a product decision to make the Custom Prompt tab "just a
+    # prompt, nothing else."
+    custom_prompt: Mapped[str | None] = mapped_column(Text, nullable=True)
 
 
 @event.listens_for(AssistantVersion, "before_update")

@@ -18,8 +18,6 @@ from app.models.invitation import Invitation
 from app.models.knowledge_source import KnowledgeSource
 from app.models.organization import Organization
 from app.models.organization_member import OrganizationMember
-from app.models.prompt_template import PromptTemplate
-from app.models.prompt_version import PromptVersion
 from app.models.session import UserSession
 from app.models.turn_metric import TurnMetric
 from app.models.user import User
@@ -39,8 +37,6 @@ __all__ = [
     "KnowledgeSource",
     "Organization",
     "OrganizationMember",
-    "PromptTemplate",
-    "PromptVersion",
     "TurnMetric",
     "User",
     "UserSession",
