@@ -12,9 +12,9 @@ from app.models.mixins import TimestampMixin, UUIDPrimaryKeyMixin
 class CrawledPage(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     """
     One page of a 'website'-type KnowledgeSource. One row per URL, updated
-    in place across recrawls - not an immutable version history the way
-    AssistantVersion/PromptVersion are. content_hash is the dedup key: a
-    recrawl only rewrites extracted_text when the hash actually changes.
+    in place across recrawls - no version history is kept. content_hash is
+    the dedup key: a recrawl only rewrites extracted_text when the hash
+    actually changes.
     """
 
     __tablename__ = "crawled_pages"

@@ -1,16 +1,15 @@
 import uuid
+from typing import Any
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.exceptions import (
     AssistantArchived,
     AssistantNotFound,
-    AssistantVersionNotFound,
     WorkspaceNotFound,
 )
 from app.models.assistant import Assistant
 from app.repositories import assistant as assistant_repo
-from app.repositories import assistant_version as assistant_version_repo
 from app.repositories import workspace as workspace_repo
 
 
@@ -123,16 +122,17 @@ async def get_assistant(
     )
 
 
-async def rename_assistant(
+async def update_assistant(
     db: AsyncSession,
     *,
     organization_id: uuid.UUID,
     workspace_id: uuid.UUID,
     assistant_id: uuid.UUID,
-    name: str,
+    fields: dict[str, Any],
 ) -> Assistant:
     """
-    Rename an assistant the caller may manage.
+    Apply a partial update to an assistant the caller may manage - name
+    and/or any configuration field, whichever `fields` actually contains.
     """
 
     assistant = await resolve_assistant(
@@ -142,7 +142,7 @@ async def rename_assistant(
         assistant_id=assistant_id,
     )
 
-    return await assistant_repo.update_name(db, assistant, name=name)
+    return await assistant_repo.update(db, assistant, fields=fields)
 
 
 async def archive_assistant(
@@ -195,13 +195,11 @@ async def publish_assistant(
     organization_id: uuid.UUID,
     workspace_id: uuid.UUID,
     assistant_id: uuid.UUID,
-    version: int,
 ) -> Assistant:
     """
-    Publish a version of an assistant the caller may manage - also how a
-    rollback works, since naming an older version than the current one is
-    the entire operation. Refuses an archived assistant: there is no
-    restore path yet, so nothing could legally bring it back to life.
+    Mark an assistant's current configuration as live. Refuses an archived
+    assistant: there is no restore path yet, so nothing could legally bring
+    it back to life.
     """
 
     assistant = await resolve_assistant(
@@ -214,13 +212,4 @@ async def publish_assistant(
     if assistant.status == assistant_repo.ARCHIVED_STATUS:
         raise AssistantArchived
 
-    assistant_version = await assistant_version_repo.get_by_version(
-        db,
-        assistant.id,
-        version,
-    )
-
-    if assistant_version is None:
-        raise AssistantVersionNotFound
-
-    return await assistant_repo.publish(db, assistant, version_id=assistant_version.id)
+    return await assistant_repo.publish(db, assistant)

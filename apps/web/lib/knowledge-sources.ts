@@ -140,6 +140,18 @@ export async function recrawlKnowledgeSource(
   );
 }
 
+/** Permanently delete a knowledge source. Irreversible. */
+export async function deleteKnowledgeSource(
+  organizationId: string,
+  workspaceId: string,
+  knowledgeSourceId: string,
+): Promise<void> {
+  await authorizedSend(
+    knowledgeSourceUrl(organizationId, workspaceId, knowledgeSourceId),
+    { method: "DELETE" },
+  );
+}
+
 export async function listFaqEntries(
   organizationId: string,
   workspaceId: string,

@@ -1,7 +1,7 @@
 import uuid
 from typing import Annotated
 
-from fastapi import APIRouter, File, Form, HTTPException, UploadFile, status
+from fastapi import APIRouter, File, Form, HTTPException, Response, UploadFile, status
 
 from app.api.deps import (
     DbSession,
@@ -382,3 +382,38 @@ async def get_knowledge_source(
         raise _KNOWLEDGE_SOURCE_NOT_FOUND from exc
 
     return _to_response(knowledge_source, document, crawled_pages)
+
+
+@router.delete(
+    f"{_PREFIX}/{{knowledge_source_id}}",
+    status_code=status.HTTP_204_NO_CONTENT,
+)
+async def delete_knowledge_source(
+    workspace_id: uuid.UUID,
+    knowledge_source_id: uuid.UUID,
+    membership: CanManageKnowledge,
+    db: DbSession,
+    storage: StorageProviderDep,
+) -> Response:
+    """
+    Permanently delete a knowledge source. Owners and admins only.
+    Irreversible - cascades to its document, chunks, and crawled pages, and
+    removes the underlying S3 object for a file-type source.
+    """
+
+    try:
+        await knowledge_source_service.delete_knowledge_source(
+            db,
+            storage,
+            organization_id=membership.organization_id,
+            workspace_id=workspace_id,
+            knowledge_source_id=knowledge_source_id,
+        )
+    except WorkspaceNotFound as exc:
+        raise _WORKSPACE_NOT_FOUND from exc
+    except KnowledgeSourceNotFound as exc:
+        raise _KNOWLEDGE_SOURCE_NOT_FOUND from exc
+
+    await db.commit()
+
+    return Response(status_code=status.HTTP_204_NO_CONTENT)

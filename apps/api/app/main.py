@@ -9,7 +9,6 @@ from app.api.internal.retrieval import router as internal_retrieval_router
 from app.api.internal.tts_config import router as internal_tts_config_router
 from app.api.internal.turn_detection import router as internal_turn_detection_router
 from app.api.internal.turn_metrics import router as internal_turn_metrics_router
-from app.api.v1.assistant_versions import router as assistant_versions_router
 from app.api.v1.assistants import router as assistants_router
 from app.api.v1.auth import router as auth_router
 from app.api.v1.faq_entries import router as faq_entries_router
@@ -87,11 +86,6 @@ app.include_router(
 
 app.include_router(
     assistants_router,
-    prefix=settings.api_v1_prefix,
-)
-
-app.include_router(
-    assistant_versions_router,
     prefix=settings.api_v1_prefix,
 )
 

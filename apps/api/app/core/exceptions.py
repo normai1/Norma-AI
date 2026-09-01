@@ -145,21 +145,6 @@ class AssistantNotFound(AssistantError):
     """
 
 
-class AssistantVersionNotFound(AssistantError):
-    """
-    No such version of this assistant.
-    """
-
-
-class AssistantVersionImmutable(AssistantError):
-    """
-    An AssistantVersion row was about to be updated in place. Versions are
-    immutable configuration snapshots - item 20's call engine reads whatever
-    version is current mid-call, so a version silently changing under it
-    would be a live-call correctness bug, not just a style violation.
-    """
-
-
 class AssistantArchived(AssistantError):
     """
     The assistant is archived - a terminal lifecycle state in this codebase

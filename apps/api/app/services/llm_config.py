@@ -2,10 +2,11 @@
 Resolves the two pieces of assistant configuration item 20d's realtime turn
 loop needs at session setup: the system prompt (rendered from the
 assistant's own custom_prompt, falling back to its persona) and creativity
-(bounded temperature, item 11b). A live call is never the place for a
-prompt-authoring bug (PromptRenderError) to drop the call - CLAUDE.md's
-"silence is the worst possible failure" - so rendering failures fail open to
-persona, then to a fixed default, rather than raising.
+(bounded temperature, item 11b) - both read directly off the one mutable
+Assistant row. A live call is never the place for a prompt-authoring bug
+(PromptRenderError) to drop the call - CLAUDE.md's "silence is the worst
+possible failure" - so rendering failures fail open to persona, then to a
+fixed default, rather than raising.
 """
 
 import uuid
@@ -15,9 +16,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.exceptions import AssistantNotFound, PromptRenderError
 from app.models.assistant import Assistant
-from app.models.assistant_version import AssistantVersion
 from app.repositories import assistant as assistant_repo
-from app.repositories import assistant_version as assistant_version_repo
 from app.repositories import workspace as workspace_repo
 from app.services.prompt_rendering import render_prompt
 
@@ -25,10 +24,6 @@ DEFAULT_SYSTEM_PROMPT = (
     "You are a helpful AI phone assistant. Answer briefly and clearly, "
     "and only state information you actually know."
 )
-
-# AssistantVersionCreate's own schema default (app/schemas/assistant_version.py)
-# - what an assistant would have if it had never been published.
-DEFAULT_CREATIVITY = 0.3
 
 
 @dataclass(frozen=True)
@@ -43,27 +38,18 @@ async def resolve_llm_config(db: AsyncSession, assistant_id: uuid.UUID) -> LLMCo
     if assistant is None:
         raise AssistantNotFound
 
-    if assistant.current_version_id is None:
-        return LLMConfig(
-            system_prompt=DEFAULT_SYSTEM_PROMPT, creativity=DEFAULT_CREATIVITY
-        )
+    system_prompt = await _resolve_system_prompt(db, assistant)
 
-    version = await assistant_version_repo.get_by_id(db, assistant.current_version_id)
-
-    system_prompt = await _resolve_system_prompt(db, assistant, version)
-
-    return LLMConfig(system_prompt=system_prompt, creativity=version.creativity)
+    return LLMConfig(system_prompt=system_prompt, creativity=assistant.creativity)
 
 
-async def _resolve_system_prompt(
-    db: AsyncSession, assistant: Assistant, version: AssistantVersion
-) -> str:
-    if version.custom_prompt:
+async def _resolve_system_prompt(db: AsyncSession, assistant: Assistant) -> str:
+    if assistant.custom_prompt:
         workspace = await workspace_repo.get_by_id(db, assistant.workspace_id)
 
         try:
             return render_prompt(
-                version.custom_prompt,
+                assistant.custom_prompt,
                 {
                     "workspace": {"name": workspace.name},
                     "assistant": {"name": assistant.name},
@@ -73,4 +59,4 @@ async def _resolve_system_prompt(
         except PromptRenderError:
             pass
 
-    return version.persona or DEFAULT_SYSTEM_PROMPT
+    return assistant.persona or DEFAULT_SYSTEM_PROMPT

@@ -373,9 +373,12 @@ async def test_get_is_not_found_for_a_nonexistent_knowledge_source(
 async def test_knowledge_source_in_one_workspace_is_not_reachable_through_a_sibling(
     client: AsyncClient,
 ) -> None:
-    organization_id, workspace_a_id, assistant_id, owner_headers = (
-        await _setup_workspace(client, "ks-sibling-workspace")
-    )
+    (
+        organization_id,
+        workspace_a_id,
+        assistant_id,
+        owner_headers,
+    ) = await _setup_workspace(client, "ks-sibling-workspace")
     workspace_b = await _create_workspace(
         client, organization_id, owner_headers, "Clinic B"
     )
@@ -394,9 +397,12 @@ async def test_knowledge_source_in_one_workspace_is_not_reachable_through_a_sibl
 async def test_knowledge_source_in_one_organization_is_not_reachable_through_another(
     client: AsyncClient,
 ) -> None:
-    organization_a_id, workspace_id, assistant_id, owner_a_headers = (
-        await _setup_workspace(client, "ks-sibling-org-a")
-    )
+    (
+        organization_a_id,
+        workspace_id,
+        assistant_id,
+        owner_a_headers,
+    ) = await _setup_workspace(client, "ks-sibling-org-a")
     owner_b_headers, organization_b_id = await _org_with_owner(
         client, "ks-sibling-org-b@example.com"
     )
@@ -427,6 +433,187 @@ async def test_upload_with_an_assistant_id_from_a_sibling_workspace_404s(
 
     response = await _upload(
         client, organization_id, workspace_a_id, owner_headers, assistant_in_b
+    )
+
+    assert response.status_code == 404
+
+
+async def _create_manual_faq_source(
+    client: AsyncClient,
+    organization_id: str,
+    workspace_id: str,
+    headers: dict[str, str],
+    assistant_id: str,
+    name: str = "General FAQ",
+):
+    return await client.post(
+        f"{_knowledge_sources_url(organization_id, workspace_id)}/manual-faq",
+        json={"name": name, "assistant_id": assistant_id},
+        headers=headers,
+    )
+
+
+def _knowledge_source_url(
+    organization_id: str, workspace_id: str, knowledge_source_id: str
+) -> str:
+    return (
+        f"{_knowledge_sources_url(organization_id, workspace_id)}/{knowledge_source_id}"
+    )
+
+
+async def test_delete_file_source_succeeds_and_removes_the_s3_object(
+    client: AsyncClient, storage: MockStorage
+) -> None:
+    organization_id, workspace_id, assistant_id, owner_headers = await _setup_workspace(
+        client, "ks-delete-file"
+    )
+    created = (
+        await _upload(
+            client, organization_id, workspace_id, owner_headers, assistant_id
+        )
+    ).json()
+    # storage_key is never exposed through the API (app/models/document.py's
+    # own docstring) - MockStorage held exactly one object from this single
+    # upload, so it is the one the delete must remove.
+    assert len(storage.objects) == 1
+    storage_key = next(iter(storage.objects))
+
+    url = _knowledge_source_url(organization_id, workspace_id, created["id"])
+    delete_response = await client.delete(url, headers=owner_headers)
+    get_response = await client.get(url, headers=owner_headers)
+
+    assert delete_response.status_code == 204
+    assert get_response.status_code == 404
+    assert storage_key not in storage.objects
+
+
+async def test_delete_manual_faq_source_succeeds(client: AsyncClient) -> None:
+    organization_id, workspace_id, assistant_id, owner_headers = await _setup_workspace(
+        client, "ks-delete-faq"
+    )
+    created = (
+        await _create_manual_faq_source(
+            client, organization_id, workspace_id, owner_headers, assistant_id
+        )
+    ).json()
+
+    url = _knowledge_source_url(organization_id, workspace_id, created["id"])
+    delete_response = await client.delete(url, headers=owner_headers)
+    get_response = await client.get(url, headers=owner_headers)
+
+    assert delete_response.status_code == 204
+    assert get_response.status_code == 404
+
+
+async def test_delete_requires_authentication(client: AsyncClient) -> None:
+    organization_id, workspace_id, assistant_id, owner_headers = await _setup_workspace(
+        client, "ks-delete-anon"
+    )
+    created = (
+        await _upload(
+            client, organization_id, workspace_id, owner_headers, assistant_id
+        )
+    ).json()
+
+    response = await client.delete(
+        _knowledge_source_url(organization_id, workspace_id, created["id"]),
+    )
+
+    assert response.status_code == 401
+
+
+async def test_delete_is_forbidden_for_a_member(client: AsyncClient) -> None:
+    organization_id, owner_headers, member_headers = await _org_with_member(
+        client, "ks-delete-member", "member"
+    )
+    workspace = await _create_workspace(
+        client, organization_id, owner_headers, "Clinic"
+    )
+    assistant_id = await _create_assistant(
+        client, organization_id, workspace["id"], owner_headers
+    )
+    created = (
+        await _upload(
+            client, organization_id, workspace["id"], owner_headers, assistant_id
+        )
+    ).json()
+
+    response = await client.delete(
+        _knowledge_source_url(organization_id, workspace["id"], created["id"]),
+        headers=member_headers,
+    )
+
+    assert response.status_code == 403
+
+
+async def test_delete_is_not_found_for_a_nonexistent_source(
+    client: AsyncClient,
+) -> None:
+    organization_id, workspace_id, _, owner_headers = await _setup_workspace(
+        client, "ks-delete-missing"
+    )
+
+    response = await client.delete(
+        _knowledge_source_url(organization_id, workspace_id, _MISSING_ID),
+        headers=owner_headers,
+    )
+
+    assert response.status_code == 404
+
+
+async def test_delete_in_one_workspace_is_not_reachable_through_a_sibling_workspace(
+    client: AsyncClient,
+) -> None:
+    (
+        organization_id,
+        workspace_a_id,
+        assistant_id,
+        owner_headers,
+    ) = await _setup_workspace(client, "ks-delete-sibling-workspace")
+    workspace_b = await _create_workspace(
+        client, organization_id, owner_headers, "Clinic B"
+    )
+    created = (
+        await _upload(
+            client, organization_id, workspace_a_id, owner_headers, assistant_id
+        )
+    ).json()
+
+    response = await client.delete(
+        _knowledge_source_url(organization_id, workspace_b["id"], created["id"]),
+        headers=owner_headers,
+    )
+
+    assert response.status_code == 404
+
+    still_there = await client.get(
+        _knowledge_source_url(organization_id, workspace_a_id, created["id"]),
+        headers=owner_headers,
+    )
+    assert still_there.status_code == 200
+
+
+async def test_delete_in_one_organization_is_not_reachable_through_another(
+    client: AsyncClient,
+) -> None:
+    (
+        organization_a_id,
+        workspace_id,
+        assistant_id,
+        owner_a_headers,
+    ) = await _setup_workspace(client, "ks-delete-sibling-org-a")
+    owner_b_headers, organization_b_id = await _org_with_owner(
+        client, "ks-delete-sibling-org-b@example.com"
+    )
+    created = (
+        await _upload(
+            client, organization_a_id, workspace_id, owner_a_headers, assistant_id
+        )
+    ).json()
+
+    response = await client.delete(
+        _knowledge_source_url(organization_b_id, workspace_id, created["id"]),
+        headers=owner_b_headers,
     )
 
     assert response.status_code == 404

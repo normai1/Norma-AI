@@ -106,9 +106,9 @@ this one.
 8. **User and organization settings** - profile and password management, and validated organization/workspace settings (timezone, locale, business hours, currency) in place of an unvalidated JSON blob.
 9. **Speech provider abstractions** - `SpeechToTextProvider`/`TextToSpeechProvider` interfaces, one real implementation each, plus deterministic mocks.
 10. **Voice and language catalogue** - browsable voice list with language/gender metadata, in-browser preview.
-11. **Assistant foundation** - Assistant/AssistantVersion tables, CRUD, immutable configuration snapshots, version pinning per call.
-    - 11a model + CRUD, 11b configuration schema, 11c versioning, 11d editor UI (simple + advanced modes), 11e real irreversible hard delete alongside the existing reversible archive.
-12. **Prompt templates and versioning** - originally reusable use-case templates, versions, variable interpolation, rollback; simplified by 12d to a single free-text `custom_prompt` field per `AssistantVersion` ("just a prompt, nothing else") - the PromptTemplate/PromptVersion system is fully removed, the `{{namespace.field}}` renderer survives and applies to `custom_prompt` directly.
+11. **Assistant foundation** - originally Assistant/AssistantVersion tables with immutable configuration snapshots and version pinning per call; 11f collapsed this into a single mutable `Assistant` row ("just edit the assistant, nothing else") - `AssistantVersion` is fully removed.
+    - 11a model + CRUD, 11b configuration schema, 11c versioning (removed by 11f), 11d editor UI (simple + advanced modes), 11e real irreversible hard delete alongside the existing reversible archive, 11f collapse into one mutable row (every config field moves onto `assistants`, `AssistantUpdate` becomes a general partial update, `/publish` becomes a pure status flip), 11g knowledge source hard delete (file/website/manual_faq, cascades + S3 object cleanup).
+12. **Prompt templates and versioning** - originally reusable use-case templates, versions, variable interpolation, rollback; simplified by 12d to a single free-text `custom_prompt` field directly on `Assistant` ("just a prompt, nothing else") - the PromptTemplate/PromptVersion system is fully removed, the `{{namespace.field}}` renderer survives and applies to `custom_prompt` directly.
 13. **Glossary and pronunciation** - per-assistant terms/abbreviations/phonetic overrides, applied as STT biasing and TTS pronunciation.
 14. **Knowledge source foundation** - KnowledgeSource model, PDF/DOCX/Markdown/TXT upload, S3-backed storage, processing status/error surfacing.
 15. **Website ingestion** - crawl a supplied domain, extract page content, handle recrawl and content-hash dedup.
@@ -279,29 +279,35 @@ pivot. Do not alter this shape without a real requirement.
 
 #### Assistant
 
+A single mutable row - editing an assistant updates it in place (11f collapsed the earlier
+`AssistantVersion` immutable-snapshot system away entirely: "just edit the assistant, nothing
+else"). `status` stays a separate lifecycle marker from the configuration itself.
+
 - `organization_id`, `workspace_id`
 - `name` (text, NOT NULL)
-- `status` (text: `draft`, `published`, `archived`)
-- `current_version_id` (UUID, FK -> AssistantVersion, nullable) - the version live calls use
-
-#### AssistantVersion
-
-- `assistant_id` (UUID, FK -> Assistant)
-- `version` (int) - unique per assistant, never reused
-- `voice_id`, `language` (text)
-- `greeting` (text), `greeting_interruptible` (bool)
-- `persona` (text) - behavioral instructions
-- `speech_rate` (numeric), `turn_sensitivity` (numeric), `creativity` (numeric, bounded)
-- `ambient_sound` (text, nullable)
-- `business_hours_behavior` (JSONB)
-- `fallback_behavior` (JSONB) - what to do when the assistant cannot resolve the request
-- `enabled_skills` (JSONB) - the tool-permission set feature 34 enforces
+- `status` (text: `draft`, `published`, `archived`) - `/publish` is a pure status flip now, not a
+  pointer to a chosen snapshot
+- `voice_id`, `language` (text, nullable - unset until the operator configures them)
+- `greeting` (text, nullable), `greeting_interruptible` (bool)
+- `persona` (text, nullable) - behavioral instructions
 - `custom_prompt` (text, nullable) - free-text system prompt, rendered through the same
   `{{namespace.field}}` interpolation as everything else; falls back to `persona`, then a fixed
   default, if unset or unable to render
+- `speech_rate`, `turn_sensitivity`, `creativity` (numeric, bounded) - NOT NULL with real DB
+  defaults (1.0/0.5/0.3) from row creation, so every assistant has valid numeric config
+  immediately, even before any configuration
+- `ambient_sound` (text, nullable), `ambient_sound_volume` (numeric, nullable)
+- `max_call_duration_seconds`, `max_silence_timeout_seconds` (int, nullable) - configuration-only
+  until real call handling (items 24-28) enforces them
+- `record_calls`, `auto_delete_on_declined_consent` (bool, NOT NULL, default false)
+- `business_hours_behavior` (JSONB)
+- `fallback_behavior` (JSONB) - what to do when the assistant cannot resolve the request
+- `enabled_skills` (JSONB) - the tool-permission set feature 34 enforces
 
-> **Immutable.** Every call records exactly which `AssistantVersion` answered it (item 20). Never
-> mutate a version in place; publishing a change creates a new version.
+> **No more immutable snapshot.** Once real call handling exists (items 24-28), `Call` must record
+> which assistant answered it, and the configuration values actually in effect at that moment
+> (e.g. by copying the fields it used onto the call record) - there is no longer an
+> `AssistantVersion` row to point at.
 
 ### Telephony (items 24-25, 33)
 
@@ -333,7 +339,9 @@ pivot. Do not alter this shape without a real requirement.
 - `organization_id`, `workspace_id`
 - `direction` (text: `inbound`, `outbound`)
 - `from_number`, `to_number` (text)
-- `assistant_version_id` (UUID, FK -> AssistantVersion)
+- `assistant_id` (UUID, FK -> Assistant) - plus the configuration values actually in effect at
+  call time (no more immutable `AssistantVersion` snapshot to point at instead - see Assistant's
+  own note above)
 - `started_at`, `ended_at` (timestamptz)
 - `duration_seconds`, `billable_seconds` (int)
 - `outcome`, `disposition` (text)

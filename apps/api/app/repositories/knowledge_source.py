@@ -108,3 +108,14 @@ async def create_with_document(
     await db.flush()
 
     return knowledge_source, document
+
+
+async def delete(db: AsyncSession, knowledge_source: KnowledgeSource) -> None:
+    """
+    Permanently remove a knowledge source. Cascades (via existing
+    ondelete="CASCADE" foreign keys) to its Document, Chunk, and CrawledPage
+    rows.
+    """
+
+    await db.delete(knowledge_source)
+    await db.flush()

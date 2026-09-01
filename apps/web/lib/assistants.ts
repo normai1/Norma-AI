@@ -6,18 +6,11 @@ export interface Assistant {
   workspace_id: string;
   name: string;
   status: string;
-  current_version_id: string | null;
-  created_at: string;
-}
-
-export interface AssistantVersion {
-  id: string;
-  assistant_id: string;
-  version: number;
-  voice_id: string;
-  language: string;
-  greeting: string;
+  voice_id: string | null;
+  language: string | null;
+  greeting: string | null;
   persona: string | null;
+  custom_prompt: string | null;
   speech_rate: number;
   turn_sensitivity: number;
   creativity: number;
@@ -27,36 +20,30 @@ export interface AssistantVersion {
   max_silence_timeout_seconds: number | null;
   record_calls: boolean;
   auto_delete_on_declined_consent: boolean;
-  custom_prompt: string | null;
   created_at: string;
 }
 
-export interface AssistantVersionInput {
-  voice_id: string;
-  language: string;
-  greeting: string;
-  persona: string | null;
-  speech_rate: number;
-  turn_sensitivity: number;
-  creativity: number;
-  ambient_sound: string | null;
-  ambient_sound_volume: number | null;
-  max_call_duration_seconds: number | null;
-  max_silence_timeout_seconds: number | null;
-  record_calls: boolean;
-  auto_delete_on_declined_consent: boolean;
-  custom_prompt: string | null;
-}
-
-export interface AssistantVersionFieldDiff {
-  previous: unknown;
-  current: unknown;
-}
-
-export interface AssistantVersionDiff {
-  from_version: number;
-  to_version: number;
-  changes: Record<string, AssistantVersionFieldDiff>;
+/**
+ * A partial update - every field is optional, and only the ones actually set
+ * are sent (and changed). There is no separate version snapshot to create:
+ * this edits the one mutable Assistant row directly.
+ */
+export interface AssistantUpdateInput {
+  name?: string;
+  voice_id?: string | null;
+  language?: string | null;
+  greeting?: string | null;
+  persona?: string | null;
+  custom_prompt?: string | null;
+  speech_rate?: number;
+  turn_sensitivity?: number;
+  creativity?: number;
+  ambient_sound?: string | null;
+  ambient_sound_volume?: number | null;
+  max_call_duration_seconds?: number | null;
+  max_silence_timeout_seconds?: number | null;
+  record_calls?: boolean;
+  auto_delete_on_declined_consent?: boolean;
 }
 
 export interface TestCallTicket {
@@ -116,6 +103,19 @@ export async function renameAssistant(
   );
 }
 
+/** Update any subset of an assistant's configuration in place. */
+export async function updateAssistant(
+  organizationId: string,
+  workspaceId: string,
+  assistantId: string,
+  input: AssistantUpdateInput,
+): Promise<Assistant> {
+  return authorizedJson<Assistant>(
+    assistantUrl(organizationId, workspaceId, assistantId),
+    { method: "PATCH", body: JSON.stringify(input) },
+  );
+}
+
 export async function archiveAssistant(
   organizationId: string,
   workspaceId: string,
@@ -138,37 +138,15 @@ export async function deleteAssistant(
   });
 }
 
+/** Mark an assistant's current configuration as live. */
 export async function publishAssistant(
   organizationId: string,
   workspaceId: string,
   assistantId: string,
-  version: number,
 ): Promise<Assistant> {
   return authorizedJson<Assistant>(
     `${assistantUrl(organizationId, workspaceId, assistantId)}/publish`,
-    { method: "POST", body: JSON.stringify({ version }) },
-  );
-}
-
-export async function listAssistantVersions(
-  organizationId: string,
-  workspaceId: string,
-  assistantId: string,
-): Promise<AssistantVersion[]> {
-  return authorizedJson<AssistantVersion[]>(
-    `${assistantUrl(organizationId, workspaceId, assistantId)}/versions`,
-  );
-}
-
-export async function createAssistantVersion(
-  organizationId: string,
-  workspaceId: string,
-  assistantId: string,
-  input: AssistantVersionInput,
-): Promise<AssistantVersion> {
-  return authorizedJson<AssistantVersion>(
-    `${assistantUrl(organizationId, workspaceId, assistantId)}/versions`,
-    { method: "POST", body: JSON.stringify(input) },
+    { method: "POST" },
   );
 }
 
@@ -180,18 +158,5 @@ export async function fetchTestCallTicket(
   return authorizedJson<TestCallTicket>(
     `${assistantUrl(organizationId, workspaceId, assistantId)}/test-call-token`,
     { method: "POST" },
-  );
-}
-
-export async function diffAssistantVersions(
-  organizationId: string,
-  workspaceId: string,
-  assistantId: string,
-  fromVersion: number,
-  toVersion: number,
-): Promise<AssistantVersionDiff> {
-  return authorizedJson<AssistantVersionDiff>(
-    `${assistantUrl(organizationId, workspaceId, assistantId)}/versions/` +
-      `${fromVersion}/diff/${toVersion}`,
   );
 }

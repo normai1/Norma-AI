@@ -8,15 +8,9 @@ from app.api.workspace_deps import CurrentWorkspace
 from app.core.exceptions import (
     AssistantArchived,
     AssistantNotFound,
-    AssistantVersionNotFound,
     WorkspaceNotFound,
 )
-from app.schemas.assistant import (
-    AssistantCreate,
-    AssistantPublish,
-    AssistantResponse,
-    AssistantUpdate,
-)
+from app.schemas.assistant import AssistantCreate, AssistantResponse, AssistantUpdate
 from app.schemas.voice_session import VoiceSessionTicketResponse
 from app.services import assistant as assistant_service
 from app.services import voice_session as voice_session_service
@@ -26,11 +20,6 @@ router = APIRouter(tags=["assistants"])
 _ASSISTANT_NOT_FOUND = HTTPException(
     status_code=status.HTTP_404_NOT_FOUND,
     detail="Assistant not found",
-)
-
-_ASSISTANT_VERSION_NOT_FOUND = HTTPException(
-    status_code=status.HTTP_404_NOT_FOUND,
-    detail="Assistant version not found",
 )
 
 _ASSISTANT_ARCHIVED = HTTPException(
@@ -154,7 +143,7 @@ async def issue_test_call_token(
     "/organizations/{organization_id}/workspaces/{workspace_id}/assistants/{assistant_id}",
     response_model=AssistantResponse,
 )
-async def rename_assistant(
+async def update_assistant(
     workspace_id: uuid.UUID,
     assistant_id: uuid.UUID,
     payload: AssistantUpdate,
@@ -162,16 +151,17 @@ async def rename_assistant(
     db: DbSession,
 ) -> AssistantResponse:
     """
-    Rename an assistant. Owners and admins only.
+    Update an assistant in place - name and/or any configuration field,
+    whichever the request actually includes. Owners and admins only.
     """
 
     try:
-        assistant = await assistant_service.rename_assistant(
+        assistant = await assistant_service.update_assistant(
             db,
             organization_id=membership.organization_id,
             workspace_id=workspace_id,
             assistant_id=assistant_id,
-            name=payload.name,
+            fields=payload.model_dump(exclude_unset=True),
         )
     except WorkspaceNotFound as exc:
         raise _WORKSPACE_NOT_FOUND from exc
@@ -191,12 +181,11 @@ async def rename_assistant(
 async def publish_assistant(
     workspace_id: uuid.UUID,
     assistant_id: uuid.UUID,
-    payload: AssistantPublish,
     membership: CanManageAssistants,
     db: DbSession,
 ) -> AssistantResponse:
     """
-    Publish (or roll back to) a version of an assistant. Owners and admins
+    Mark an assistant's current configuration as live. Owners and admins
     only.
     """
 
@@ -206,7 +195,6 @@ async def publish_assistant(
             organization_id=membership.organization_id,
             workspace_id=workspace_id,
             assistant_id=assistant_id,
-            version=payload.version,
         )
     except WorkspaceNotFound as exc:
         raise _WORKSPACE_NOT_FOUND from exc
@@ -214,8 +202,6 @@ async def publish_assistant(
         raise _ASSISTANT_NOT_FOUND from exc
     except AssistantArchived as exc:
         raise _ASSISTANT_ARCHIVED from exc
-    except AssistantVersionNotFound as exc:
-        raise _ASSISTANT_VERSION_NOT_FOUND from exc
 
     await db.commit()
 
@@ -234,8 +220,8 @@ async def delete_assistant(
 ) -> Response:
     """
     Permanently delete an assistant. Owners and admins only. Irreversible -
-    cascades to its knowledge sources, chunks, versions, and glossary
-    entries. Use archive instead for a reversible option.
+    cascades to its knowledge sources, chunks, and glossary entries. Use
+    archive instead for a reversible option.
     """
 
     try:

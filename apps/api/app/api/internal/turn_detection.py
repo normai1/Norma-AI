@@ -13,8 +13,6 @@ from fastapi import APIRouter, HTTPException, status
 from app.api.deps import DbSession
 from app.api.internal_deps import RequireInternalSecret
 from app.repositories import assistant as assistant_repo
-from app.repositories import assistant_version as assistant_version_repo
-from app.schemas.assistant_version import AssistantVersionCreate
 
 router = APIRouter(tags=["internal"])
 
@@ -22,13 +20,6 @@ _ASSISTANT_NOT_FOUND = HTTPException(
     status_code=status.HTTP_404_NOT_FOUND,
     detail="Assistant not found",
 )
-
-# The schema's own default (app/schemas/assistant_version.py) - an assistant
-# that has never been published has no current_version_id yet, but a test
-# call in the browser (item 21) must still be possible before formal
-# publishing, so this falls back to the same default a real version would
-# have started from rather than inventing a different number.
-_DEFAULT_SENSITIVITY = AssistantVersionCreate.model_fields["turn_sensitivity"].default
 
 
 @router.get("/internal/v1/assistants/{assistant_id}/turn-detection-config")
@@ -42,9 +33,4 @@ async def get_turn_detection_config(
     if assistant is None:
         raise _ASSISTANT_NOT_FOUND
 
-    if assistant.current_version_id is None:
-        return {"sensitivity": _DEFAULT_SENSITIVITY}
-
-    version = await assistant_version_repo.get_by_id(db, assistant.current_version_id)
-
-    return {"sensitivity": version.turn_sensitivity}
+    return {"sensitivity": assistant.turn_sensitivity}

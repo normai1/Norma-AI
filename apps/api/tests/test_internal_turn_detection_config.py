@@ -5,7 +5,6 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
 from app.models.assistant import Assistant
-from app.models.assistant_version import AssistantVersion
 from app.models.organization import Organization
 from app.models.workspace import Workspace
 
@@ -34,27 +33,11 @@ async def _make_assistant(db: AsyncSession, slug: str) -> Assistant:
     return assistant
 
 
-async def test_returns_the_published_versions_sensitivity(
+async def test_returns_the_assistants_sensitivity(
     client: AsyncClient, db: AsyncSession
 ) -> None:
     assistant = await _make_assistant(db, "internal-turn-detection-ok")
-
-    version = AssistantVersion(
-        assistant_id=assistant.id,
-        version=1,
-        voice_id="voice-1",
-        language="en",
-        greeting="Hello",
-        persona=None,
-        speech_rate=1.0,
-        turn_sensitivity=0.8,
-        creativity=0.3,
-        ambient_sound=None,
-    )
-    db.add(version)
-    await db.flush()
-
-    assistant.current_version_id = version.id
+    assistant.turn_sensitivity = 0.8
     await db.flush()
 
     response = await client.get(
@@ -66,10 +49,10 @@ async def test_returns_the_published_versions_sensitivity(
     assert response.json() == {"sensitivity": 0.8}
 
 
-async def test_returns_the_default_sensitivity_for_an_unpublished_assistant(
+async def test_returns_the_default_sensitivity_for_an_unconfigured_assistant(
     client: AsyncClient, db: AsyncSession
 ) -> None:
-    assistant = await _make_assistant(db, "internal-turn-detection-unpublished")
+    assistant = await _make_assistant(db, "internal-turn-detection-unconfigured")
 
     response = await client.get(
         _TURN_DETECTION_CONFIG_URL.format(assistant_id=assistant.id),

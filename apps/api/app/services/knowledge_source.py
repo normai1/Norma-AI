@@ -366,6 +366,45 @@ async def list_knowledge_sources(
     return results
 
 
+async def delete_knowledge_source(
+    db: AsyncSession,
+    storage: StorageProvider,
+    *,
+    organization_id: uuid.UUID,
+    workspace_id: uuid.UUID,
+    knowledge_source_id: uuid.UUID,
+) -> None:
+    """
+    Permanently delete a knowledge source the caller may access. For a
+    file-type source, the S3-backed document is deleted first - if that
+    fails for a reason other than "already gone," the whole operation is
+    aborted rather than deleting the DB row and silently orphaning the
+    object (CLAUDE.md section 20: deletion must actually delete the
+    object). website/manual_faq sources have nothing in object storage to
+    clean up; Chunk/CrawledPage rows cascade via existing foreign keys.
+    """
+
+    knowledge_source = await resolve_knowledge_source(
+        db,
+        organization_id=organization_id,
+        workspace_id=workspace_id,
+        knowledge_source_id=knowledge_source_id,
+    )
+
+    if knowledge_source.type == knowledge_source_repo.FILE_TYPE:
+        document = await knowledge_source_repo.get_document_for_source(
+            db, knowledge_source.id
+        )
+
+        if document is not None:
+            try:
+                await storage.delete(document.storage_key)
+            except StorageObjectNotFound:
+                pass
+
+    await knowledge_source_repo.delete(db, knowledge_source)
+
+
 async def get_knowledge_source(
     db: AsyncSession,
     *,
@@ -469,9 +508,7 @@ async def _crawl_and_reconcile(
                 },
                 embedding=vector,
             )
-            for (page_url, span), vector in zip(
-                spans_by_url, vectors, strict=True
-            )
+            for (page_url, span), vector in zip(spans_by_url, vectors, strict=True)
         ],
     )
 

@@ -5,7 +5,6 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
 from app.models.assistant import Assistant
-from app.models.assistant_version import AssistantVersion
 from app.models.organization import Organization
 from app.models.workspace import Workspace
 
@@ -32,27 +31,12 @@ async def _make_assistant(db: AsyncSession, slug: str) -> Assistant:
     return assistant
 
 
-async def test_returns_the_published_versions_config(
+async def test_returns_the_assistants_config(
     client: AsyncClient, db: AsyncSession
 ) -> None:
     assistant = await _make_assistant(db, "internal-llm-config-ok")
-
-    version = AssistantVersion(
-        assistant_id=assistant.id,
-        version=1,
-        voice_id="voice-1",
-        language="en",
-        greeting="Hello",
-        persona="Be warm.",
-        speech_rate=1.0,
-        turn_sensitivity=0.5,
-        creativity=0.8,
-        ambient_sound=None,
-    )
-    db.add(version)
-    await db.flush()
-
-    assistant.current_version_id = version.id
+    assistant.persona = "Be warm."
+    assistant.creativity = 0.8
     await db.flush()
 
     response = await client.get(
@@ -64,10 +48,10 @@ async def test_returns_the_published_versions_config(
     assert response.json() == {"system_prompt": "Be warm.", "creativity": 0.8}
 
 
-async def test_returns_the_default_config_for_an_unpublished_assistant(
+async def test_returns_the_default_config_for_an_unconfigured_assistant(
     client: AsyncClient, db: AsyncSession
 ) -> None:
-    assistant = await _make_assistant(db, "internal-llm-config-unpublished")
+    assistant = await _make_assistant(db, "internal-llm-config-unconfigured")
 
     response = await client.get(
         _LLM_CONFIG_URL.format(assistant_id=assistant.id),

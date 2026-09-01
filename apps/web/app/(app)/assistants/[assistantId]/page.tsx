@@ -16,16 +16,12 @@ import {
 } from "@/components/organizations/ui";
 import {
   archiveAssistant,
-  createAssistantVersion,
   deleteAssistant,
-  diffAssistantVersions,
   getAssistant,
-  listAssistantVersions,
   publishAssistant,
   renameAssistant,
+  updateAssistant,
   type Assistant,
-  type AssistantVersion,
-  type AssistantVersionDiff,
 } from "@/lib/assistants";
 import {
   createGlossaryEntry,
@@ -41,6 +37,7 @@ import {
   createManualFaqKnowledgeSource,
   createWebsiteKnowledgeSource,
   deleteFaqEntry,
+  deleteKnowledgeSource,
   knowledgeSourceDisplayName,
   knowledgeSourceTypeLabel,
   listFaqEntries,
@@ -69,10 +66,6 @@ const EDITOR_TABS = [
 ] as const;
 
 type EditorTabKey = (typeof EDITOR_TABS)[number]["key"];
-
-function formatDiffValue(value: unknown): string {
-  return value === null || value === undefined ? "(none)" : String(value);
-}
 
 function AssistantStatusBadge({ status }: { status: string }) {
   return (
@@ -169,6 +162,9 @@ export default function AssistantEditorPage() {
   const [recrawlingId, setRecrawlingId] = useState<string | null>(null);
   const [recrawlError, setRecrawlError] = useState<string | null>(null);
 
+  const [deletingSourceId, setDeletingSourceId] = useState<string | null>(null);
+  const [deleteSourceError, setDeleteSourceError] = useState<string | null>(null);
+
   const [faqSourceName, setFaqSourceName] = useState("");
   const [addingFaqSource, setAddingFaqSource] = useState(false);
   const [addFaqSourceError, setAddFaqSourceError] = useState<string | null>(null);
@@ -197,26 +193,12 @@ export default function AssistantEditorPage() {
     null,
   );
 
-  const [savingVersion, setSavingVersion] = useState(false);
-  const [versionError, setVersionError] = useState<string | null>(null);
-  const [versionSaved, setVersionSaved] = useState<AssistantVersion | null>(
-    null,
-  );
+  const [saving, setSaving] = useState(false);
+  const [saveError, setSaveError] = useState<string | null>(null);
+  const [saved, setSaved] = useState(false);
 
-  const [versions, setVersions] = useState<AssistantVersion[] | null>(null);
-  const [versionsError, setVersionsError] = useState<string | null>(null);
-  const [publishingVersion, setPublishingVersion] = useState<number | null>(
-    null,
-  );
+  const [publishing, setPublishing] = useState(false);
   const [publishError, setPublishError] = useState<string | null>(null);
-
-  const [diffFrom, setDiffFrom] = useState("");
-  const [diffTo, setDiffTo] = useState("");
-  const [diffResult, setDiffResult] = useState<AssistantVersionDiff | null>(
-    null,
-  );
-  const [diffError, setDiffError] = useState<string | null>(null);
-  const [diffLoading, setDiffLoading] = useState(false);
 
   const [glossaryEntries, setGlossaryEntries] = useState<GlossaryEntry[] | null>(
     null,
@@ -296,58 +278,6 @@ export default function AssistantEditorPage() {
     };
   }, [fetchGlossaryEntries, applyGlossaryEntries, applyGlossaryError]);
 
-  const fetchVersions = useCallback(async () => {
-    if (!activeWorkspace) {
-      return null;
-    }
-
-    return listAssistantVersions(
-      activeWorkspace.organization_id,
-      activeWorkspace.id,
-      assistantId,
-    );
-  }, [activeWorkspace, assistantId]);
-
-  const applyVersions = useCallback((loaded: AssistantVersion[] | null) => {
-    if (loaded) {
-      setVersions(loaded);
-    }
-  }, []);
-
-  const applyVersionsError = useCallback((err: unknown) => {
-    setVersionsError(
-      err instanceof Error ? err.message : "Could not load version history.",
-    );
-  }, []);
-
-  const loadVersions = useCallback(async () => {
-    try {
-      applyVersions(await fetchVersions());
-    } catch (err) {
-      applyVersionsError(err);
-    }
-  }, [fetchVersions, applyVersions, applyVersionsError]);
-
-  useEffect(() => {
-    let cancelled = false;
-
-    fetchVersions()
-      .then((loaded) => {
-        if (!cancelled) {
-          applyVersions(loaded);
-        }
-      })
-      .catch((err) => {
-        if (!cancelled) {
-          applyVersionsError(err);
-        }
-      });
-
-    return () => {
-      cancelled = true;
-    };
-  }, [fetchVersions, applyVersions, applyVersionsError]);
-
   useEffect(() => {
     let cancelled = false;
 
@@ -392,8 +322,32 @@ export default function AssistantEditorPage() {
     if (loaded) {
       setAssistant(loaded);
       setName(loaded.name);
+      setVoiceId(loaded.voice_id ?? "");
+      setLanguage(loaded.language ?? activeWorkspace?.settings.locale ?? "en-US");
+      setGreeting(loaded.greeting ?? "");
+      setPersona(loaded.persona ?? "");
+      setCustomPrompt(loaded.custom_prompt ?? "");
+      setSpeechRate(loaded.speech_rate);
+      setTurnSensitivity(loaded.turn_sensitivity);
+      setCreativity(loaded.creativity);
+      setAmbientSound(loaded.ambient_sound ?? "");
+      setAmbientSoundVolume(
+        loaded.ambient_sound_volume === null ? "" : String(loaded.ambient_sound_volume),
+      );
+      setMaxCallDurationSeconds(
+        loaded.max_call_duration_seconds === null
+          ? ""
+          : String(loaded.max_call_duration_seconds),
+      );
+      setMaxSilenceTimeoutSeconds(
+        loaded.max_silence_timeout_seconds === null
+          ? ""
+          : String(loaded.max_silence_timeout_seconds),
+      );
+      setRecordCalls(loaded.record_calls);
+      setAutoDeleteOnDeclinedConsent(loaded.auto_delete_on_declined_consent);
     }
-  }, []);
+  }, [activeWorkspace]);
 
   const applyLoadError = useCallback((err: unknown) => {
     setError(
@@ -576,6 +530,38 @@ export default function AssistantEditorPage() {
       );
     } finally {
       setRecrawlingId(null);
+    }
+  }
+
+  async function handleDeleteSource(knowledgeSourceId: string) {
+    if (!activeWorkspace) {
+      return;
+    }
+
+    const confirmed = window.confirm(
+      "Permanently delete this knowledge source? This cannot be undone.",
+    );
+
+    if (!confirmed) {
+      return;
+    }
+
+    setDeleteSourceError(null);
+    setDeletingSourceId(knowledgeSourceId);
+
+    try {
+      await deleteKnowledgeSource(
+        activeWorkspace.organization_id,
+        activeWorkspace.id,
+        knowledgeSourceId,
+      );
+      await refreshKnowledgeSources();
+    } catch (err) {
+      setDeleteSourceError(
+        err instanceof Error ? err.message : "Could not delete this source.",
+      );
+    } finally {
+      setDeletingSourceId(null);
     }
   }
 
@@ -857,7 +843,7 @@ export default function AssistantEditorPage() {
     setPreviewingVoiceId(voice.id);
   }
 
-  async function handleSaveVersion(event: FormEvent<HTMLFormElement>) {
+  async function handleSave(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
 
     if (!activeWorkspace) {
@@ -882,26 +868,26 @@ export default function AssistantEditorPage() {
       (parsedMaxSilenceTimeout !== null && !Number.isFinite(parsedMaxSilenceTimeout)) ||
       (parsedAmbientSoundVolume !== null && !Number.isFinite(parsedAmbientSoundVolume))
     ) {
-      setVersionError(
+      setSaveError(
         "Speech rate, turn sensitivity, creativity, and any call/ambient-sound numbers must be valid.",
       );
 
       return;
     }
 
-    setVersionError(null);
-    setVersionSaved(null);
-    setSavingVersion(true);
+    setSaveError(null);
+    setSaved(false);
+    setSaving(true);
 
     try {
-      const created = await createAssistantVersion(
+      const updated = await updateAssistant(
         activeWorkspace.organization_id,
         activeWorkspace.id,
         assistantId,
         {
-          voice_id: voiceId,
-          language,
-          greeting,
+          voice_id: voiceId.trim() ? voiceId : null,
+          language: language.trim() ? language : null,
+          greeting: greeting.trim() ? greeting : null,
           persona: persona.trim() ? persona : null,
           speech_rate: speechRate,
           turn_sensitivity: turnSensitivity,
@@ -916,78 +902,38 @@ export default function AssistantEditorPage() {
         },
       );
 
-      setVersionSaved(created);
-      await loadVersions();
+      setAssistant(updated);
+      setSaved(true);
     } catch (err) {
-      setVersionError(
-        err instanceof Error ? err.message : "Could not save this version.",
+      setSaveError(
+        err instanceof Error ? err.message : "Could not save these changes.",
       );
     } finally {
-      setSavingVersion(false);
+      setSaving(false);
     }
   }
 
-  async function handlePublish(version: number) {
+  async function handlePublish() {
     if (!activeWorkspace) {
       return;
     }
 
     setPublishError(null);
-    setPublishingVersion(version);
+    setPublishing(true);
 
     try {
       await publishAssistant(
         activeWorkspace.organization_id,
         activeWorkspace.id,
         assistantId,
-        version,
       );
       await load();
     } catch (err) {
       setPublishError(
-        err instanceof Error ? err.message : "Could not publish this version.",
+        err instanceof Error ? err.message : "Could not publish this assistant.",
       );
     } finally {
-      setPublishingVersion(null);
-    }
-  }
-
-  async function handleDiff(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault();
-
-    if (!activeWorkspace) {
-      return;
-    }
-
-    const from = Number(diffFrom);
-    const to = Number(diffTo);
-
-    if (!Number.isFinite(from) || !Number.isFinite(to)) {
-      setDiffError("Choose two versions to compare.");
-
-      return;
-    }
-
-    setDiffError(null);
-    setDiffResult(null);
-    setDiffLoading(true);
-
-    try {
-      const result = await diffAssistantVersions(
-        activeWorkspace.organization_id,
-        activeWorkspace.id,
-        assistantId,
-        from,
-        to,
-      );
-
-      setDiffResult(result);
-    } catch (err) {
-      setDiffError(
-        err instanceof Error ? err.message : "Could not compare these versions.",
-      );
-    } finally {
-      setDiffLoading(false);
+      setPublishing(false);
     }
   }
 
@@ -1175,7 +1121,27 @@ export default function AssistantEditorPage() {
           </Button>
         </form>
 
+        {publishError && (
+          <div className="mt-4">
+            <ErrorText message={publishError} />
+          </div>
+        )}
+
         <div className="mt-6 flex flex-wrap gap-3 border-t border-slate-800 pt-4">
+          {!archived && (
+            <Button
+              variant="secondary"
+              disabled={publishing || assistant.status === "published"}
+              onClick={handlePublish}
+            >
+              {publishing
+                ? "Publishing..."
+                : assistant.status === "published"
+                  ? "Published"
+                  : "Publish"}
+            </Button>
+          )}
+
           {archived ? (
             <p className="text-sm text-slate-500">This assistant is archived.</p>
           ) : (
@@ -1207,7 +1173,7 @@ export default function AssistantEditorPage() {
         <Card>
           <h2 className="text-lg font-semibold">Configuration</h2>
           <p className="mt-1 text-sm text-slate-400">
-            Saving posts a full new version snapshot - versions are immutable.
+            Changes apply as soon as you save.
           </p>
 
           {voicesError && (
@@ -1230,15 +1196,13 @@ export default function AssistantEditorPage() {
 
           {voices !== null && voices.length > 0 && (
             <form
-              onSubmit={handleSaveVersion}
+              onSubmit={handleSave}
               className="mt-4 space-y-6"
               noValidate
             >
-              {versionError && <ErrorText message={versionError} />}
-              {versionSaved && (
-                <p className="text-sm text-green-400">
-                  Saved as version {versionSaved.version}.
-                </p>
+              {saveError && <ErrorText message={saveError} />}
+              {saved && (
+                <p className="text-sm text-green-400">Changes saved.</p>
               )}
 
               <div>
@@ -1253,7 +1217,7 @@ export default function AssistantEditorPage() {
                   <select
                     id="voice_id"
                     className="w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-white focus:outline-none focus:ring-2 focus:ring-slate-600"
-                    disabled={savingVersion}
+                    disabled={saving}
                     value={voiceId}
                     onChange={(event) => setVoiceId(event.target.value)}
                   >
@@ -1300,7 +1264,7 @@ export default function AssistantEditorPage() {
                 <select
                   id="language"
                   className="mt-2 w-full max-w-md rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-white focus:outline-none focus:ring-2 focus:ring-slate-600"
-                  disabled={savingVersion}
+                  disabled={saving}
                   value={language}
                   onChange={(event) => setLanguage(event.target.value)}
                 >
@@ -1325,7 +1289,7 @@ export default function AssistantEditorPage() {
                   rows={2}
                   maxLength={2000}
                   required
-                  disabled={savingVersion}
+                  disabled={saving}
                   className="mt-2 w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-white placeholder:text-slate-500 focus:border-slate-500 focus:outline-none focus:ring-2 focus:ring-slate-600"
                   placeholder="Thanks for calling - how can I help?"
                   value={greeting}
@@ -1345,7 +1309,7 @@ export default function AssistantEditorPage() {
                   id="persona"
                   rows={4}
                   maxLength={4000}
-                  disabled={savingVersion}
+                  disabled={saving}
                   className="mt-2 w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-white placeholder:text-slate-500 focus:border-slate-500 focus:outline-none focus:ring-2 focus:ring-slate-600"
                   placeholder="Optional - behavioral instructions for this assistant."
                   value={persona}
@@ -1355,9 +1319,9 @@ export default function AssistantEditorPage() {
 
               <Button
                 type="submit"
-                disabled={savingVersion || !voiceId || !greeting.trim()}
+                disabled={saving || !voiceId || !greeting.trim()}
               >
-                {savingVersion ? "Saving..." : "Save as new version"}
+                {saving ? "Saving..." : "Save changes"}
               </Button>
             </form>
           )}
@@ -1445,6 +1409,12 @@ export default function AssistantEditorPage() {
               </div>
             )}
 
+            {deleteSourceError && (
+              <div className="mt-4">
+                <ErrorText message={deleteSourceError} />
+              </div>
+            )}
+
             {knowledgeSourcesError && (
               <div className="mt-4">
                 <ErrorText message={knowledgeSourcesError} />
@@ -1527,6 +1497,14 @@ export default function AssistantEditorPage() {
                             : "Manage entries"}
                         </Button>
                       )}
+
+                      <Button
+                        variant="danger"
+                        disabled={deletingSourceId === source.id}
+                        onClick={() => handleDeleteSource(source.id)}
+                      >
+                        {deletingSourceId === source.id ? "Deleting..." : "Delete"}
+                      </Button>
                     </div>
 
                     {source.type === "manual_faq" &&
@@ -1708,16 +1686,13 @@ export default function AssistantEditorPage() {
           <Card>
             <h2 className="text-lg font-semibold">Custom Prompt</h2>
             <p className="mt-1 text-sm text-slate-400">
-              Free-text instructions for this assistant - saved as part of this
-              assistant&apos;s version snapshot.
+              Free-text instructions for this assistant.
             </p>
 
-            <form onSubmit={handleSaveVersion} className="mt-4 space-y-4" noValidate>
-              {versionError && <ErrorText message={versionError} />}
-              {versionSaved && (
-                <p className="text-sm text-green-400">
-                  Saved as version {versionSaved.version}.
-                </p>
+            <form onSubmit={handleSave} className="mt-4 space-y-4" noValidate>
+              {saveError && <ErrorText message={saveError} />}
+              {saved && (
+                <p className="text-sm text-green-400">Changes saved.</p>
               )}
 
               <div>
@@ -1732,7 +1707,7 @@ export default function AssistantEditorPage() {
                   id="custom_prompt"
                   rows={12}
                   maxLength={8000}
-                  disabled={savingVersion}
+                  disabled={saving}
                   className="mt-2 w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-white placeholder:text-slate-500 focus:border-slate-500 focus:outline-none focus:ring-2 focus:ring-slate-600"
                   placeholder="Tell Norma how to talk to callers."
                   value={customPrompt}
@@ -1740,8 +1715,8 @@ export default function AssistantEditorPage() {
                 />
               </div>
 
-              <Button type="submit" disabled={savingVersion || !voiceId || !greeting.trim()}>
-                {savingVersion ? "Saving..." : "Save as new version"}
+              <Button type="submit" disabled={saving || !voiceId || !greeting.trim()}>
+                {saving ? "Saving..." : "Save changes"}
               </Button>
             </form>
           </Card>
@@ -1753,21 +1728,19 @@ export default function AssistantEditorPage() {
           <Card>
             <h2 className="text-lg font-semibold">Speech behavior</h2>
             <p className="mt-1 text-sm text-slate-400">
-              Saving posts a full new version snapshot - versions are immutable.
+              Changes apply as soon as you save.
             </p>
 
-            {versionError && (
+            {saveError && (
               <div className="mt-4">
-                <ErrorText message={versionError} />
+                <ErrorText message={saveError} />
               </div>
             )}
-            {versionSaved && (
-              <p className="mt-4 text-sm text-green-400">
-                Saved as version {versionSaved.version}.
-              </p>
+            {saved && (
+              <p className="mt-4 text-sm text-green-400">Changes saved.</p>
             )}
 
-            <form onSubmit={handleSaveVersion} className="mt-4 space-y-4" noValidate>
+            <form onSubmit={handleSave} className="mt-4 space-y-4" noValidate>
               <div>
                 <label
                   htmlFor="speech_rate"
@@ -1782,7 +1755,7 @@ export default function AssistantEditorPage() {
                   min={0.5}
                   max={2}
                   step={0.1}
-                  disabled={savingVersion}
+                  disabled={saving}
                   className="mt-2 w-32 rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-white focus:outline-none focus:ring-2 focus:ring-slate-600"
                   value={speechRate}
                   onChange={(event) =>
@@ -1805,7 +1778,7 @@ export default function AssistantEditorPage() {
                   min={0}
                   max={1}
                   step={0.05}
-                  disabled={savingVersion}
+                  disabled={saving}
                   className="mt-2 w-32 rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-white focus:outline-none focus:ring-2 focus:ring-slate-600"
                   value={turnSensitivity}
                   onChange={(event) =>
@@ -1828,7 +1801,7 @@ export default function AssistantEditorPage() {
                   min={0}
                   max={1}
                   step={0.05}
-                  disabled={savingVersion}
+                  disabled={saving}
                   className="mt-2 w-32 rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-white focus:outline-none focus:ring-2 focus:ring-slate-600"
                   value={creativity}
                   onChange={(event) =>
@@ -1847,7 +1820,7 @@ export default function AssistantEditorPage() {
 
                 <select
                   id="ambient_sound"
-                  disabled={savingVersion}
+                  disabled={saving}
                   className="mt-2 w-full max-w-md rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-white focus:outline-none focus:ring-2 focus:ring-slate-600"
                   value={ambientSound}
                   onChange={(event) => setAmbientSound(event.target.value)}
@@ -1872,7 +1845,7 @@ export default function AssistantEditorPage() {
                   min={0}
                   max={1}
                   step={0.05}
-                  disabled={savingVersion || !ambientSound}
+                  disabled={saving || !ambientSound}
                   className="mt-2 w-32 rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-white placeholder:text-slate-500 focus:border-slate-500 focus:outline-none focus:ring-2 focus:ring-slate-600 disabled:opacity-50"
                   placeholder="0.0-1.0"
                   value={ambientSoundVolume}
@@ -1900,7 +1873,7 @@ export default function AssistantEditorPage() {
                       type="number"
                       min={30}
                       max={3600}
-                      disabled={savingVersion}
+                      disabled={saving}
                       className="mt-2 w-32 rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-white placeholder:text-slate-500 focus:border-slate-500 focus:outline-none focus:ring-2 focus:ring-slate-600"
                       placeholder="Optional"
                       value={maxCallDurationSeconds}
@@ -1921,7 +1894,7 @@ export default function AssistantEditorPage() {
                       type="number"
                       min={5}
                       max={300}
-                      disabled={savingVersion}
+                      disabled={saving}
                       className="mt-2 w-32 rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-white placeholder:text-slate-500 focus:border-slate-500 focus:outline-none focus:ring-2 focus:ring-slate-600"
                       placeholder="Optional"
                       value={maxSilenceTimeoutSeconds}
@@ -1933,7 +1906,7 @@ export default function AssistantEditorPage() {
                     <input
                       id="record_calls"
                       type="checkbox"
-                      disabled={savingVersion}
+                      disabled={saving}
                       className="h-4 w-4 rounded border-slate-700 bg-slate-950 focus:outline-none focus:ring-2 focus:ring-slate-600"
                       checked={recordCalls}
                       onChange={(event) => setRecordCalls(event.target.checked)}
@@ -1947,7 +1920,7 @@ export default function AssistantEditorPage() {
                     <input
                       id="auto_delete_on_declined_consent"
                       type="checkbox"
-                      disabled={savingVersion}
+                      disabled={saving}
                       className="h-4 w-4 rounded border-slate-700 bg-slate-950 focus:outline-none focus:ring-2 focus:ring-slate-600"
                       checked={autoDeleteOnDeclinedConsent}
                       onChange={(event) =>
@@ -1966,9 +1939,9 @@ export default function AssistantEditorPage() {
 
               <Button
                 type="submit"
-                disabled={savingVersion || !voiceId || !greeting.trim()}
+                disabled={saving || !voiceId || !greeting.trim()}
               >
-                {savingVersion ? "Saving..." : "Save as new version"}
+                {saving ? "Saving..." : "Save changes"}
               </Button>
             </form>
           </Card>
@@ -2181,186 +2154,6 @@ export default function AssistantEditorPage() {
                 </Button>
               </div>
             </form>
-          </Card>
-
-          <Card>
-            <h2 className="text-lg font-semibold">Version history</h2>
-
-            {publishError && (
-              <div className="mt-4">
-                <ErrorText message={publishError} />
-              </div>
-            )}
-
-            {versionsError && (
-              <div className="mt-4">
-                <ErrorText message={versionsError} />
-              </div>
-            )}
-
-            {versions === null && !versionsError && (
-              <div className="mt-4">
-                <LoadingState message="Loading versions..." />
-              </div>
-            )}
-
-            {versions !== null && versions.length === 0 && (
-              <div className="mt-4">
-                <EmptyState message="No versions saved yet. Save one above to get started." />
-              </div>
-            )}
-
-            {versions !== null && versions.length > 0 && (
-              <ul className="mt-4 space-y-3">
-                {versions.map((version) => {
-                  const isCurrent = version.id === assistant.current_version_id;
-
-                  return (
-                    <li
-                      key={version.id}
-                      className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-slate-800 px-4 py-3"
-                    >
-                      <div>
-                        <span className="font-medium">Version {version.version}</span>
-                        <span className="ml-3 text-sm text-slate-500">
-                          {new Date(version.created_at).toLocaleString()}
-                        </span>
-                      </div>
-
-                      {isCurrent ? (
-                        <span className="rounded-full border border-green-800 px-2.5 py-0.5 text-xs font-medium text-green-300">
-                          Current
-                        </span>
-                      ) : (
-                        <Button
-                          variant="secondary"
-                          disabled={archived || publishingVersion !== null}
-                          onClick={() => handlePublish(version.version)}
-                        >
-                          {publishingVersion === version.version
-                            ? "Publishing..."
-                            : "Publish"}
-                        </Button>
-                      )}
-                    </li>
-                  );
-                })}
-              </ul>
-            )}
-
-            {versions !== null && versions.length > 1 && (
-              <div className="mt-6 border-t border-slate-800 pt-4">
-                <h3 className="text-sm font-semibold text-slate-300">
-                  Compare versions
-                </h3>
-
-                <form
-                  onSubmit={handleDiff}
-                  className="mt-3 flex flex-wrap items-end gap-3"
-                  noValidate
-                >
-                  <div>
-                    <label
-                      htmlFor="diff_from"
-                      className="block text-sm font-medium text-slate-200"
-                    >
-                      From
-                    </label>
-
-                    <select
-                      id="diff_from"
-                      className="mt-2 rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-white focus:outline-none focus:ring-2 focus:ring-slate-600"
-                      value={diffFrom}
-                      onChange={(event) => setDiffFrom(event.target.value)}
-                    >
-                      <option value="" disabled>
-                        Select a version
-                      </option>
-                      {versions.map((version) => (
-                        <option key={version.id} value={version.version}>
-                          Version {version.version}
-                        </option>
-                      ))}
-                    </select>
-                  </div>
-
-                  <div>
-                    <label
-                      htmlFor="diff_to"
-                      className="block text-sm font-medium text-slate-200"
-                    >
-                      To
-                    </label>
-
-                    <select
-                      id="diff_to"
-                      className="mt-2 rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-white focus:outline-none focus:ring-2 focus:ring-slate-600"
-                      value={diffTo}
-                      onChange={(event) => setDiffTo(event.target.value)}
-                    >
-                      <option value="" disabled>
-                        Select a version
-                      </option>
-                      {versions.map((version) => (
-                        <option key={version.id} value={version.version}>
-                          Version {version.version}
-                        </option>
-                      ))}
-                    </select>
-                  </div>
-
-                  <Button type="submit" disabled={diffLoading || !diffFrom || !diffTo}>
-                    {diffLoading ? "Comparing..." : "Show diff"}
-                  </Button>
-                </form>
-
-                {diffError && (
-                  <div className="mt-4">
-                    <ErrorText message={diffError} />
-                  </div>
-                )}
-
-                {diffResult && Object.keys(diffResult.changes).length === 0 && (
-                  <p className="mt-4 text-sm text-slate-400">
-                    No differences between version {diffResult.from_version} and
-                    version {diffResult.to_version}.
-                  </p>
-                )}
-
-                {diffResult && Object.keys(diffResult.changes).length > 0 && (
-                  <div className="mt-4 overflow-x-auto">
-                    <table className="w-full text-left text-sm">
-                      <thead>
-                        <tr className="text-slate-400">
-                          <th className="pb-2 pr-4 font-medium">Field</th>
-                          <th className="pb-2 pr-4 font-medium">
-                            Version {diffResult.from_version}
-                          </th>
-                          <th className="pb-2 font-medium">
-                            Version {diffResult.to_version}
-                          </th>
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {Object.entries(diffResult.changes).map(
-                          ([field, change]) => (
-                            <tr key={field} className="border-t border-slate-800">
-                              <td className="py-2 pr-4 font-medium">{field}</td>
-                              <td className="py-2 pr-4 text-slate-400">
-                                {formatDiffValue(change.previous)}
-                              </td>
-                              <td className="py-2 text-slate-200">
-                                {formatDiffValue(change.current)}
-                              </td>
-                            </tr>
-                          ),
-                        )}
-                      </tbody>
-                    </table>
-                  </div>
-                )}
-              </div>
-            )}
           </Card>
         </div>
       )}

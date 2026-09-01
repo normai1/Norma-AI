@@ -1,4 +1,5 @@
 import uuid
+from typing import Any
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -7,6 +8,29 @@ from app.models.assistant import Assistant
 
 ARCHIVED_STATUS = "archived"
 PUBLISHED_STATUS = "published"
+
+# The fields an operator may edit via AssistantUpdate - everything except
+# identity (id/organization_id/workspace_id) and lifecycle (status), which
+# have their own dedicated operations (archive/publish/delete).
+_UPDATABLE_FIELDS = frozenset(
+    {
+        "name",
+        "voice_id",
+        "language",
+        "greeting",
+        "persona",
+        "custom_prompt",
+        "speech_rate",
+        "turn_sensitivity",
+        "creativity",
+        "ambient_sound",
+        "ambient_sound_volume",
+        "max_call_duration_seconds",
+        "max_silence_timeout_seconds",
+        "record_calls",
+        "auto_delete_on_declined_consent",
+    }
+)
 
 
 async def get_by_id(db: AsyncSession, assistant_id: uuid.UUID) -> Assistant | None:
@@ -42,7 +66,9 @@ async def create(
     name: str,
 ) -> Assistant:
     """
-    Insert a new assistant, in the default 'draft' status.
+    Insert a new assistant, in the default 'draft' status. voice_id/
+    greeting stay unset until the operator configures them; speech_rate/
+    turn_sensitivity/creativity get their DB-level defaults immediately.
     """
 
     assistant = Assistant(
@@ -57,17 +83,23 @@ async def create(
     return assistant
 
 
-async def update_name(
+async def update(
     db: AsyncSession,
     assistant: Assistant,
     *,
-    name: str,
+    fields: dict[str, Any],
 ) -> Assistant:
     """
-    Rename an assistant.
+    Apply a partial update in place - only the keys present in `fields` are
+    changed. `fields` must already be limited to _UPDATABLE_FIELDS by the
+    caller (AssistantUpdate.model_dump(exclude_unset=True) naturally is).
     """
 
-    assistant.name = name
+    for key, value in fields.items():
+        if key not in _UPDATABLE_FIELDS:
+            raise ValueError(f"{key!r} is not an updatable Assistant field")
+
+        setattr(assistant, key, value)
 
     await db.flush()
 
@@ -90,29 +122,21 @@ async def archive(db: AsyncSession, assistant: Assistant) -> Assistant:
 async def delete(db: AsyncSession, assistant: Assistant) -> None:
     """
     Permanently remove an assistant. Cascades (via existing ondelete="CASCADE"
-    foreign keys) to its AssistantVersion, KnowledgeSource, Chunk, and
-    GlossaryEntry rows - verified directly against the real dev database,
-    including the case where current_version_id still points at a live
-    version row, before this function was written.
+    foreign keys) to its KnowledgeSource, Chunk, and GlossaryEntry rows.
     """
 
     await db.delete(assistant)
     await db.flush()
 
 
-async def publish(
-    db: AsyncSession,
-    assistant: Assistant,
-    *,
-    version_id: uuid.UUID,
-) -> Assistant:
+async def publish(db: AsyncSession, assistant: Assistant) -> Assistant:
     """
-    Point an assistant at a version and move it to 'published'. Idempotent:
-    publishing the already-current version, or re-publishing an already-
-    published assistant, is a no-op beyond the (possibly unchanged) pointer.
+    Move an assistant to 'published'. A pure status flip now - there is no
+    version to point at, so "publish" means "this configuration is live",
+    not "point at a chosen snapshot." Idempotent: publishing an already-
+    published assistant is a no-op.
     """
 
-    assistant.current_version_id = version_id
     assistant.status = PUBLISHED_STATUS
 
     await db.flush()

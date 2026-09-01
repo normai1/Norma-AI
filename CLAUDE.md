@@ -493,14 +493,15 @@ embedding configuration
 
 # 12. Assistant configuration and prompts
 
-The **Assistant** is the central configurable object. `AssistantVersion` is an immutable configuration snapshot. Every call records which version answered it. Never mutate a version that a call references.
+The **Assistant** is the central configurable object - a single mutable row. Editing an assistant updates it in place; there is no separate immutable-snapshot/version history. This is a deliberate product simplification (build-plan item 11f) that fully removed the earlier `AssistantVersion` system (11a-e's own versioning/diff/rollback machinery): "just edit the assistant, nothing else." A call records which assistant answered it, not which version - once real call handling exists (items 24-28), it must record the configuration values actually in effect at call time (e.g. by copying the fields it used onto the call record), since there is no longer an immutable snapshot to point at.
+
+`status` (draft/published/archived) still exists as a separate lifecycle marker from the configuration itself: `POST .../publish` is a pure status flip ("this configuration is live"), not a pointer to a chosen snapshot, and archiving is still the reversible, non-destructive alternative to `DELETE`.
 
 Operator-configurable without code: name, voice, language, greeting and whether it is interruptible, persona and behavioral instructions, speech rate, turn-detection sensitivity, creativity (bounded temperature), ambient sound, business-hours behavior, unresolved-request fallback, enabled skills.
 
 Prompts:
 
-- Each `AssistantVersion` carries a single free-text `custom_prompt` field - a deliberate product simplification (superseding the earlier reusable/versioned PromptTemplate system from build-plan items 12/12a-c/23f, which is fully removed). No template picker, no per-prompt version history or publish/rollback, no sharing a prompt across assistants - "just a prompt, nothing else." Falls back to `persona`, then a fixed default, if unset or unable to render.
-- Prompt-level history/rollback still exists, just at the `AssistantVersion` grain: every saved version is its own immutable snapshot, and republishing an older `AssistantVersion` is how a prompt change gets rolled back.
+- The assistant carries a single free-text `custom_prompt` field - a further simplification (superseding the earlier reusable/versioned PromptTemplate system from build-plan items 12/12a-c/23f, which is fully removed). No template picker, no per-prompt version history or publish/rollback, no sharing a prompt across assistants - "just a prompt, nothing else." Falls back to `persona`, then a fixed default, if unset or unable to render.
 - Variables interpolated from assistant, workspace, and caller context (`{{namespace.field}}`, `app/services/prompt_rendering.py`).
 - Never embed large production prompts inside route handlers or voice workers.
 
@@ -583,7 +584,7 @@ Core entities and their scope:
 Organization        — billing, membership, subscription
 Workspace           — scoping unit for everything below
 User, Session
-Assistant, AssistantVersion
+Assistant
 PhoneNumber, SipTrunk, ForwardingTarget
 Call, CallLeg, TranscriptTurn, Recording, CallSummary
 ExtractedVariable, ToolInvocation, TurnMetric

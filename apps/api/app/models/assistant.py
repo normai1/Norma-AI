@@ -1,6 +1,15 @@
 import uuid
 
-from sqlalchemy import CheckConstraint, ForeignKey, String, text
+from sqlalchemy import (
+    Boolean,
+    CheckConstraint,
+    ForeignKey,
+    Integer,
+    Numeric,
+    String,
+    Text,
+    text,
+)
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -10,9 +19,14 @@ from app.models.mixins import TimestampMixin, UUIDPrimaryKeyMixin
 
 class Assistant(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     """
-    A configurable AI phone assistant, scoped to one workspace. Configuration
-    itself lives in versioned snapshots (`AssistantVersion`); this table only
-    tracks identity, lifecycle status, and which version is live.
+    A configurable AI phone assistant, scoped to one workspace. A single
+    mutable row - editing an assistant updates it in place; there is no
+    separate immutable-snapshot/version history (a deliberate simplification
+    that removed the earlier AssistantVersion system: "just edit the
+    assistant, nothing else"). voice_id/language/greeting stay nullable
+    since a freshly created assistant has none of them configured yet;
+    speech_rate/turn_sensitivity/creativity carry real DB defaults so every
+    assistant always has valid numeric config, even unconfigured ones.
     """
 
     __tablename__ = "assistants"
@@ -49,19 +63,41 @@ class Assistant(UUIDPrimaryKeyMixin, TimestampMixin, Base):
         server_default=text("'draft'"),
     )
 
-    # Nullable and unset by everything in 11b - only 11c's /publish action
-    # ever writes this. No ondelete cascade: deleting a version (not a
-    # capability that exists yet either) must never cascade-delete the
-    # assistant that happens to point at it. use_alter breaks the circular
-    # FK dependency (assistant_versions.assistant_id -> assistants.id,
-    # assistants.current_version_id -> assistant_versions.id) so both
-    # SQLAlchemy's create_all and Alembic can order table creation.
-    current_version_id: Mapped[uuid.UUID | None] = mapped_column(
-        UUID(as_uuid=True),
-        ForeignKey(
-            "assistant_versions.id",
-            use_alter=True,
-            name="fk_assistants_current_version_id",
-        ),
+    voice_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    language: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    greeting: Mapped[str | None] = mapped_column(Text, nullable=True)
+    persona: Mapped[str | None] = mapped_column(Text, nullable=True)
+    custom_prompt: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+    speech_rate: Mapped[float] = mapped_column(
+        Numeric(3, 2, asdecimal=False),
+        nullable=False,
+        server_default=text("1.0"),
+    )
+    turn_sensitivity: Mapped[float] = mapped_column(
+        Numeric(3, 2, asdecimal=False),
+        nullable=False,
+        server_default=text("0.5"),
+    )
+    creativity: Mapped[float] = mapped_column(
+        Numeric(3, 2, asdecimal=False),
+        nullable=False,
+        server_default=text("0.3"),
+    )
+
+    ambient_sound: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    ambient_sound_volume: Mapped[float | None] = mapped_column(
+        Numeric(3, 2, asdecimal=False),
         nullable=True,
+    )
+
+    max_call_duration_seconds: Mapped[int | None] = mapped_column(
+        Integer, nullable=True
+    )
+    max_silence_timeout_seconds: Mapped[int | None] = mapped_column(
+        Integer, nullable=True
+    )
+    record_calls: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    auto_delete_on_declined_consent: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False
     )
