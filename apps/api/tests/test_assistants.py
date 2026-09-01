@@ -881,3 +881,252 @@ async def test_publish_in_one_workspace_is_not_reachable_through_a_sibling_works
     )
 
     assert response.status_code == 404
+
+
+def _assistant_url(organization_id: str, workspace_id: str, assistant_id: str) -> str:
+    return f"{_assistants_url(organization_id, workspace_id)}/{assistant_id}"
+
+
+async def test_delete_succeeds_and_is_permanent(client: AsyncClient) -> None:
+    owner_headers, organization_id = await _org_with_owner(
+        client,
+        "asst-delete-owner@example.com",
+    )
+    workspace = await _create_workspace(
+        client, organization_id, owner_headers, "Clinic"
+    )
+    created = await _create_assistant(
+        client,
+        organization_id,
+        workspace["id"],
+        owner_headers,
+        "Front Desk",
+    )
+    url = _assistant_url(organization_id, workspace["id"], created["id"])
+
+    delete_response = await client.delete(url, headers=owner_headers)
+    get_response = await client.get(url, headers=owner_headers)
+
+    assert delete_response.status_code == 204
+    assert get_response.status_code == 404
+
+
+async def test_delete_cascades_to_versions_knowledge_sources_and_glossary_entries(
+    client: AsyncClient,
+) -> None:
+    owner_headers, organization_id = await _org_with_owner(
+        client,
+        "asst-delete-cascade@example.com",
+    )
+    workspace = await _create_workspace(
+        client, organization_id, owner_headers, "Clinic"
+    )
+    created = await _create_assistant(
+        client,
+        organization_id,
+        workspace["id"],
+        owner_headers,
+        "Front Desk",
+    )
+    assistant_id = created["id"]
+
+    version = await _create_version(
+        client, organization_id, workspace["id"], assistant_id, owner_headers
+    )
+    assert "id" in version
+
+    knowledge_source_response = await client.post(
+        f"{_workspaces_url(organization_id)}/{workspace['id']}/knowledge-sources/manual-faq",
+        json={"name": "General FAQ", "assistant_id": assistant_id},
+        headers=owner_headers,
+    )
+    assert knowledge_source_response.status_code == 201
+    knowledge_source_id = knowledge_source_response.json()["id"]
+
+    glossary_response = await client.post(
+        f"{_assistants_url(organization_id, workspace['id'])}/{assistant_id}/glossary",
+        json={"term": "PRN"},
+        headers=owner_headers,
+    )
+    assert glossary_response.status_code == 201
+
+    delete_response = await client.delete(
+        _assistant_url(organization_id, workspace["id"], assistant_id),
+        headers=owner_headers,
+    )
+    assert delete_response.status_code == 204
+
+    version_get = await client.get(
+        f"{_assistants_url(organization_id, workspace['id'])}/{assistant_id}/versions",
+        headers=owner_headers,
+    )
+    assert version_get.status_code == 404
+
+    knowledge_source_get = await client.get(
+        f"{_workspaces_url(organization_id)}/{workspace['id']}/knowledge-sources/{knowledge_source_id}",
+        headers=owner_headers,
+    )
+    assert knowledge_source_get.status_code == 404
+
+    glossary_get = await client.get(
+        f"{_assistants_url(organization_id, workspace['id'])}/{assistant_id}/glossary",
+        headers=owner_headers,
+    )
+    assert glossary_get.status_code == 404
+
+
+async def test_delete_requires_authentication(client: AsyncClient) -> None:
+    owner_headers, organization_id = await _org_with_owner(
+        client,
+        "asst-delete-anon@example.com",
+    )
+    workspace = await _create_workspace(
+        client, organization_id, owner_headers, "Clinic"
+    )
+    created = await _create_assistant(
+        client,
+        organization_id,
+        workspace["id"],
+        owner_headers,
+        "Front Desk",
+    )
+
+    response = await client.delete(
+        _assistant_url(organization_id, workspace["id"], created["id"]),
+    )
+
+    assert response.status_code == 401
+
+
+async def test_delete_is_forbidden_for_a_member(client: AsyncClient) -> None:
+    organization_id, owner_headers, member_headers = await _org_with_member(
+        client,
+        "asst-delete-member",
+        "member",
+    )
+    workspace = await _create_workspace(
+        client, organization_id, owner_headers, "Clinic"
+    )
+    created = await _create_assistant(
+        client,
+        organization_id,
+        workspace["id"],
+        owner_headers,
+        "Front Desk",
+    )
+
+    response = await client.delete(
+        _assistant_url(organization_id, workspace["id"], created["id"]),
+        headers=member_headers,
+    )
+
+    assert response.status_code == 403
+
+
+async def test_delete_is_forbidden_for_a_viewer(client: AsyncClient) -> None:
+    organization_id, owner_headers, viewer_headers = await _org_with_member(
+        client,
+        "asst-delete-viewer",
+        "viewer",
+    )
+    workspace = await _create_workspace(
+        client, organization_id, owner_headers, "Clinic"
+    )
+    created = await _create_assistant(
+        client,
+        organization_id,
+        workspace["id"],
+        owner_headers,
+        "Front Desk",
+    )
+
+    response = await client.delete(
+        _assistant_url(organization_id, workspace["id"], created["id"]),
+        headers=viewer_headers,
+    )
+
+    assert response.status_code == 403
+
+
+async def test_delete_is_not_found_for_a_nonexistent_assistant(
+    client: AsyncClient,
+) -> None:
+    owner_headers, organization_id = await _org_with_owner(
+        client,
+        "asst-delete-missing@example.com",
+    )
+    workspace = await _create_workspace(
+        client, organization_id, owner_headers, "Clinic"
+    )
+
+    response = await client.delete(
+        _assistant_url(organization_id, workspace["id"], _MISSING_ID),
+        headers=owner_headers,
+    )
+
+    assert response.status_code == 404
+
+
+async def test_delete_in_one_workspace_is_not_reachable_through_a_sibling_workspace(
+    client: AsyncClient,
+) -> None:
+    owner_headers, organization_id = await _org_with_owner(
+        client,
+        "asst-delete-sibling-workspace@example.com",
+    )
+    workspace_a = await _create_workspace(
+        client, organization_id, owner_headers, "Clinic A"
+    )
+    workspace_b = await _create_workspace(
+        client, organization_id, owner_headers, "Clinic B"
+    )
+    created = await _create_assistant(
+        client,
+        organization_id,
+        workspace_a["id"],
+        owner_headers,
+        "Front Desk",
+    )
+
+    response = await client.delete(
+        _assistant_url(organization_id, workspace_b["id"], created["id"]),
+        headers=owner_headers,
+    )
+
+    assert response.status_code == 404
+
+    still_there = await client.get(
+        _assistant_url(organization_id, workspace_a["id"], created["id"]),
+        headers=owner_headers,
+    )
+    assert still_there.status_code == 200
+
+
+async def test_delete_in_one_organization_is_not_reachable_through_another(
+    client: AsyncClient,
+) -> None:
+    owner_a_headers, organization_a_id = await _org_with_owner(
+        client,
+        "asst-delete-sibling-org-a@example.com",
+    )
+    owner_b_headers, organization_b_id = await _org_with_owner(
+        client,
+        "asst-delete-sibling-org-b@example.com",
+    )
+    workspace_a = await _create_workspace(
+        client, organization_a_id, owner_a_headers, "Clinic A"
+    )
+    created = await _create_assistant(
+        client,
+        organization_a_id,
+        workspace_a["id"],
+        owner_a_headers,
+        "Front Desk",
+    )
+
+    response = await client.delete(
+        _assistant_url(organization_b_id, workspace_a["id"], created["id"]),
+        headers=owner_b_headers,
+    )
+
+    assert response.status_code == 404

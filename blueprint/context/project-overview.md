@@ -107,7 +107,7 @@ this one.
 9. **Speech provider abstractions** - `SpeechToTextProvider`/`TextToSpeechProvider` interfaces, one real implementation each, plus deterministic mocks.
 10. **Voice and language catalogue** - browsable voice list with language/gender metadata, in-browser preview.
 11. **Assistant foundation** - Assistant/AssistantVersion tables, CRUD, immutable configuration snapshots, version pinning per call.
-    - 11a model + CRUD, 11b configuration schema, 11c versioning, 11d editor UI (simple + advanced modes).
+    - 11a model + CRUD, 11b configuration schema, 11c versioning, 11d editor UI (simple + advanced modes), 11e real irreversible hard delete alongside the existing reversible archive.
 12. **Prompt templates and versioning** - reusable use-case templates, versions, variable interpolation, rollback.
 13. **Glossary and pronunciation** - per-assistant terms/abbreviations/phonetic overrides, applied as STT biasing and TTS pronunciation.
 14. **Knowledge source foundation** - KnowledgeSource model, PDF/DOCX/Markdown/TXT upload, S3-backed storage, processing status/error surfacing.

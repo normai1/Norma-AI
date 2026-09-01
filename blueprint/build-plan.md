@@ -49,6 +49,7 @@
   - [x] 11b. **Configuration schema** - validated voice, language, greeting, persona, speech rate, sensitivity, creativity, and ambience settings
   - [x] 11c. **Versioning** - immutable version snapshots, diffing, and rollback
   - [x] 11d. **Assistant editor UI** - simple and advanced modes over the same configuration
+  - [x] 11e. **Assistant hard delete** - a real, irreversible DELETE endpoint (cascading to the assistant's KnowledgeSource/Chunk/AssistantVersion/GlossaryEntry rows via their existing CASCADE FKs), a service function, cross-tenant negative tests, and a confirmation dialog in the UI. Archive stays as the separate, reversible, non-destructive option.
 - [x] 12. **Prompt templates and versioning** - reusable use-case templates (receptionist, support, scheduling, answering machine, field service, order intake) with versions, variable interpolation, and rollback
   - [x] 12a. **Prompt template backend** - PromptTemplate and PromptVersion tables, CRUD, immutable versioning, publish/rollback, and diff, mirroring item 11's proven Assistant/AssistantVersion pattern
   - [x] 12b. **Variable interpolation and assistant wiring** - a pure `{{namespace.field}}` renderer over assistant/workspace/caller context, plus the additive `prompt_template_id`/`prompt_version` columns on `AssistantVersion`

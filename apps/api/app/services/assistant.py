@@ -166,6 +166,29 @@ async def archive_assistant(
     return await assistant_repo.archive(db, assistant)
 
 
+async def delete_assistant(
+    db: AsyncSession,
+    *,
+    organization_id: uuid.UUID,
+    workspace_id: uuid.UUID,
+    assistant_id: uuid.UUID,
+) -> None:
+    """
+    Permanently delete an assistant the caller may manage. Irreversible -
+    unlike archive_assistant, there is no undo. Cascades to everything the
+    assistant owns via existing foreign keys.
+    """
+
+    assistant = await resolve_assistant(
+        db,
+        organization_id=organization_id,
+        workspace_id=workspace_id,
+        assistant_id=assistant_id,
+    )
+
+    await assistant_repo.delete(db, assistant)
+
+
 async def publish_assistant(
     db: AsyncSession,
     *,

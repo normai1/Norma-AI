@@ -87,6 +87,19 @@ async def archive(db: AsyncSession, assistant: Assistant) -> Assistant:
     return assistant
 
 
+async def delete(db: AsyncSession, assistant: Assistant) -> None:
+    """
+    Permanently remove an assistant. Cascades (via existing ondelete="CASCADE"
+    foreign keys) to its AssistantVersion, KnowledgeSource, Chunk, and
+    GlossaryEntry rows - verified directly against the real dev database,
+    including the case where current_version_id still points at a live
+    version row, before this function was written.
+    """
+
+    await db.delete(assistant)
+    await db.flush()
+
+
 async def publish(
     db: AsyncSession,
     assistant: Assistant,

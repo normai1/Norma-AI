@@ -1,4 +1,4 @@
-import { authorizedJson } from "./auth";
+import { authorizedJson, authorizedSend } from "./auth";
 
 export interface Assistant {
   id: string;
@@ -127,6 +127,17 @@ export async function archiveAssistant(
     `${assistantUrl(organizationId, workspaceId, assistantId)}/archive`,
     { method: "POST" },
   );
+}
+
+/** Permanently delete an assistant. Irreversible - unlike archiveAssistant. */
+export async function deleteAssistant(
+  organizationId: string,
+  workspaceId: string,
+  assistantId: string,
+): Promise<void> {
+  await authorizedSend(assistantUrl(organizationId, workspaceId, assistantId), {
+    method: "DELETE",
+  });
 }
 
 export async function publishAssistant(

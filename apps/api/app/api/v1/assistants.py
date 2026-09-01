@@ -1,6 +1,6 @@
 import uuid
 
-from fastapi import APIRouter, HTTPException, status
+from fastapi import APIRouter, HTTPException, Response, status
 
 from app.api.deps import DbSession
 from app.api.org_deps import CanManageAssistants
@@ -220,6 +220,39 @@ async def publish_assistant(
     await db.commit()
 
     return AssistantResponse.model_validate(assistant)
+
+
+@router.delete(
+    "/organizations/{organization_id}/workspaces/{workspace_id}/assistants/{assistant_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+)
+async def delete_assistant(
+    workspace_id: uuid.UUID,
+    assistant_id: uuid.UUID,
+    membership: CanManageAssistants,
+    db: DbSession,
+) -> Response:
+    """
+    Permanently delete an assistant. Owners and admins only. Irreversible -
+    cascades to its knowledge sources, chunks, versions, and glossary
+    entries. Use archive instead for a reversible option.
+    """
+
+    try:
+        await assistant_service.delete_assistant(
+            db,
+            organization_id=membership.organization_id,
+            workspace_id=workspace_id,
+            assistant_id=assistant_id,
+        )
+    except WorkspaceNotFound as exc:
+        raise _WORKSPACE_NOT_FOUND from exc
+    except AssistantNotFound as exc:
+        raise _ASSISTANT_NOT_FOUND from exc
+
+    await db.commit()
+
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
 @router.post(

@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { useParams } from "next/navigation";
+import { useParams, useRouter } from "next/navigation";
 import { useCallback, useEffect, useState, type FormEvent } from "react";
 
 import { useTenant } from "@/components/app/tenant-provider";
@@ -17,6 +17,7 @@ import {
 import {
   archiveAssistant,
   createAssistantVersion,
+  deleteAssistant,
   diffAssistantVersions,
   getAssistant,
   listAssistantVersions,
@@ -126,6 +127,7 @@ function PromptTemplateStatusBadge({ status }: { status: string }) {
 export default function AssistantEditorPage() {
   const params = useParams<{ assistantId: string }>();
   const assistantId = params.assistantId;
+  const router = useRouter();
 
   const {
     status: tenantStatus,
@@ -141,6 +143,7 @@ export default function AssistantEditorPage() {
   const [name, setName] = useState("");
   const [renaming, setRenaming] = useState(false);
   const [archiving, setArchiving] = useState(false);
+  const [deletingAssistant, setDeletingAssistant] = useState(false);
   const [actionError, setActionError] = useState<string | null>(null);
 
   const [voices, setVoices] = useState<Voice[] | null>(null);
@@ -1179,6 +1182,38 @@ export default function AssistantEditorPage() {
     }
   }
 
+  async function handleDelete() {
+    if (!activeWorkspace) {
+      return;
+    }
+
+    const confirmed = window.confirm(
+      "Permanently delete this assistant? This cannot be undone - its knowledge " +
+        "sources, versions, and glossary will be deleted too.",
+    );
+
+    if (!confirmed) {
+      return;
+    }
+
+    setActionError(null);
+    setDeletingAssistant(true);
+
+    try {
+      await deleteAssistant(
+        activeWorkspace.organization_id,
+        activeWorkspace.id,
+        assistantId,
+      );
+      router.push("/assistants");
+    } catch (err) {
+      setActionError(
+        err instanceof Error ? err.message : "Could not delete this assistant.",
+      );
+      setDeletingAssistant(false);
+    }
+  }
+
   async function handleSaveVersion(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
 
@@ -1500,7 +1535,7 @@ export default function AssistantEditorPage() {
           </Button>
         </form>
 
-        <div className="mt-6 border-t border-slate-800 pt-4">
+        <div className="mt-6 flex flex-wrap gap-3 border-t border-slate-800 pt-4">
           {archived ? (
             <p className="text-sm text-slate-500">This assistant is archived.</p>
           ) : (
@@ -1512,6 +1547,14 @@ export default function AssistantEditorPage() {
               {archiving ? "Archiving..." : "Archive assistant"}
             </Button>
           )}
+
+          <Button
+            variant="danger"
+            disabled={deletingAssistant}
+            onClick={handleDelete}
+          >
+            {deletingAssistant ? "Deleting..." : "Delete assistant"}
+          </Button>
         </div>
       </Card>
 
