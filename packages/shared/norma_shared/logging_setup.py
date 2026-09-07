@@ -164,6 +164,34 @@ def _pin_loguru_level(level: str) -> None:
     loguru_logger.add(sys.stderr, level=level)
 
 
+# Libraries that install their own default handler on the assumption that the
+# application has not configured logging - and that also let records propagate
+# to root. Once configure_logging puts a handler on root, both fire and every
+# line is emitted twice, in two different formats.
+#
+# SQLAlchemy is the one that bites here: `echo=settings.debug` means every
+# statement in development, doubled, and each copy scrubbed separately. Its own
+# documentation says to drop the default handler when the application
+# configures logging itself.
+_LIBRARY_DEFAULT_HANDLER_LOGGERS = ("sqlalchemy.engine.Engine",)
+
+
+def _drop_duplicate_library_handlers() -> None:
+    """
+    Remove library-installed handlers that would double up with root's.
+
+    Only safe to call once a root handler exists, which is why configure_logging
+    is the only caller - clearing these without one would silence the library
+    instead of de-duplicating it.
+    """
+
+    for name in _LIBRARY_DEFAULT_HANDLER_LOGGERS:
+        library_logger = logging.getLogger(name)
+
+        if library_logger.propagate and library_logger.handlers:
+            library_logger.handlers.clear()
+
+
 def install_redaction() -> None:
     """
     Wrap the formatter of every handler currently installed, on the root
@@ -210,6 +238,7 @@ def configure_logging(level: str = "INFO", *, fmt: str = _DEFAULT_FORMAT) -> Non
         resolved = "DEBUG" if resolved == "TRACE" else "INFO"
 
     logging.basicConfig(level=resolved, format=fmt)
+    _drop_duplicate_library_handlers()
 
     # LOG_LEVEL raises the stdlib level only. Pipecat's loguru logger stays at
     # DEBUG whatever it is set to, because the level below DEBUG is where

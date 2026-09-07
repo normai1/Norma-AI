@@ -190,3 +190,35 @@ def test_a_broken_redactor_suppresses_the_line_rather_than_leaking_it(
     assert "redaction failed" in written
 
     logger.handlers = []
+
+
+def test_sqlalchemy_lines_are_not_logged_twice() -> None:
+    """
+    SQLAlchemy installs its own handler on `sqlalchemy.engine.Engine` and also
+    lets records propagate. Once configure_logging puts a handler on root, both
+    fire: every statement appears twice, in two different formats, and with
+    `echo=settings.debug` that is every query in development.
+
+    Regression - this shipped in item 24d and was caught by reading the
+    container's logs, not by the suite.
+    """
+
+    from norma_shared.logging_setup import configure_logging
+
+    engine_logger = logging.getLogger("sqlalchemy.engine.Engine")
+    original_handlers = list(engine_logger.handlers)
+    root = logging.getLogger()
+    original_root = list(root.handlers)
+
+    try:
+        # Recreate what SQLAlchemy's echo does before the app configures logging.
+        engine_logger.addHandler(logging.StreamHandler(io.StringIO()))
+        engine_logger.propagate = True
+
+        configure_logging("INFO")
+
+        assert engine_logger.handlers == []
+        assert engine_logger.propagate, "records must still reach the root handler"
+    finally:
+        engine_logger.handlers = original_handlers
+        root.handlers = original_root
