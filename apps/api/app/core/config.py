@@ -140,13 +140,51 @@ class Settings(BaseSettings):
     # without a real key rather than failing mid-call.
     openai_api_key: str = ""
 
+    # Empty by default; the "huggingface" provider branch refuses to
+    # construct without a real token rather than failing mid-call. Read from
+    # HF_TOKEN (case-insensitive env matching), matching how HuggingFace's
+    # own tooling names this value.
+    hf_token: str = ""
+
     embedding_model: str = "text-embedding-3-small"
 
     # Must match the actual dimension the configured model/provider
-    # produces, and the chunks table's vector(1536) column width - never
-    # "fixed" by truncating or padding a mismatched vector (CLAUDE.md
-    # section 6.4).
+    # produces, and the chunks table's vector column width - never "fixed"
+    # by truncating or padding a mismatched vector (CLAUDE.md section 6.4).
     embedding_dimension: int = 1536
+
+    # ------------------------------------------------------------------
+    # Website crawling
+    # ------------------------------------------------------------------
+    # Sized to cover a whole small-business site rather than sample it: the
+    # original 20 pages at depth 2 reached little more than a homepage and
+    # its immediate links, so most of a customer's site never became
+    # knowledge at all. Still bounded, deliberately - an unbounded crawl of
+    # an arbitrary domain is a runaway job and an unbounded embedding bill,
+    # and CLAUDE.md section 37 wants expensive ingestion bounded and out of
+    # any latency-sensitive path. Raise crawl_max_pages for a genuinely
+    # large site; the crawl runs in the background, so a bigger number
+    # costs time and embeddings, not a blocked request.
+    crawl_max_pages: int = 200
+    crawl_max_depth: int = 5
+
+    # ------------------------------------------------------------------
+    # FAQ generation (apps/api's own background/batch text generation -
+    # e.g. drafting candidate FAQ entries from an ingested knowledge
+    # source - distinct from apps/voice's realtime per-turn LLM providers,
+    # which serve a completely different latency budget)
+    # ------------------------------------------------------------------
+
+    # "mock" for the same reason every other provider defaults to it - a
+    # fresh checkout and the test suite must never reach a paid provider
+    # without deliberately configuring one.
+    faq_generation_provider: str = "mock"
+
+    # Empty by default; the "groq" provider branch refuses to construct
+    # without a real key rather than failing mid-generation.
+    groq_api_key: str = ""
+
+    faq_generation_model: str = "openai/gpt-oss-120b"
 
     # ------------------------------------------------------------------
     # Storage

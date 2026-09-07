@@ -7,7 +7,7 @@ extension, all funneled through parse_document.
 import io
 
 import docx
-import pypdf
+from pypdf import PdfReader
 
 
 class DocumentParseError(Exception):
@@ -24,11 +24,17 @@ def _parse_txt_or_md(content: bytes) -> str:
 
 def _parse_pdf(content: bytes) -> str:
     try:
-        reader = pypdf.PdfReader(io.BytesIO(content))
+        reader = PdfReader(io.BytesIO(content))
 
+        # Checked before touching .pages, which raises on an undecrypted
+        # document - this way a password-protected file gets its own
+        # specific message rather than the generic unreadable one.
         if reader.is_encrypted:
             raise DocumentParseError("PDF is password-protected")
 
+        # extract_text() returns None for a page with no text content, which
+        # is a blank page rather than a failure - the empty-text check below
+        # is what decides whether the document as a whole yielded anything.
         pages_text = [page.extract_text() or "" for page in reader.pages]
     except DocumentParseError:
         raise

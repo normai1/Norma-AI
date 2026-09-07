@@ -62,11 +62,17 @@ def test_oversized_single_paragraph_falls_back_to_whitespace_split() -> None:
     assert " ".join(span.text for span in spans) == text
 
 
-def test_a_single_word_longer_than_max_chars_becomes_its_own_span() -> None:
+def test_an_unbroken_run_longer_than_max_chars_is_split_at_max_chars() -> None:
+    # RecursiveCharacterTextSplitter's last-resort separator is a raw
+    # character split, so unlike a bespoke word-preserving splitter, a run
+    # with no paragraph/line/word boundary is still bounded by max_chars
+    # rather than kept whole as an oversized span.
     text = "x" * 5000
 
     spans = chunk_text(text, max_chars=1500)
 
-    assert len(spans) == 1
-    assert spans[0].text == text
+    assert len(spans) > 1
+    for span in spans:
+        assert len(span.text) <= 1500
     _assert_offsets_match(text, spans)
+    assert "".join(span.text for span in spans) == text

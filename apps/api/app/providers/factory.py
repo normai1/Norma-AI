@@ -12,8 +12,12 @@ from norma_shared.speech import SpeechToTextProvider, TextToSpeechProvider
 
 from app.core.config import settings
 from app.providers.embedding import EmbeddingProvider
+from app.providers.groq_llm import GroqLLMProvider
+from app.providers.huggingface_embedding import HuggingFaceEmbeddingProvider
+from app.providers.llm import LLMProvider
 from app.providers.local_storage import LocalStorage
 from app.providers.mock_embedding import MockEmbeddingProvider
+from app.providers.mock_llm import MockLLMProvider
 from app.providers.mock_storage import MockStorage
 from app.providers.openai_embedding import OpenAIEmbeddingProvider
 from app.providers.s3_storage import S3Storage
@@ -21,7 +25,8 @@ from app.providers.storage import StorageProvider
 
 _VALID_PROVIDER_NAMES = "'mock', 'elevenlabs'"
 _VALID_STORAGE_PROVIDER_NAMES = "'mock', 'local', 's3'"
-_VALID_EMBEDDING_PROVIDER_NAMES = "'mock', 'openai'"
+_VALID_EMBEDDING_PROVIDER_NAMES = "'mock', 'openai', 'huggingface'"
+_VALID_FAQ_GENERATION_PROVIDER_NAMES = "'mock', 'groq'"
 
 
 class UnknownSpeechProviderError(ValueError):
@@ -65,6 +70,28 @@ class MissingOpenAiApiKeyError(ValueError):
     The "openai" embedding provider was selected but OPENAI_API_KEY is
     unset. Fails at construction, not on the first embed() call - the same
     reasoning MissingElevenLabsApiKeyError already established.
+    """
+
+
+class MissingHfTokenError(ValueError):
+    """
+    The "huggingface" embedding provider was selected but HF_TOKEN is unset.
+    Fails at construction, not on the first embed() call - the same
+    reasoning MissingElevenLabsApiKeyError already established.
+    """
+
+
+class UnknownFaqGenerationProviderError(ValueError):
+    """
+    A configured FAQ_GENERATION_PROVIDER name has no known implementation.
+    """
+
+
+class MissingGroqApiKeyError(ValueError):
+    """
+    The "groq" FAQ generation provider was selected but GROQ_API_KEY is
+    unset. Fails at construction, not on the first generate() call - the
+    same reasoning MissingElevenLabsApiKeyError already established.
     """
 
 
@@ -199,6 +226,19 @@ def get_embedding_provider(name: str | None = None) -> EmbeddingProvider:
             dimension=settings.embedding_dimension,
         )
 
+    if provider_name == "huggingface":
+        if not settings.hf_token:
+            raise MissingHfTokenError(
+                "HF_TOKEN is not set. The 'huggingface' embedding "
+                "provider requires it.",
+            )
+
+        return HuggingFaceEmbeddingProvider(
+            api_key=settings.hf_token,
+            model=settings.embedding_model,
+            dimension=settings.embedding_dimension,
+        )
+
     raise UnknownEmbeddingProviderError(
         f"Unknown EMBEDDING_PROVIDER {provider_name!r}. Valid options: "
         f"{_VALID_EMBEDDING_PROVIDER_NAMES}.",
@@ -213,3 +253,42 @@ def get_embedding_provider_dependency() -> EmbeddingProvider:
     """
 
     return get_embedding_provider()
+
+
+def get_faq_generation_llm_provider(name: str | None = None) -> LLMProvider:
+    """
+    Resolve a FAQ generation LLM provider by name, defaulting to
+    FAQ_GENERATION_PROVIDER.
+    """
+
+    provider_name = name if name is not None else settings.faq_generation_provider
+
+    if provider_name == "mock":
+        return MockLLMProvider()
+
+    if provider_name == "groq":
+        if not settings.groq_api_key:
+            raise MissingGroqApiKeyError(
+                "GROQ_API_KEY is not set. The 'groq' FAQ generation "
+                "provider requires it.",
+            )
+
+        return GroqLLMProvider(
+            api_key=settings.groq_api_key,
+            model=settings.faq_generation_model,
+        )
+
+    raise UnknownFaqGenerationProviderError(
+        f"Unknown FAQ_GENERATION_PROVIDER {provider_name!r}. Valid options: "
+        f"{_VALID_FAQ_GENERATION_PROVIDER_NAMES}.",
+    )
+
+
+def get_faq_generation_llm_provider_dependency() -> LLMProvider:
+    """
+    FastAPI dependency entry point for the configured FAQ generation LLM
+    provider. Takes no arguments for the same reason
+    get_tts_provider_dependency does not.
+    """
+
+    return get_faq_generation_llm_provider()

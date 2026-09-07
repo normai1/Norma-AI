@@ -31,3 +31,18 @@ async def get_db() -> AsyncGenerator[AsyncSession, None]:
 
     async with AsyncSessionLocal() as session:
         yield session
+
+
+def get_session_factory() -> async_sessionmaker[AsyncSession]:
+    """
+    The application's session factory, as a dependency.
+
+    Background work started by a request cannot use that request's session -
+    it is closed once the response is sent - so it opens its own. Injecting
+    the factory rather than importing AsyncSessionLocal directly is what
+    lets tests point that background work at the same per-test transaction
+    everything else runs in; otherwise it would open a real connection to
+    the configured database and see none of the test's data.
+    """
+
+    return AsyncSessionLocal

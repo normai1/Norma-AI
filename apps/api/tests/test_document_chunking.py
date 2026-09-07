@@ -4,6 +4,7 @@ from httpx import AsyncClient
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.config import settings
 from app.models.chunk import Chunk
 from app.providers.embedding import EmbeddingProviderUnavailable
 from app.providers.mock_embedding import MockEmbeddingProvider
@@ -547,7 +548,7 @@ async def test_uploading_a_valid_txt_embeds_every_chunk(
 
     assert len(chunks) == 1
     assert chunks[0].embedding is not None
-    assert len(chunks[0].embedding) == 1536
+    assert len(chunks[0].embedding) == settings.embedding_dimension
 
 
 async def test_embedding_failure_marks_the_file_source_failed_and_keeps_no_chunks(
@@ -616,7 +617,9 @@ async def test_creating_a_website_source_embeds_every_chunk(
     chunks = await _chunks_for_source(db, created.json()["id"])
     assert len(chunks) >= 1
     assert all(
-        chunk.embedding is not None and len(chunk.embedding) == 1536 for chunk in chunks
+        chunk.embedding is not None
+        and len(chunk.embedding) == settings.embedding_dimension
+        for chunk in chunks
     )
 
 
@@ -635,8 +638,17 @@ async def test_embedding_failure_marks_the_website_source_failed(
         client, organization_id, workspace_id, owner_headers, assistant_id
     )
 
-    assert created.json()["status"] == "failed"
-    assert created.json()["error_message"]
+    # The crawl and its embedding run in a background task, so the failure
+    # is recorded on the source rather than on the response that registered
+    # it.
+    source = await client.get(
+        f"/api/v1/organizations/{organization_id}/workspaces/{workspace_id}"
+        f"/knowledge-sources/{created.json()['id']}",
+        headers=owner_headers,
+    )
+
+    assert source.json()["status"] == "failed"
+    assert source.json()["error_message"]
 
 
 async def test_creating_a_faq_entry_embeds_its_chunk(
@@ -659,7 +671,7 @@ async def test_creating_a_faq_entry_embeds_its_chunk(
     chunks = await _chunks_for_source(db, source_id)
     assert len(chunks) == 1
     assert chunks[0].embedding is not None
-    assert len(chunks[0].embedding) == 1536
+    assert len(chunks[0].embedding) == settings.embedding_dimension
 
 
 async def test_creating_a_faq_entry_fails_with_503_when_embedding_fails(

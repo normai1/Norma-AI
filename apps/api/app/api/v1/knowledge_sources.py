@@ -1,16 +1,30 @@
+import logging
 import uuid
 from typing import Annotated
 
-from fastapi import APIRouter, File, Form, HTTPException, Response, UploadFile, status
+from fastapi import (
+    APIRouter,
+    BackgroundTasks,
+    Depends,
+    File,
+    Form,
+    HTTPException,
+    Response,
+    UploadFile,
+    status,
+)
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.api.deps import (
     DbSession,
     EmbeddingProviderDep,
+    FaqGenerationLlmProviderDep,
     PageFetcherDep,
     StorageProviderDep,
 )
 from app.api.org_deps import CanManageKnowledge
 from app.api.workspace_deps import CurrentWorkspace
+from app.core.database import get_session_factory
 from app.core.exceptions import (
     AssistantNotFound,
     FileTooLarge,
@@ -23,6 +37,7 @@ from app.models.crawled_page import CrawledPage
 from app.models.document import Document
 from app.models.knowledge_source import KnowledgeSource
 from app.repositories import chunk as chunk_repo
+from app.repositories import knowledge_source as knowledge_source_repo
 from app.schemas.chunk import ChunkResponse
 from app.schemas.knowledge_source import (
     CrawledPageResponse,
@@ -32,6 +47,8 @@ from app.schemas.knowledge_source import (
     WebsiteKnowledgeSourceCreate,
 )
 from app.services import knowledge_source as knowledge_source_service
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(tags=["knowledge-sources"])
 
@@ -105,6 +122,7 @@ async def upload_knowledge_source(
     db: DbSession,
     storage: StorageProviderDep,
     embedding_provider: EmbeddingProviderDep,
+    faq_llm_provider: FaqGenerationLlmProviderDep,
     file: Annotated[UploadFile, File()],
     assistant_id: Annotated[uuid.UUID, Form()],
 ) -> KnowledgeSourceResponse:
@@ -123,6 +141,7 @@ async def upload_knowledge_source(
             db,
             storage,
             embedding_provider,
+            faq_llm_provider,
             organization_id=membership.organization_id,
             workspace_id=workspace_id,
             assistant_id=assistant_id,
@@ -154,28 +173,35 @@ async def create_website_knowledge_source(
     payload: WebsiteKnowledgeSourceCreate,
     membership: CanManageKnowledge,
     db: DbSession,
+    background_tasks: BackgroundTasks,
+    session_factory: Annotated[
+        async_sessionmaker[AsyncSession], Depends(get_session_factory)
+    ],
     fetcher: PageFetcherDep,
     embedding_provider: EmbeddingProviderDep,
+    faq_llm_provider: FaqGenerationLlmProviderDep,
 ) -> KnowledgeSourceResponse:
     """
-    Crawl a domain as a new knowledge source. Owners and admins only. Runs
-    synchronously - a deliberate, bounded (20 pages, depth 2) MVP shape;
-    there is no background job queue yet.
+    Add a website as a knowledge source. Owners and admins only.
+
+    Returns as soon as the source is registered, with the crawl running
+    afterwards in the background and the source's own status reporting
+    progress - the same pending/processing/completed/failed lifecycle a
+    file upload already uses. Crawling a whole site takes minutes at the
+    configured page budget, far longer than a request should be held open,
+    and the caller does not need the pages to know the source was accepted.
     """
 
     try:
-        (
-            knowledge_source,
-            crawled_pages,
-        ) = await knowledge_source_service.create_website_knowledge_source(
-            db,
-            fetcher,
-            embedding_provider,
-            organization_id=membership.organization_id,
-            workspace_id=workspace_id,
-            assistant_id=payload.assistant_id,
-            owner_user_id=membership.user_id,
-            url=str(payload.url),
+        knowledge_source = (
+            await knowledge_source_service.register_website_knowledge_source(
+                db,
+                organization_id=membership.organization_id,
+                workspace_id=workspace_id,
+                assistant_id=payload.assistant_id,
+                owner_user_id=membership.user_id,
+                url=str(payload.url),
+            )
         )
     except WorkspaceNotFound as exc:
         raise _WORKSPACE_NOT_FOUND from exc
@@ -184,7 +210,57 @@ async def create_website_knowledge_source(
 
     await db.commit()
 
-    return _to_response(knowledge_source, None, crawled_pages)
+    background_tasks.add_task(
+        _crawl_website_source_in_background,
+        session_factory=session_factory,
+        knowledge_source_id=knowledge_source.id,
+        fetcher=fetcher,
+        embedding_provider=embedding_provider,
+        faq_llm_provider=faq_llm_provider,
+    )
+
+    return _to_response(knowledge_source, None, [])
+
+
+async def _crawl_website_source_in_background(
+    *,
+    session_factory: async_sessionmaker[AsyncSession],
+    knowledge_source_id: uuid.UUID,
+    fetcher: PageFetcherDep,
+    embedding_provider: EmbeddingProviderDep,
+    faq_llm_provider: FaqGenerationLlmProviderDep,
+) -> None:
+    """
+    Crawl a registered website source after its request has returned.
+
+    Opens its own session: the request's session is closed by the time this
+    runs. Any failure is recorded on the source itself (the crawl path marks
+    it failed with the error) rather than raised, since there is no caller
+    left to receive it - the operator sees it on the source in the UI.
+    """
+
+    async with session_factory() as session:
+        knowledge_source = await knowledge_source_repo.get_by_id(
+            session, knowledge_source_id
+        )
+
+        if knowledge_source is None:
+            return
+
+        try:
+            await knowledge_source_service.crawl_website_knowledge_source(
+                session,
+                fetcher,
+                embedding_provider,
+                faq_llm_provider,
+                knowledge_source=knowledge_source,
+            )
+            await session.commit()
+        except Exception:
+            await session.rollback()
+            logger.exception(
+                "website crawl failed for knowledge source %s", knowledge_source_id
+            )
 
 
 @router.post(

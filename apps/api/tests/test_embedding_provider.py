@@ -6,6 +6,7 @@ from app.providers.embedding import (
     EmbeddingProviderTimeout,
     EmbeddingProviderUnavailable,
 )
+from app.providers.huggingface_embedding import HuggingFaceEmbeddingProvider
 from app.providers.mock_embedding import MockEmbeddingProvider
 from app.providers.openai_embedding import OpenAIEmbeddingProvider
 
@@ -156,6 +157,102 @@ async def test_openai_embed_wrong_vector_length_raises_mismatch() -> None:
     provider = OpenAIEmbeddingProvider(
         api_key="test-key",
         model="text-embedding-3-small",
+        dimension=3,
+        client=_client_returning(handler),
+    )
+
+    with pytest.raises(EmbeddingDimensionMismatch):
+        await provider.embed(["hello"])
+
+
+async def test_huggingface_embed_parses_vectors_in_order() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.headers["Authorization"] == "Bearer test-token"
+        assert request.url.path == (
+            "/hf-inference/models/intfloat/multilingual-e5-base"
+            "/pipeline/feature-extraction"
+        )
+
+        return httpx.Response(200, json=[[0.1, 0.2, 0.3], [0.4, 0.5, 0.6]])
+
+    provider = HuggingFaceEmbeddingProvider(
+        api_key="test-token",
+        model="intfloat/multilingual-e5-base",
+        dimension=3,
+        client=_client_returning(handler),
+    )
+
+    vectors = await provider.embed(["first", "second"])
+
+    assert vectors == [[0.1, 0.2, 0.3], [0.4, 0.5, 0.6]]
+
+
+async def test_huggingface_embed_empty_list_makes_no_request() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        raise AssertionError("should not have made a request")
+
+    provider = HuggingFaceEmbeddingProvider(
+        api_key="test-token",
+        model="intfloat/multilingual-e5-base",
+        dimension=3,
+        client=_client_returning(handler),
+    )
+
+    assert await provider.embed([]) == []
+
+
+async def test_huggingface_embed_non_200_raises_unavailable() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(400, json={"error": "Model not supported by provider"})
+
+    provider = HuggingFaceEmbeddingProvider(
+        api_key="bad-token",
+        model="does-not-exist",
+        dimension=3,
+        client=_client_returning(handler),
+    )
+
+    with pytest.raises(EmbeddingProviderUnavailable):
+        await provider.embed(["hello"])
+
+
+async def test_huggingface_embed_timeout_raises_provider_timeout() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        raise httpx.TimeoutException("timed out")
+
+    provider = HuggingFaceEmbeddingProvider(
+        api_key="test-token",
+        model="intfloat/multilingual-e5-base",
+        dimension=3,
+        client=_client_returning(handler),
+    )
+
+    with pytest.raises(EmbeddingProviderTimeout):
+        await provider.embed(["hello"])
+
+
+async def test_huggingface_embed_wrong_vector_count_raises_mismatch() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json=[[0.1, 0.2, 0.3]])
+
+    provider = HuggingFaceEmbeddingProvider(
+        api_key="test-token",
+        model="intfloat/multilingual-e5-base",
+        dimension=3,
+        client=_client_returning(handler),
+    )
+
+    with pytest.raises(EmbeddingDimensionMismatch):
+        await provider.embed(["first", "second"])
+
+
+async def test_huggingface_embed_wrong_vector_length_raises_mismatch() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json=[[0.1, 0.2]])
+
+    provider = HuggingFaceEmbeddingProvider(
+        api_key="test-token",
+        model="intfloat/multilingual-e5-base",
         dimension=3,
         client=_client_returning(handler),
     )

@@ -35,6 +35,28 @@ async def get_document_for_source(
     )
 
 
+async def find_by_assistant_type_and_name(
+    db: AsyncSession,
+    *,
+    assistant_id: uuid.UUID,
+    type: str,
+    name: str,
+) -> KnowledgeSource | None:
+    """
+    An assistant's existing knowledge source with this exact type and name,
+    if any - used to find (rather than duplicate) the shared container for
+    AI-generated FAQ entries.
+    """
+
+    return await db.scalar(
+        select(KnowledgeSource).where(
+            KnowledgeSource.assistant_id == assistant_id,
+            KnowledgeSource.type == type,
+            KnowledgeSource.name == name,
+        ),
+    )
+
+
 async def list_for_workspace(
     db: AsyncSession,
     workspace_id: uuid.UUID,

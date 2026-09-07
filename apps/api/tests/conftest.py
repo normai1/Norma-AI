@@ -12,16 +12,18 @@ from sqlalchemy.ext.asyncio import (
 )
 
 from app.core.config import settings
-from app.core.database import get_db
+from app.core.database import get_db, get_session_factory
 from app.core.redis import get_redis
 from app.db.base import Base
 from app.main import app
 from app.providers.factory import (
     get_embedding_provider_dependency,
+    get_faq_generation_llm_provider_dependency,
     get_storage_provider_dependency,
 )
 from app.providers.httpx_web_crawler import get_page_fetcher_dependency
 from app.providers.mock_embedding import MockEmbeddingProvider
+from app.providers.mock_llm import MockLLMProvider
 from app.providers.mock_storage import MockStorage
 from app.providers.mock_web_crawler import MockPageFetcher
 
@@ -183,12 +185,27 @@ async def embedding_provider() -> MockEmbeddingProvider:
 
 
 @pytest_asyncio.fixture(loop_scope="session")
+async def faq_llm_provider() -> MockLLMProvider:
+    """
+    The deterministic FAQ-generation LLM double a test can inspect directly
+    (calls) or force to fail (failure), injected in place of a real Groq
+    call. Defaults to responding with an empty JSON array - "nothing to
+    generate" - so a test that doesn't care about generation isn't forced
+    to also configure a response.
+    """
+
+    return MockLLMProvider()
+
+
+@pytest_asyncio.fixture(loop_scope="session")
 async def client(
+    connection: AsyncConnection,
     db: AsyncSession,
     redis_client: Redis,
     storage: MockStorage,
     page_fetcher: MockPageFetcher,
     embedding_provider: MockEmbeddingProvider,
+    faq_llm_provider: MockLLMProvider,
 ) -> AsyncGenerator[AsyncClient, None]:
     """
     HTTP client whose requests run inside the per-test transaction.
@@ -199,6 +216,17 @@ async def client(
 
     async def override_get_db() -> AsyncGenerator[AsyncSession, None]:
         yield db
+
+    def override_get_session_factory() -> async_sessionmaker[AsyncSession]:
+        # Bound to the same per-test connection as `db`, so background work
+        # a route schedules runs inside this test's transaction and sees its
+        # data - and is rolled back with it.
+        return async_sessionmaker(
+            bind=connection,
+            class_=AsyncSession,
+            expire_on_commit=False,
+            join_transaction_mode="create_savepoint",
+        )
 
     async def override_get_redis() -> Redis:
         return redis_client
@@ -212,7 +240,11 @@ async def client(
     def override_get_embedding_provider() -> MockEmbeddingProvider:
         return embedding_provider
 
+    def override_get_faq_llm_provider() -> MockLLMProvider:
+        return faq_llm_provider
+
     app.dependency_overrides[get_db] = override_get_db
+    app.dependency_overrides[get_session_factory] = override_get_session_factory
     app.dependency_overrides[get_redis] = override_get_redis
     app.dependency_overrides[get_storage_provider_dependency] = (
         override_get_storage_provider
@@ -220,6 +252,9 @@ async def client(
     app.dependency_overrides[get_page_fetcher_dependency] = override_get_page_fetcher
     app.dependency_overrides[get_embedding_provider_dependency] = (
         override_get_embedding_provider
+    )
+    app.dependency_overrides[get_faq_generation_llm_provider_dependency] = (
+        override_get_faq_llm_provider
     )
 
     async with AsyncClient(

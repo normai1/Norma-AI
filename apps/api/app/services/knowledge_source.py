@@ -2,6 +2,7 @@ import uuid
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.config import settings
 from app.core.exceptions import (
     FileTooLarge,
     InvalidKnowledgeSourceType,
@@ -13,6 +14,7 @@ from app.models.crawled_page import CrawledPage
 from app.models.document import Document
 from app.models.knowledge_source import KnowledgeSource
 from app.providers.embedding import EmbeddingProvider, EmbeddingProviderError
+from app.providers.llm import LLMProvider
 from app.providers.storage import StorageObjectNotFound, StorageProvider
 from app.providers.web_crawler import PageFetcher, PageFetchError
 from app.repositories import chunk as chunk_repo
@@ -21,6 +23,7 @@ from app.repositories import knowledge_source as knowledge_source_repo
 from app.repositories import workspace as workspace_repo
 from app.repositories.chunk import ChunkWrite
 from app.services import assistant as assistant_service
+from app.services import faq_generation as faq_generation_service
 from app.services.chunker import ChunkSpan, chunk_text
 from app.services.document_parser import DocumentParseError, parse_document
 from app.services.web_crawler import crawl_website
@@ -139,6 +142,7 @@ async def _parse_and_chunk_document(
     embedding_provider: EmbeddingProvider,
     knowledge_source: KnowledgeSource,
     document: Document,
+    faq_llm_provider: LLMProvider | None = None,
 ) -> None:
     """
     (Re)parse a file-type source's stored document, (re)chunk it, and embed
@@ -147,6 +151,11 @@ async def _parse_and_chunk_document(
     parsing, chunking, AND embedding all succeed. Runs synchronously in the
     caller's request, the same deliberate, temporary tradeoff item 15's
     crawl already established; there is no background job queue yet.
+
+    faq_llm_provider is only ever passed by the creation path
+    (upload_knowledge_source) - a reprocess (process_knowledge_source)
+    leaves it None so FAQ generation runs exactly once per source, not on
+    every retry (see faq_generation.py's own module docstring).
     """
 
     extension = _extension_of(document.filename)
@@ -204,6 +213,15 @@ async def _parse_and_chunk_document(
     document.processing_error = None
     await db.flush()
 
+    if faq_llm_provider is not None:
+        await faq_generation_service.generate_faq_entries_for_source(
+            db,
+            faq_llm_provider,
+            embedding_provider,
+            knowledge_source=knowledge_source,
+            text=text,
+        )
+
 
 async def process_knowledge_source(
     db: AsyncSession,
@@ -247,6 +265,7 @@ async def upload_knowledge_source(
     db: AsyncSession,
     storage: StorageProvider,
     embedding_provider: EmbeddingProvider,
+    faq_llm_provider: LLMProvider,
     *,
     organization_id: uuid.UUID,
     workspace_id: uuid.UUID,
@@ -306,7 +325,7 @@ async def upload_knowledge_source(
         raise
 
     await _parse_and_chunk_document(
-        db, storage, embedding_provider, knowledge_source, document
+        db, storage, embedding_provider, knowledge_source, document, faq_llm_provider
     )
 
     return knowledge_source, document
@@ -445,6 +464,7 @@ async def _crawl_and_reconcile(
     embedding_provider: EmbeddingProvider,
     knowledge_source: KnowledgeSource,
     url: str,
+    faq_llm_provider: LLMProvider | None = None,
 ) -> list[CrawledPage]:
     """
     Run the crawl and write its results. A root-fetch failure marks the
@@ -455,10 +475,20 @@ async def _crawl_and_reconcile(
     failure after a successful crawl still marks the source 'failed' - the
     crawled pages stay on record (they are real), but the chunk set is left
     untouched rather than replaced with an incomplete one.
+
+    faq_llm_provider is only ever passed by the creation path
+    (create_website_knowledge_source) - a recrawl leaves it None so FAQ
+    generation runs exactly once per source, not on every recrawl (see
+    faq_generation.py's own module docstring).
     """
 
     try:
-        crawl_results = await crawl_website(fetcher, url)
+        crawl_results = await crawl_website(
+            fetcher,
+            url,
+            max_pages=settings.crawl_max_pages,
+            max_depth=settings.crawl_max_depth,
+        )
     except PageFetchError as exc:
         knowledge_source.status = FAILED_STATUS
         knowledge_source.error_message = str(exc)
@@ -516,6 +546,18 @@ async def _crawl_and_reconcile(
     knowledge_source.error_message = None
     await db.flush()
 
+    if faq_llm_provider is not None:
+        combined_text = "\n\n".join(
+            result.extracted_text for result in crawl_results
+        )
+        await faq_generation_service.generate_faq_entries_for_source(
+            db,
+            faq_llm_provider,
+            embedding_provider,
+            knowledge_source=knowledge_source,
+            text=combined_text,
+        )
+
     return await crawled_page_repo.list_for_source(db, knowledge_source.id)
 
 
@@ -523,6 +565,7 @@ async def create_website_knowledge_source(
     db: AsyncSession,
     fetcher: PageFetcher,
     embedding_provider: EmbeddingProvider,
+    faq_llm_provider: LLMProvider,
     *,
     organization_id: uuid.UUID,
     workspace_id: uuid.UUID,
@@ -558,10 +601,80 @@ async def create_website_knowledge_source(
     await db.flush()
 
     crawled_pages = await _crawl_and_reconcile(
-        db, fetcher, embedding_provider, knowledge_source, url
+        db, fetcher, embedding_provider, knowledge_source, url, faq_llm_provider
     )
 
     return knowledge_source, crawled_pages
+
+
+async def register_website_knowledge_source(
+    db: AsyncSession,
+    *,
+    organization_id: uuid.UUID,
+    workspace_id: uuid.UUID,
+    assistant_id: uuid.UUID,
+    owner_user_id: uuid.UUID,
+    url: str,
+) -> KnowledgeSource:
+    """
+    Create the website source row without crawling it, leaving it in the
+    pending status for crawl_website_knowledge_source to pick up.
+
+    Split out because crawling a whole site is far too slow to sit inside
+    the HTTP request that starts it: at the configured page budget a real
+    site takes minutes, and the caller would be left holding an open
+    connection waiting for it. Validation still happens here, so an unknown
+    workspace or assistant is rejected immediately rather than surfacing
+    later as a mysteriously failed source.
+    """
+
+    await _resolve_workspace_id(
+        db,
+        organization_id=organization_id,
+        workspace_id=workspace_id,
+    )
+    await assistant_service.get_assistant(
+        db,
+        organization_id=organization_id,
+        workspace_id=workspace_id,
+        assistant_id=assistant_id,
+    )
+
+    knowledge_source = KnowledgeSource(
+        organization_id=organization_id,
+        workspace_id=workspace_id,
+        assistant_id=assistant_id,
+        type=knowledge_source_repo.WEBSITE_TYPE,
+        owner_user_id=owner_user_id,
+        source_url=url,
+    )
+    db.add(knowledge_source)
+    await db.flush()
+
+    return knowledge_source
+
+
+async def crawl_website_knowledge_source(
+    db: AsyncSession,
+    fetcher: PageFetcher,
+    embedding_provider: EmbeddingProvider,
+    faq_llm_provider: LLMProvider | None,
+    *,
+    knowledge_source: KnowledgeSource,
+) -> list[CrawledPage]:
+    """
+    Run the crawl for an already-registered website source. Called from the
+    background task the creating request schedules, with its own session.
+    """
+
+    return await _crawl_and_reconcile(
+        db,
+        fetcher,
+        embedding_provider,
+        knowledge_source,
+        knowledge_source.source_url,
+        faq_llm_provider,
+    )
 
 
 async def recrawl_knowledge_source(

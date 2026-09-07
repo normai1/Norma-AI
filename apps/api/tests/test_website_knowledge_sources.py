@@ -1,5 +1,7 @@
+import pytest
 from httpx import AsyncClient
 
+from app.core.config import settings
 from app.providers.mock_web_crawler import MockPageFetcher
 from tests.conftest import _org_with_owner, _signed_in
 
@@ -123,6 +125,30 @@ async def _setup_workspace(
     return organization_id, workspace["id"], assistant_id, owner_headers
 
 
+async def _get_source(
+    client: AsyncClient,
+    organization_id: str,
+    workspace_id: str,
+    headers: dict[str, str],
+    source_id: str,
+) -> dict:
+    """
+    Read a source back after creation. The crawl runs in a background task,
+    so the creating response only reports that the source was registered -
+    its result shows up here.
+    """
+
+    response = await client.get(
+        f"/api/v1/organizations/{organization_id}/workspaces/{workspace_id}"
+        f"/knowledge-sources/{source_id}",
+        headers=headers,
+    )
+
+    assert response.status_code == 200
+
+    return response.json()
+
+
 async def test_create_website_source_succeeds_for_an_owner(
     client: AsyncClient, page_fetcher: MockPageFetcher
 ) -> None:
@@ -139,12 +165,19 @@ async def test_create_website_source_succeeds_for_an_owner(
     assert response.status_code == 201
     body = response.json()
     assert body["type"] == "website"
-    assert body["status"] == "completed"
-    assert body["error_message"] is None
+    # Registered immediately; the crawl itself runs in the background.
+    assert body["status"] == "pending"
     assert body["source_url"] == "http://example.com/"
-    urls = {page["url"] for page in body["crawled_pages"]}
+
+    crawled = await _get_source(
+        client, organization_id, workspace_id, owner_headers, body["id"]
+    )
+
+    assert crawled["status"] == "completed"
+    assert crawled["error_message"] is None
+    urls = {page["url"] for page in crawled["crawled_pages"]}
     assert urls == {"http://example.com/", "http://example.com/about"}
-    assert body["document"] is None
+    assert crawled["document"] is None
 
 
 async def test_create_website_source_with_an_unreachable_root_fails(
@@ -166,17 +199,30 @@ async def test_create_website_source_with_an_unreachable_root_fails(
 
     assert response.status_code == 201
     body = response.json()
-    assert body["status"] == "failed"
-    assert body["error_message"] is not None
-    assert body["crawled_pages"] == []
+
+    # The fetch failure happens in the background crawl, so it lands on the
+    # source rather than on the response that registered it.
+    crawled = await _get_source(
+        client, organization_id, workspace_id, owner_headers, body["id"]
+    )
+
+    assert crawled["status"] == "failed"
+    assert crawled["error_message"] is not None
+    assert crawled["crawled_pages"] == []
 
 
 async def test_create_website_source_enforces_the_page_count_cap(
-    client: AsyncClient, page_fetcher: MockPageFetcher
+    client: AsyncClient,
+    page_fetcher: MockPageFetcher,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     organization_id, workspace_id, assistant_id, owner_headers = (
         await _setup_workspace(client, "ws-create-cap")
     )
+    # A cap far below the site's size, so the bound is what decides the
+    # result rather than the number of pages that happen to exist.
+    monkeypatch.setattr(settings, "crawl_max_pages", 5)
+
     links = "".join(f'<a href="/page{i}">p{i}</a>' for i in range(30))
     page_fetcher.pages["http://example.com/"] = _page(links)
     for i in range(30):
@@ -187,7 +233,13 @@ async def test_create_website_source_enforces_the_page_count_cap(
     )
 
     assert response.status_code == 201
-    assert len(response.json()["crawled_pages"]) == 20
+
+    crawled = await _get_source(
+        client, organization_id, workspace_id, owner_headers, response.json()["id"]
+    )
+
+    # Bounded by the configured budget, not by how many pages the site has.
+    assert len(crawled["crawled_pages"]) == settings.crawl_max_pages
 
 
 async def test_create_website_source_requires_authentication(
@@ -234,11 +286,14 @@ async def test_recrawl_updates_only_the_changed_page(
     page_fetcher.pages["http://example.com/"] = _page('<a href="/about">About</a>')
     page_fetcher.pages["http://example.com/about"] = _page("About us, version one.")
 
-    created = (
+    registered = (
         await _create_website(
             client, organization_id, workspace_id, owner_headers, assistant_id
         )
     ).json()
+    created = await _get_source(
+        client, organization_id, workspace_id, owner_headers, registered["id"]
+    )
     original_root_hash = next(
         p["content_hash"]
         for p in created["crawled_pages"]

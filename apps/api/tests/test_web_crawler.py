@@ -169,3 +169,193 @@ async def test_crawl_content_hash_is_deterministic_for_the_same_text() -> None:
     second = await crawl_website(fetcher, "http://example.com/")
 
     assert first[0].content_hash == second[0].content_hash
+
+
+def _sitemap(*urls: str) -> str:
+    entries = "".join(f"<url><loc>{url}</loc></url>" for url in urls)
+
+    return (
+        '<?xml version="1.0" encoding="UTF-8"?>'
+        '<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">'
+        f"{entries}</urlset>"
+    )
+
+
+async def test_crawl_reaches_a_page_only_the_sitemap_knows_about() -> None:
+    """
+    The whole point of reading a sitemap: link-following can only ever
+    reach pages something links to, so a page nothing links to is invisible
+    to it at any depth.
+    """
+
+    fetcher = MockPageFetcher(
+        {
+            "http://example.com/": _page("Homepage with no links at all."),
+            "http://example.com/sitemap.xml": _sitemap(
+                "http://example.com/", "http://example.com/orphan"
+            ),
+            "http://example.com/orphan": _page("Nothing links here."),
+        }
+    )
+
+    results = await crawl_website(fetcher, "http://example.com/")
+
+    assert {r.url for r in results} == {
+        "http://example.com/",
+        "http://example.com/orphan",
+    }
+
+
+async def test_crawl_follows_a_sitemap_index_to_its_child_sitemaps() -> None:
+    fetcher = MockPageFetcher(
+        {
+            "http://example.com/": _page("Homepage."),
+            "http://example.com/sitemap.xml": (
+                '<?xml version="1.0" encoding="UTF-8"?>'
+                '<sitemapindex xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">'
+                "<sitemap><loc>http://example.com/sitemap-1.xml</loc></sitemap>"
+                "</sitemapindex>"
+            ),
+            "http://example.com/sitemap-1.xml": _sitemap("http://example.com/deep"),
+            "http://example.com/deep": _page("Listed in a child sitemap."),
+        }
+    )
+
+    results = await crawl_website(fetcher, "http://example.com/")
+
+    assert "http://example.com/deep" in {r.url for r in results}
+
+
+async def test_crawl_ignores_sitemap_entries_on_another_host() -> None:
+    """
+    A sitemap is no more trusted to send the crawl off-domain than a link
+    is - the source belongs to one site.
+    """
+
+    fetcher = MockPageFetcher(
+        {
+            "http://example.com/": _page("Homepage."),
+            "http://example.com/sitemap.xml": _sitemap("http://elsewhere.com/page"),
+            "http://elsewhere.com/page": _page("Someone else's page."),
+        }
+    )
+
+    results = await crawl_website(fetcher, "http://example.com/")
+
+    assert {r.url for r in results} == {"http://example.com/"}
+
+
+async def test_crawl_survives_a_missing_or_junk_sitemap() -> None:
+    """
+    Most sites have no sitemap, and plenty serve an HTML 404 page at that
+    path. Neither may cost the crawl anything.
+    """
+
+    without = MockPageFetcher(
+        {"http://example.com/": _page('<a href="/about">About</a>')}
+    )
+    without.pages["http://example.com/about"] = _page("About us.")
+
+    junk = MockPageFetcher(dict(without.pages))
+    junk.pages["http://example.com/sitemap.xml"] = "<html><body>Not found</body></html>"
+
+    assert {r.url for r in await crawl_website(without, "http://example.com/")} == {
+        "http://example.com/",
+        "http://example.com/about",
+    }
+    assert {r.url for r in await crawl_website(junk, "http://example.com/")} == {
+        "http://example.com/",
+        "http://example.com/about",
+    }
+
+
+async def test_sitemap_pages_still_respect_the_page_cap() -> None:
+    pages = {"http://example.com/": _page("Homepage.")}
+    listed = [f"http://example.com/p{i}" for i in range(30)]
+
+    for url in listed:
+        pages[url] = _page("A page.")
+
+    pages["http://example.com/sitemap.xml"] = _sitemap(*listed)
+
+    results = await crawl_website(
+        MockPageFetcher(pages), "http://example.com/", max_pages=5
+    )
+
+    assert len(results) == 5
+
+
+def _robots(*lines: str) -> str:
+    return "\n".join(lines) + "\n"
+
+
+async def test_crawl_uses_a_sitemap_declared_only_in_robots_txt() -> None:
+    """
+    A site is free to publish its sitemap anywhere and declare it in
+    robots.txt - the conventional path is only a convention, and a site
+    doing this would otherwise be crawled by links alone.
+    """
+
+    fetcher = MockPageFetcher(
+        {
+            "http://example.com/": _page("Homepage with no links."),
+            "http://example.com/robots.txt": _robots(
+                "User-agent: *",
+                "Allow: /",
+                "Sitemap: http://example.com/custom/sitemap-a.xml",
+            ),
+            "http://example.com/custom/sitemap-a.xml": _sitemap(
+                "http://example.com/hidden"
+            ),
+            "http://example.com/hidden": _page("Only robots.txt points here."),
+        }
+    )
+
+    results = await crawl_website(fetcher, "http://example.com/")
+
+    assert "http://example.com/hidden" in {r.url for r in results}
+
+
+async def test_crawl_reads_every_sitemap_robots_txt_declares() -> None:
+    """
+    The directive may appear any number of times, and is matched
+    case-insensitively - it is conventionally capitalised but not required
+    to be.
+    """
+
+    fetcher = MockPageFetcher(
+        {
+            "http://example.com/": _page("Homepage."),
+            "http://example.com/robots.txt": _robots(
+                "Sitemap: http://example.com/one.xml",
+                "sitemap: http://example.com/two.xml",
+            ),
+            "http://example.com/one.xml": _sitemap("http://example.com/first"),
+            "http://example.com/two.xml": _sitemap("http://example.com/second"),
+            "http://example.com/first": _page("First."),
+            "http://example.com/second": _page("Second."),
+        }
+    )
+
+    results = await crawl_website(fetcher, "http://example.com/")
+
+    assert {"http://example.com/first", "http://example.com/second"} <= {
+        r.url for r in results
+    }
+
+
+async def test_crawl_ignores_a_robots_sitemap_on_another_host() -> None:
+    fetcher = MockPageFetcher(
+        {
+            "http://example.com/": _page("Homepage."),
+            "http://example.com/robots.txt": _robots(
+                "Sitemap: http://elsewhere.com/sitemap.xml",
+            ),
+            "http://elsewhere.com/sitemap.xml": _sitemap("http://elsewhere.com/page"),
+            "http://elsewhere.com/page": _page("Someone else's page."),
+        }
+    )
+
+    results = await crawl_website(fetcher, "http://example.com/")
+
+    assert {r.url for r in results} == {"http://example.com/"}

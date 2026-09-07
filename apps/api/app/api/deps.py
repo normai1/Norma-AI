@@ -15,10 +15,12 @@ from app.models.user import User
 from app.providers.embedding import EmbeddingProvider
 from app.providers.factory import (
     get_embedding_provider_dependency,
+    get_faq_generation_llm_provider_dependency,
     get_storage_provider_dependency,
     get_tts_provider_dependency,
 )
 from app.providers.httpx_web_crawler import get_page_fetcher_dependency
+from app.providers.llm import LLMProvider
 from app.providers.storage import StorageProvider
 from app.providers.web_crawler import PageFetcher
 from app.services import auth as auth_service
@@ -44,6 +46,11 @@ PageFetcherDep = Annotated[
 EmbeddingProviderDep = Annotated[
     EmbeddingProvider,
     Depends(get_embedding_provider_dependency),
+]
+
+FaqGenerationLlmProviderDep = Annotated[
+    LLMProvider,
+    Depends(get_faq_generation_llm_provider_dependency),
 ]
 
 _CREDENTIALS_ERROR = HTTPException(

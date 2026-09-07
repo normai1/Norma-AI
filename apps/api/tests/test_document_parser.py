@@ -9,14 +9,68 @@ from app.services.document_parser import DocumentParseError, parse_document
 
 def _build_blank_pdf_bytes() -> bytes:
     """
-    A real, validly-structured PDF with a page but no text content - pypdf
-    can't draw text without a rendering library, so the "no extractable
-    text" failure path is exercised with a genuinely blank page rather than
-    a fixture claiming to hold text it doesn't.
+    A real, validly-structured PDF with a page but no text content, so the
+    "no extractable text" failure path is exercised with a genuinely blank
+    page rather than a fixture claiming to hold text it doesn't.
     """
 
     writer = PdfWriter()
     writer.add_blank_page(width=200, height=200)
+
+    buffer = io.BytesIO()
+    writer.write(buffer)
+
+    return buffer.getvalue()
+
+
+def _build_text_pdf_bytes(text: str) -> bytes:
+    """
+    A minimal PDF whose single page carries one real text-drawing content
+    stream, assembled here by hand: pypdf reads and rewrites PDFs but cannot
+    draw text into one, and a fixture is not worth taking on a whole
+    PDF-authoring dependency for. Offsets are computed rather than
+    hard-coded so the cross-reference table stays correct whatever the text
+    length is.
+    """
+
+    escaped = text.replace("\\", r"\\").replace("(", r"\(").replace(")", r"\)")
+    stream = f"BT /F1 12 Tf 20 100 Td ({escaped}) Tj ET".encode()
+
+    objects = [
+        b"<< /Type /Catalog /Pages 2 0 R >>",
+        b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+        b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] "
+        b"/Resources << /Font << /F1 5 0 R >> >> /Contents 4 0 R >>",
+        b"<< /Length %d >>\nstream\n%s\nendstream" % (len(stream), stream),
+        b"<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>",
+    ]
+
+    header = b"%PDF-1.4\n"
+    body = b""
+    offsets: list[int] = []
+
+    for number, obj in enumerate(objects, start=1):
+        offsets.append(len(header) + len(body))
+        body += b"%d 0 obj\n" % number + obj + b"\nendobj\n"
+
+    xref_offset = len(header) + len(body)
+    xref = b"xref\n0 %d\n0000000000 65535 f \n" % (len(objects) + 1)
+
+    for offset in offsets:
+        xref += b"%010d 00000 n \n" % offset
+
+    trailer = b"trailer\n<< /Size %d /Root 1 0 R >>\nstartxref\n%d\n%%%%EOF\n" % (
+        len(objects) + 1,
+        xref_offset,
+    )
+
+    return header + body + xref + trailer
+
+
+def _build_encrypted_pdf_bytes() -> bytes:
+    writer = PdfWriter()
+    writer.add_blank_page(width=200, height=200)
+    writer.encrypt(user_password="user123", owner_password="owner")
 
     buffer = io.BytesIO()
     writer.write(buffer)
@@ -33,32 +87,6 @@ def _build_docx_bytes(paragraphs: list[str]) -> bytes:
     document.save(buffer)
 
     return buffer.getvalue()
-
-
-# A minimal, hand-built single-page PDF with a real embedded text stream
-# ("Hello knowledge base") - built once so the happy-path test does not
-# depend on a rendering library to produce extractable text.
-_MINIMAL_TEXT_PDF = (
-    b"%PDF-1.4\n"
-    b"1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj\n"
-    b"2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj\n"
-    b"3 0 obj << /Type /Page /Parent 2 0 R /Resources "
-    b"<< /Font << /F1 4 0 R >> >> /MediaBox [0 0 300 144] "
-    b"/Contents 5 0 R >> endobj\n"
-    b"4 0 obj << /Type /Font /Subtype /Type1 /BaseFont /Helvetica >> "
-    b"endobj\n"
-    b"5 0 obj << /Length 58 >>\n"
-    b"stream\n"
-    b"BT /F1 18 Tf 10 100 Td (Hello knowledge base) Tj ET\n"
-    b"endstream\n"
-    b"endobj\n"
-    b"xref\n"
-    b"0 6\n"
-    b"trailer << /Root 1 0 R /Size 6 >>\n"
-    b"startxref\n"
-    b"0\n"
-    b"%%EOF"
-)
 
 
 def test_parses_txt_content() -> None:
@@ -83,7 +111,7 @@ def test_unsupported_extension_raises() -> None:
 
 
 def test_parses_pdf_with_real_text_stream() -> None:
-    text = parse_document(_MINIMAL_TEXT_PDF, ".pdf")
+    text = parse_document(_build_text_pdf_bytes("Hello knowledge base"), ".pdf")
 
     assert "Hello knowledge base" in text
 
@@ -98,6 +126,13 @@ def test_pdf_with_no_extractable_text_raises() -> None:
 def test_corrupted_pdf_raises() -> None:
     with pytest.raises(DocumentParseError):
         parse_document(b"not a real pdf at all", ".pdf")
+
+
+def test_password_protected_pdf_raises() -> None:
+    encrypted_pdf = _build_encrypted_pdf_bytes()
+
+    with pytest.raises(DocumentParseError):
+        parse_document(encrypted_pdf, ".pdf")
 
 
 def test_parses_docx_paragraphs() -> None:

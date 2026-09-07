@@ -6,6 +6,7 @@ never depends on a paid or live external API.
 import hashlib
 import random
 
+from app.core.config import settings
 from app.providers.embedding import EmbeddingProviderError
 
 
@@ -21,7 +22,7 @@ class MockEmbeddingProvider:
     def __init__(
         self,
         *,
-        dimension: int = 1536,
+        dimension: int = settings.embedding_dimension,
         failure: EmbeddingProviderError | None = None,
     ) -> None:
         self._dimension = dimension

@@ -7,10 +7,11 @@ from sqlalchemy import text as sql_text
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
+from app.core.config import settings
 from app.db.base_class import Base
 from app.models.mixins import TimestampMixin, UUIDPrimaryKeyMixin
 
-EMBEDDING_DIMENSION = 1536
+EMBEDDING_DIMENSION = settings.embedding_dimension
 
 
 class Chunk(UUIDPrimaryKeyMixin, TimestampMixin, Base):
