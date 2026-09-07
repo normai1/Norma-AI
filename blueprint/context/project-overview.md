@@ -120,32 +120,32 @@ this one.
     - 20a framework selection + media transport (LiveKit Agents vs Pipecat, decided here), 20b streaming STT w/ glossary biasing, 20c turn detection (VAD + semantic, operator-configurable sensitivity), 20d LLM turn loop, 20e streaming TTS + barge-in, 20f latency instrumentation (p95 budget enforced in CI), 20g session resilience (provider timeouts/retries/failover).
 21. **In-browser test call** - talk to an assistant with no phone number required, over WebRTC or WebSocket audio.
 22. **Voice pipeline test harness** - fixture-audio conversation replay against the full pipeline with mock providers, plus barge-in and turn-detection behavioral tests.
-23. **Assistant editor redesign: General/Knowledge/Custom Prompt/Technical tabs** - reorganizes the assistant editor into four tabs; Knowledge adds full knowledge-source management and closes the assistant-scoping gap retrieval (item 19) has deferred; Custom Prompt originally added full prompt-template management (picker, then relocated CRUD - list, create, edit, version history, publish/rollback, diff - replacing the standalone /prompt-templates page), since simplified by 12d to a single free-text prompt field, nothing else; Technical relocates speech rate/sensitivity/creativity and Glossary (renamed Technical Terms), and adds configuration-only call-duration/silence-timeout limits, a recording toggle, auto-delete-on-declined-consent, and ambient-sound presets with volume - pending enforcement until telephony (items 24-28) exists.
-24. **Telephony provider abstraction** - `TelephonyProvider` interface, verified webhook signature handling, a mock provider simulating the full call lifecycle.
-25. **Phone number provisioning** - search/claim numbers by country and area, surface regulatory document requirements, assign numbers to assistants, release numbers.
-26. **Inbound call handling** - answer an inbound call, route it to the correct assistant version, hold a complete conversation.
-27. **Call records and transcripts** - Call, CallLeg, and TranscriptTurn persistence (direction, duration, billable seconds, outcome, interruption marking).
-28. **Call recording** - optional, S3, configurable retention, automatic deletion, signed short-lived playback URLs.
-29. **Call detail UI** - transcript synchronized to audio, tool-call log, knowledge sources used per answer, latency detail behind a disclosure.
-30. **Live call forwarding** - transfer on request, on failure, or outside business hours, prioritized and international targets.
-31. **DTMF and IVR navigation** - keypress tones so the assistant can traverse external phone menus.
-32. **Concurrency and call admission control** - per-plan concurrent-call limits enforced at admission, defined overflow behavior rather than indefinite queueing.
-33. **Bring-your-own SIP trunk** - connect an existing PBX/carrier, credential storage, allowed-IP configuration.
-34. **Tool permission framework** - declarative per-assistant skill enablement enforced independently of model output, with ToolInvocation logging.
-35. **Variable extraction** - operator-defined field schema, structured extraction from the conversation, confidence reporting.
-36. **Post-call processing** - generated summary and disposition from the post-call model, assembled from the transcript and extracted fields.
-37. **Post-call delivery** - email/SMS delivery of transcript/summary/fields, behind swappable messaging providers.
-38. **Contacts** - workspace-scoped, automatic creation/matching from calls by phone number, per-contact call history, custom fields, import/export, do-not-call flags.
-39. **Calendar connections** - Google Calendar and Microsoft 365 OAuth, calendar selection, availability rules.
-40. **In-call scheduler** - live availability check, booking/rescheduling/cancellation during the call, confirmation by SMS/email.
-41. **Webhooks** - outbound call-event webhooks with signing and retry, plus an inbound webhook to trigger calls or update assistant data.
-42. **Custom API actions** - operator-configured authenticated HTTP requests during/after a call, with request/response schemas and timeout handling.
-43. **Integration framework** - credential storage, per-integration scopes, connection status, the first native CRM integration.
-44. **Public API and API keys** - versioned REST API surface with hashed, scoped, revocable organization API keys.
-45. **Outbound calls** - place a single outbound call from an assistant, caller-ID configuration, per-destination gating.
-46. **Outbound campaigns** - contact lists, timezone-aware calling windows, retry policy, per-contact outcome tracking, suppression lists, per-organization dialling concurrency.
-47. **Outbound abuse controls** - spend caps, destination allow-lists, consent gating, rate limits on call-triggering endpoints.
-48. **AI guardrails** - prompt-injection resistance for retrieved/caller-supplied text, topic and action allow-lists, refusal to state ungrounded prices/hours/policy, PII rules, output validation before spoken commitments.
+23. **Assistant editor redesign: General/Knowledge/Custom Prompt/Technical tabs** - reorganizes the assistant editor into four tabs; Knowledge adds full knowledge-source management and closes the assistant-scoping gap retrieval (item 19) has deferred; Custom Prompt originally added full prompt-template management (picker, then relocated CRUD - list, create, edit, version history, publish/rollback, diff - replacing the standalone /prompt-templates page), since simplified by 12d to a single free-text prompt field, nothing else; Technical relocates speech rate/sensitivity/creativity and Glossary (renamed Technical Terms), and adds configuration-only call-duration/silence-timeout limits, a recording toggle, auto-delete-on-declined-consent, and ambient-sound presets with volume - pending enforcement until telephony (items 25-29) exists.
+24. **AI guardrails** - prompt-injection resistance for retrieved/caller-supplied text, topic and action allow-lists, refusal to state ungrounded prices/hours/policy, PII rules, output validation before spoken commitments.
+25. **Telephony provider abstraction** - `TelephonyProvider` interface, verified webhook signature handling, a mock provider simulating the full call lifecycle.
+26. **Phone number provisioning** - search/claim numbers by country and area, surface regulatory document requirements, assign numbers to assistants, release numbers.
+27. **Inbound call handling** - answer an inbound call, route it to the correct assistant version, hold a complete conversation.
+28. **Call records and transcripts** - Call, CallLeg, and TranscriptTurn persistence (direction, duration, billable seconds, outcome, interruption marking).
+29. **Call recording** - optional, S3, configurable retention, automatic deletion, signed short-lived playback URLs.
+30. **Call detail UI** - transcript synchronized to audio, tool-call log, knowledge sources used per answer, latency detail behind a disclosure.
+31. **Live call forwarding** - transfer on request, on failure, or outside business hours, prioritized and international targets.
+32. **DTMF and IVR navigation** - keypress tones so the assistant can traverse external phone menus.
+33. **Concurrency and call admission control** - per-plan concurrent-call limits enforced at admission, defined overflow behavior rather than indefinite queueing.
+34. **Bring-your-own SIP trunk** - connect an existing PBX/carrier, credential storage, allowed-IP configuration.
+35. **Tool permission framework** - declarative per-assistant skill enablement enforced independently of model output, with ToolInvocation logging.
+36. **Variable extraction** - operator-defined field schema, structured extraction from the conversation, confidence reporting.
+37. **Post-call processing** - generated summary and disposition from the post-call model, assembled from the transcript and extracted fields.
+38. **Post-call delivery** - email/SMS delivery of transcript/summary/fields, behind swappable messaging providers.
+39. **Contacts** - workspace-scoped, automatic creation/matching from calls by phone number, per-contact call history, custom fields, import/export, do-not-call flags.
+40. **Calendar connections** - Google Calendar and Microsoft 365 OAuth, calendar selection, availability rules.
+41. **In-call scheduler** - live availability check, booking/rescheduling/cancellation during the call, confirmation by SMS/email.
+42. **Webhooks** - outbound call-event webhooks with signing and retry, plus an inbound webhook to trigger calls or update assistant data.
+43. **Custom API actions** - operator-configured authenticated HTTP requests during/after a call, with request/response schemas and timeout handling.
+44. **Integration framework** - credential storage, per-integration scopes, connection status, the first native CRM integration.
+45. **Public API and API keys** - versioned REST API surface with hashed, scoped, revocable organization API keys.
+46. **Outbound calls** - place a single outbound call from an assistant, caller-ID configuration, per-destination gating.
+47. **Outbound campaigns** - contact lists, timezone-aware calling windows, retry policy, per-contact outcome tracking, suppression lists, per-organization dialling concurrency.
+48. **Outbound abuse controls** - spend caps, destination allow-lists, consent gating, rate limits on call-triggering endpoints.
 49. **Call analytics** - handled/missed calls, minutes against allowance, resolution/transfer rates, average handle time, appointment conversion, top intents, latency percentiles.
 50. **Voice and retrieval observability** - structured logging with call/turn correlation IDs, per-provider latency/error telemetry, token/cost capture per call.
 51. **Activity timeline** - user-facing business history (call handled, appointment booked, contact created, assistant published).
@@ -298,18 +298,18 @@ else"). `status` stays a separate lifecycle marker from the configuration itself
   immediately, even before any configuration
 - `ambient_sound` (text, nullable), `ambient_sound_volume` (numeric, nullable)
 - `max_call_duration_seconds`, `max_silence_timeout_seconds` (int, nullable) - configuration-only
-  until real call handling (items 24-28) enforces them
+  until real call handling (items 25-29) enforces them
 - `record_calls`, `auto_delete_on_declined_consent` (bool, NOT NULL, default false)
 - `business_hours_behavior` (JSONB)
 - `fallback_behavior` (JSONB) - what to do when the assistant cannot resolve the request
 - `enabled_skills` (JSONB) - the tool-permission set feature 34 enforces
 
-> **No more immutable snapshot.** Once real call handling exists (items 24-28), `Call` must record
+> **No more immutable snapshot.** Once real call handling exists (items 25-29), `Call` must record
 > which assistant answered it, and the configuration values actually in effect at that moment
 > (e.g. by copying the fields it used onto the call record) - there is no longer an
 > `AssistantVersion` row to point at.
 
-### Telephony (items 24-25, 33)
+### Telephony (items 25-26, 34)
 
 #### PhoneNumber
 
@@ -332,7 +332,7 @@ else"). `status` stays a separate lifecycle marker from the configuration itself
 - `name` (text), `number` (text)
 - `hours` (JSONB), `priority` (int)
 
-### Calls (items 20, 27-28, 34-37)
+### Calls (items 20, 28-29, 35-38)
 
 #### Call
 
@@ -454,7 +454,7 @@ else"). `status` stays a separate lifecycle marker from the configuration itself
 - `question_text` (text), `occurrence_count` (int)
 - `status` (text), `proposed_answer` (text, nullable), `approving_user_id` (UUID, nullable)
 
-### Contacts & appointments (items 38-40)
+### Contacts & appointments (items 39-41)
 
 #### Contact
 
@@ -480,7 +480,7 @@ else"). `status` stays a separate lifecycle marker from the configuration itself
 - `credentials_ref` (text), `calendar_id` (text)
 - `availability_rules` (JSONB)
 
-### Campaigns (items 45-47)
+### Campaigns (items 46-48)
 
 #### Campaign
 
@@ -502,7 +502,7 @@ else"). `status` stays a separate lifecycle marker from the configuration itself
 - `phone_number` (text), `reason` (text)
 - `added_by_user_id` (UUID, FK -> User)
 
-### Integrations & API (items 41-44)
+### Integrations & API (items 42-45)
 
 #### Integration
 
@@ -773,12 +773,12 @@ Navigation items appear only for features that are actually built.
 | `/assistants`, `/assistants/[id]` | Assistant list and the split-view editor (features 11-13) |
 | `/assistants/[id]/test-call` | In-browser test call (item 21) |
 | `/knowledge` | Sources, upload, crawl status, unanswered-questions inbox (items 14-19) |
-| `/contacts`, `/contacts/[id]` | Contact list and detail with call history (item 38) |
-| `/appointments` | Appointment list, calendar connections (items 39-40) |
-| `/campaigns`, `/campaigns/[id]` | Outbound campaign management (items 45-47) |
-| `/calls`, `/calls/[id]` | Call feed and the transcript/audio/tool-call detail view (items 27-29) |
-| `/numbers` | Provisioning flow, assignment to assistants (item 25) |
-| `/integrations` | Connected integrations, API keys (items 43-44) |
+| `/contacts`, `/contacts/[id]` | Contact list and detail with call history (item 39) |
+| `/appointments` | Appointment list, calendar connections (items 40-41) |
+| `/campaigns`, `/campaigns/[id]` | Outbound campaign management (items 46-48) |
+| `/calls`, `/calls/[id]` | Call feed and the transcript/audio/tool-call detail view (items 28-30) |
+| `/numbers` | Provisioning flow, assignment to assistants (item 26) |
+| `/integrations` | Connected integrations, API keys (items 44-45) |
 | `/analytics` | Overview cards, trend charts, top intents (item 49) |
 
 ### Onboarding

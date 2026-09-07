@@ -287,12 +287,12 @@ Prefer existing scoping mechanisms over ad-hoc filters in every route.
 
 Use pgvector. Do not introduce Pinecone, Chroma, Weaviate, or another external vector store without an explicit architectural decision.
 
-- Embedding model: OpenAI `text-embedding-3-small`
-- Dimension: `1536`, column type `vector(1536)`
-- Keep the dimension configurable, and ensure the configured value matches actual provider output
-- Test dimension compatibility before writing vectors
-- Never silently truncate or pad embeddings
-- Retrieval filters by organization, workspace, and assistant — always
+- `EmbeddingProvider` implementations: `mock` (tests/fresh checkout default), `openai` (`text-embedding-3-small`, dimension 1536), `huggingface` (calls the hosted HuggingFace Inference Providers router — `router.huggingface.co/hf-inference/models/{model}/pipeline/feature-extraction` — rather than self-hosting a model in-process; needs `HF_TOKEN`).
+- The `chunks.embedding` column's dimension (`apps/api/app/models/chunk.py`) reads from `settings.embedding_dimension` — never hardcode a dimension there. Changing `EMBEDDING_MODEL`/`EMBEDDING_DIMENSION` requires a migration that alters the column and nulls out now-incompatible existing embeddings; never truncate or pad them into the new width.
+- Keep the dimension configurable, and ensure the configured value matches actual provider output.
+- Test dimension compatibility before writing vectors.
+- Retrieval filters by organization, workspace, and assistant — always.
+- Before adopting a specific HuggingFace model for the `huggingface` provider, verify it actually has a live inference provider via `GET https://huggingface.co/api/models/{model}?expand=inferenceProviderMapping` — an empty mapping means no hosted provider serves it, and self-hosting a `trust_remote_code` model in-process is not a safe fallback: it has failed in this codebase's own history with both an unacceptably slow CPU load time and a crash in the model's own custom code on first inference.
 
 Do not fix a vector-dimension error by changing the database column. Verify the configured embedding provider first.
 
@@ -493,7 +493,7 @@ embedding configuration
 
 # 12. Assistant configuration and prompts
 
-The **Assistant** is the central configurable object - a single mutable row. Editing an assistant updates it in place; there is no separate immutable-snapshot/version history. This is a deliberate product simplification (build-plan item 11f) that fully removed the earlier `AssistantVersion` system (11a-e's own versioning/diff/rollback machinery): "just edit the assistant, nothing else." A call records which assistant answered it, not which version - once real call handling exists (items 24-28), it must record the configuration values actually in effect at call time (e.g. by copying the fields it used onto the call record), since there is no longer an immutable snapshot to point at.
+The **Assistant** is the central configurable object - a single mutable row. Editing an assistant updates it in place; there is no separate immutable-snapshot/version history. This is a deliberate product simplification (build-plan item 11f) that fully removed the earlier `AssistantVersion` system (11a-e's own versioning/diff/rollback machinery): "just edit the assistant, nothing else." A call records which assistant answered it, not which version - once real call handling exists (items 25-29), it must record the configuration values actually in effect at call time (e.g. by copying the fields it used onto the call record), since there is no longer an immutable snapshot to point at.
 
 `status` (draft/published/archived) still exists as a separate lifecycle marker from the configuration itself: `POST .../publish` is a pure status flip ("this configuration is live"), not a pointer to a chosen snapshot, and archiving is still the reversible, non-destructive alternative to `DELETE`.
 
