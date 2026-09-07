@@ -172,16 +172,34 @@ def _silent_tts() -> MockTTS:
     return MockTTS(bytes_per_character=0)
 
 
-def _patch_session_setup(monkeypatch: pytest.MonkeyPatch) -> None:
+def _patch_session_setup(
+    monkeypatch: pytest.MonkeyPatch, *, blocked_topics: list[str] | None = None
+) -> None:
     """
     Every test that opens /media/session triggers main.py's unconditional
     fetch_llm_config()/fetch_tts_config()/get_tts_provider() calls - mock
     them everywhere so no test ever attempts a real network call or
     produces racy background audio, matching every other session-setup
     fetch's existing precedent.
+
+    blocked_topics (item 24c) defaults to none, so every existing test keeps
+    the behaviour it had before topic blocking existed.
     """
 
-    monkeypatch.setattr(main_module, "fetch_llm_config", _fake_fetch_llm_config)
+    if blocked_topics:
+
+        async def _fetch_with_topics(assistant_id) -> LLMConfig:
+            base = await _fake_fetch_llm_config(assistant_id)
+
+            return LLMConfig(
+                system_prompt=base.system_prompt,
+                creativity=base.creativity,
+                blocked_topics=tuple(blocked_topics),
+            )
+
+        monkeypatch.setattr(main_module, "fetch_llm_config", _fetch_with_topics)
+    else:
+        monkeypatch.setattr(main_module, "fetch_llm_config", _fake_fetch_llm_config)
     monkeypatch.setattr(main_module, "fetch_tts_config", _fake_fetch_tts_config)
     monkeypatch.setattr(main_module, "get_tts_provider", _silent_tts)
     monkeypatch.setattr(media_session_module, "record_turn_metric", _noop_record_turn_metric)

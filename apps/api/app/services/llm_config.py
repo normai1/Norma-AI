@@ -54,6 +54,9 @@ DEFAULT_SYSTEM_PROMPT = (
 class LLMConfig:
     system_prompt: str
     creativity: float
+    # Item 24c. Enforced in the media plane on the caller's transcript, so it
+    # has to travel with the rest of the per-session config.
+    blocked_topics: list[str]
 
 
 async def resolve_llm_config(db: AsyncSession, assistant_id: uuid.UUID) -> LLMConfig:
@@ -64,7 +67,11 @@ async def resolve_llm_config(db: AsyncSession, assistant_id: uuid.UUID) -> LLMCo
 
     system_prompt = await _resolve_system_prompt(db, assistant)
 
-    return LLMConfig(system_prompt=system_prompt, creativity=assistant.creativity)
+    return LLMConfig(
+        system_prompt=system_prompt,
+        creativity=assistant.creativity,
+        blocked_topics=list(assistant.blocked_topics or []),
+    )
 
 
 async def _resolve_system_prompt(db: AsyncSession, assistant: Assistant) -> str:

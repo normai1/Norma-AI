@@ -10,7 +10,7 @@ from sqlalchemy import (
     Text,
     text,
 )
-from sqlalchemy.dialects.postgresql import UUID
+from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db.base_class import Base
@@ -100,4 +100,13 @@ class Assistant(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     record_calls: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     auto_delete_on_declined_consent: Mapped[bool] = mapped_column(
         Boolean, nullable=False, default=False
+    )
+
+    # Subjects this assistant must not discuss, in the operator's own words
+    # (item 24c). Enforced on the caller's transcript before the model is
+    # called, not by asking the model to refuse - so no prompt wording or
+    # caller persistence can talk past it. Empty means no blocking at all;
+    # it must never quietly acquire defaults.
+    blocked_topics: Mapped[list[str]] = mapped_column(
+        JSONB, nullable=False, server_default=text("'[]'::jsonb"), default=list
     )

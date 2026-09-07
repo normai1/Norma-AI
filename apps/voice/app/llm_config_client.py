@@ -51,6 +51,9 @@ DEFAULT_CREATIVITY = 0.3
 class LLMConfig:
     system_prompt: str
     creativity: float
+    # Empty on any failure to fetch: blocking is the operator's explicit
+    # choice, and a config fetch that fails open must not invent one.
+    blocked_topics: tuple[str, ...] = ()
 
 
 _DEFAULT_CONFIG = LLMConfig(system_prompt=DEFAULT_SYSTEM_PROMPT, creativity=DEFAULT_CREATIVITY)
@@ -84,7 +87,16 @@ async def fetch_llm_config(
         if not isinstance(system_prompt, str) or not isinstance(creativity, (int, float)):
             return _DEFAULT_CONFIG
 
-        return LLMConfig(system_prompt=system_prompt, creativity=creativity)
+        raw_topics = body.get("blocked_topics")
+        topics = (
+            tuple(topic for topic in raw_topics if isinstance(topic, str))
+            if isinstance(raw_topics, list)
+            else ()
+        )
+
+        return LLMConfig(
+            system_prompt=system_prompt, creativity=creativity, blocked_topics=topics
+        )
     except httpx.HTTPError:
         return _DEFAULT_CONFIG
     finally:

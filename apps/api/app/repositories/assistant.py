@@ -29,6 +29,7 @@ _UPDATABLE_FIELDS = frozenset(
         "max_silence_timeout_seconds",
         "record_calls",
         "auto_delete_on_declined_consent",
+        "blocked_topics",
     }
 )
 

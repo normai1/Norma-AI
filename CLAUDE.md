@@ -915,6 +915,15 @@ Never log: passwords, API keys, tokens, **transcript text**, caller PII without 
 
 Transcript text in application logs is a data-protection incident waiting to happen. Log the call ID and look the transcript up through authorized access instead.
 
+Two mechanisms enforce this rather than leaving it to review (build-plan item 24d):
+
+- `norma_shared.logging_setup` installs a redacting formatter on both planes, scrubbing credentials and PII patterns from every record - message, interpolated arguments, and traceback text - including lines this project does not write itself, such as uvicorn's access log. It is a **backstop**: it matches patterns and cannot recognise a plain sentence of speech, so turn-path code still logs word counts and identifiers, never utterances.
+- `apps/voice/tests/test_transcript_never_logged.py` runs a real turn and fails the build if any of the conversation reaches the logs.
+
+`norma_shared.pii.redact_pii` is the project's single redaction entry point. `TranscriptTurn` persistence (item 28) must write through it rather than inventing its own rules. Its patterns are tuned for stored transcripts, where over-redaction is a defect - a rule that eats a quoted price, a booked time, or a date breaks the call-detail screen.
+
+`LOG_LEVEL` raises application logging only. The media plane deliberately does not follow it below DEBUG: pipecat logs whole frames, callers' words included, at TRACE.
+
 ---
 
 # 28. Testing rules

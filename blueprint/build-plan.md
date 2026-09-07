@@ -92,11 +92,11 @@
   - [x] 23e. **Knowledge tab UI** - file upload, website ingestion, manual FAQ, and processing status management inside the assistant editor
   - [x] 23f. **Custom Prompt tab: full template management** - relocates prompt-template CRUD (list, create, edit, version history, publish/rollback, diff) from the standalone /prompt-templates page into the assistant editor's Custom Prompt tab, replacing today's bare picker; removes the standalone page and its nav link. Prompt templates remain a shared, workspace-scoped, reusable data model - UI relocation only, no data-model change. Superseded by 12d, which removes the whole template system this relocated.
 
-- [ ] 24. **AI guardrails** - prompt-injection resistance for retrieved and caller-supplied text, topic and action allow-lists, refusal to state ungrounded prices/hours/policy, PII rules in transcripts and logs, and output validation before spoken commitments
-  - [ ] 24a. **Untrusted-input framing** - contain retrieved knowledge and caller speech so neither can act as instructions: explicit delimiting, sanitisation, a standing rule the caller cannot override, and injection-resistance tests
-  - [ ] 24b. **Answer grounding and output validation** - refuse prices, hours, availability and policy that are not present in knowledge, and validate a reply before it is spoken so no invented commitment reaches the caller
-  - [ ] 24c. **Topic and action allow-lists** - per-assistant allowed topics and actions, enforced independently of model output, with the configuration surface and editor UI
-  - [ ] 24d. **PII in transcripts and logs** - redaction rules for stored transcript text, and enforcement that transcript content never reaches application logs
+- [x] 24. **AI guardrails** - prompt-injection resistance for retrieved and caller-supplied text, topic and action allow-lists, refusal to state ungrounded prices/hours/policy, PII rules in transcripts and logs, and output validation before spoken commitments
+  - [x] 24a. **Untrusted-input framing** - contain retrieved knowledge and caller speech so neither can act as instructions: explicit delimiting, sanitisation, a standing rule the caller cannot override, and injection-resistance tests
+  - [x] 24b. **Answer grounding and output validation** - refuse prices, hours, availability and policy that are not present in knowledge, and validate a reply before it is spoken so no invented commitment reaches the caller
+  - [x] 24c. **Topic and action allow-lists** - per-assistant allowed topics and actions, enforced independently of model output, with the configuration surface and editor UI (built as per-assistant *blocked* topics, checked on the caller's words before the model is called; the action half is deferred to item 35, which owns tool permissions - no tools exist yet for an action list to govern)
+  - [x] 24d. **PII in transcripts and logs** - redaction rules for stored transcript text, and enforcement that transcript content never reaches application logs (the log half is enforced now; `norma_shared.pii.redact_pii` is the shared rule set item 28 applies when it creates TranscriptTurn, since nothing stores transcript text yet)
 
 ### Telephony
 

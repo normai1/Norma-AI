@@ -206,10 +206,18 @@ def test_media_session_streams_an_llm_reply_after_a_turn_ends(
         for _ in range(3):
             ws.send_bytes(chunk)
 
-        # 8, not 6: item 20e's caller_speech_started fires once for this
-        # turn's SPEAKING frame, and reply_finished fires once TTSProcessor
-        # (silenced via _patch_session_setup) has finished the reply.
-        messages = [json.loads(ws.receive_text()) for _ in range(8)]
+        # Read to reply_finished rather than a fixed count: deltas are
+        # emitted per sentence now that each one is checked before the
+        # caller hears it (item 24b), so how many arrive depends on the
+        # reply's punctuation, not on the provider's chunk size.
+        messages = []
+
+        while True:
+            message = json.loads(ws.receive_text())
+            messages.append(message)
+
+            if message["type"] == "reply_finished":
+                break
 
     transcript_messages = [m for m in messages if m["type"] == "transcript"]
     turn_ended_messages = [m for m in messages if m["type"] == "turn_ended"]
@@ -272,7 +280,20 @@ def test_media_session_emits_llm_error_when_the_provider_fails(
         # turn's SPEAKING frame, and reply_finished fires once TTSProcessor
         # discards the abandoned "Sure" fragment and resets (an error
         # reply is still "finished" from the turn-detection perspective).
-        messages = [json.loads(ws.receive_text()) for _ in range(6)]
+        # Read to the terminal message rather than a fixed count: deltas are
+        # per sentence now (item 24b), so a reply that never completes one
+        # produces none at all.
+        messages = []
+
+        while True:
+            message = json.loads(ws.receive_text())
+            messages.append(message)
+
+            # llm_error is what this test is about, and it can arrive after
+            # reply_finished now that a reply with no completed sentence
+            # emits no deltas at all.
+            if message["type"] == "llm_error":
+                break
 
     types = [m["type"] for m in messages]
 

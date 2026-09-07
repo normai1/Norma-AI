@@ -149,6 +149,9 @@ export default function AssistantEditorPage() {
   const [maxSilenceTimeoutSeconds, setMaxSilenceTimeoutSeconds] = useState("");
   const [recordCalls, setRecordCalls] = useState(false);
   const [autoDeleteOnDeclinedConsent, setAutoDeleteOnDeclinedConsent] = useState(false);
+  // Held as the raw textarea value, not a parsed array: splitting on every
+  // keystroke would drop a line the operator is still typing.
+  const [blockedTopics, setBlockedTopics] = useState("");
 
   const [knowledgeSources, setKnowledgeSources] = useState<
     KnowledgeSource[] | null
@@ -355,6 +358,7 @@ export default function AssistantEditorPage() {
       );
       setRecordCalls(loaded.record_calls);
       setAutoDeleteOnDeclinedConsent(loaded.auto_delete_on_declined_consent);
+      setBlockedTopics((loaded.blocked_topics ?? []).join("\n"));
     }
   }, [activeWorkspace]);
 
@@ -907,6 +911,12 @@ export default function AssistantEditorPage() {
           max_silence_timeout_seconds: parsedMaxSilenceTimeout,
           record_calls: recordCalls,
           auto_delete_on_declined_consent: autoDeleteOnDeclinedConsent,
+          // One per line in the editor; the API trims and drops blanks, so a
+          // trailing newline never becomes a topic that matches everything.
+          blocked_topics: blockedTopics
+            .split("\n")
+            .map((topic) => topic.trim())
+            .filter(Boolean),
           custom_prompt: customPrompt.trim() ? customPrompt : null,
         },
       );
@@ -2000,6 +2010,29 @@ export default function AssistantEditorPage() {
                     </label>
                   </div>
                 </div>
+
+                  <div className="mt-6">
+                    <label
+                      htmlFor="blocked_topics"
+                      className="block text-sm font-medium text-slate-300"
+                    >
+                      Blocked topics
+                    </label>
+                    <p className="mt-1 text-xs text-slate-500">
+                      One per line. The assistant refuses these before the model
+                      is ever asked, so no caller can talk it round. Matching is
+                      on your exact wording, not the idea - list the phrasings
+                      callers actually use.
+                    </p>
+                    <textarea
+                      id="blocked_topics"
+                      value={blockedTopics}
+                      onChange={(event) => setBlockedTopics(event.target.value)}
+                      rows={4}
+                      placeholder={"legal advice\nmedical advice"}
+                      className="mt-2 w-full rounded-md border border-slate-700 bg-slate-900 px-3 py-2 text-sm text-slate-100"
+                    />
+                  </div>
               </div>
 
               <Button

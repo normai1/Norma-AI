@@ -2,6 +2,7 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from norma_shared.logging_setup import configure_logging, install_redaction
 
 from app.api.internal.glossary import router as internal_glossary_router
 from app.api.internal.llm_config import router as internal_llm_config_router
@@ -22,6 +23,12 @@ from app.api.v1.workspaces import router as workspaces_router
 from app.core.config import settings
 from app.core.redis import redis
 
+# Item 24d: installs the redacting formatter, so nothing this process logs -
+# including tracebacks from httpx or asyncpg, which can carry a request body
+# or statement parameters - reaches the log stream carrying credentials or
+# personal details.
+configure_logging(settings.log_level)
+
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -30,6 +37,9 @@ async def lifespan(app: FastAPI):
     """
 
     # Startup
+    # Re-applied here because uvicorn installs its own handlers at server
+    # start, which may happen after this module is imported.
+    install_redaction()
     await redis.ping()
 
     yield

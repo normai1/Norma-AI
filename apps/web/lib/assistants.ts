@@ -20,6 +20,8 @@ export interface Assistant {
   max_silence_timeout_seconds: number | null;
   record_calls: boolean;
   auto_delete_on_declined_consent: boolean;
+  /** Subjects this assistant refuses to discuss (item 24c). */
+  blocked_topics: string[];
   created_at: string;
 }
 
@@ -44,6 +46,7 @@ export interface AssistantUpdateInput {
   max_silence_timeout_seconds?: number | null;
   record_calls?: boolean;
   auto_delete_on_declined_consent?: boolean;
+  blocked_topics?: string[];
 }
 
 export interface TestCallTicket {

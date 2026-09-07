@@ -42,6 +42,12 @@ from pipecat.transports.websocket.fastapi import (
 
 from app import config
 from app.conversation import ConversationState, assemble_system_prompt
+from app.guardrails import (
+    BLOCKED_TOPIC_REPLY,
+    SAFE_FALLBACK,
+    blocked_topic_in,
+    find_unsupported_claim,
+)
 from app.llm import LLMProvider, LLMProviderError
 from app.retrieval_client import fetch_retrieved_context
 from app.sentence_chunker import SentenceChunker
@@ -78,6 +84,42 @@ _AUDIO_LEVEL_REPORT_SECONDS = 2.0
 # Only used to convert a chunk's byte length into the seconds of speech it
 # represents (see TTSProcessor._extend_playback).
 _AUDIO_SAMPLE_WIDTH_BYTES = 2
+
+
+# The only keys the browser is expected to report (see reportToServer in the
+# test-call page). Item 24d: the log records these and nothing else, so a
+# future client message carrying free text - or a tampered one carrying
+# anything at all - cannot write itself into the call's log. The redacting
+# formatter in norma_shared.logging_setup is the backstop; this is the lock.
+_CLIENT_EVENT_FIELDS = ("source", "event", "reason", "queued", "stopped", "remaining")
+
+
+def _log_client_event(data: str | bytes) -> None:
+    """
+    Log a browser telemetry message by its known fields only.
+
+    Values are coerced to their repr rather than logged raw, so a string where
+    a number was expected still cannot smuggle a sentence into the log.
+    """
+
+    try:
+        payload = json.loads(data)
+    except (ValueError, TypeError):
+        logger.info("client event: unparseable (%d bytes)", len(data))
+        return
+
+    if not isinstance(payload, dict):
+        logger.info("client event: unexpected shape %s", type(payload).__name__)
+        return
+
+    known = {key: payload[key] for key in _CLIENT_EVENT_FIELDS if key in payload}
+    dropped = len(payload) - len(known)
+
+    logger.info(
+        "client event: %s%s",
+        " ".join(f"{key}={value!r:.40}" for key, value in known.items()),
+        f" (+{dropped} unrecognised field(s) dropped)" if dropped else "",
+    )
 
 
 class RawAudioFrameSerializer(FrameSerializer):
@@ -130,7 +172,7 @@ class RawAudioFrameSerializer(FrameSerializer):
         # is indistinguishable from "the message never arrived", which is
         # exactly the ambiguity this feature kept getting stuck on. Logged,
         # then dropped.
-        logger.info("client event: %s", data[:200])
+        _log_client_event(data)
 
         return None
 
@@ -628,6 +670,7 @@ class LLMTurnProcessor(FrameProcessor):
         assistant_id: uuid.UUID,
         system_prompt: str,
         creativity: float,
+        blocked_topics: Sequence[str] = (),
     ) -> None:
         super().__init__()
         self._llm_provider = llm_provider
@@ -637,6 +680,7 @@ class LLMTurnProcessor(FrameProcessor):
         self._assistant_id = assistant_id
         self._system_prompt = system_prompt
         self._creativity = creativity
+        self._blocked_topics = tuple(blocked_topics)
         self._conversation = ConversationState()
         self._llm_task: asyncio.Task | None = None
 
@@ -669,6 +713,32 @@ class LLMTurnProcessor(FrameProcessor):
         # Appended once, before any retry - a retried attempt must never
         # duplicate the caller's own message in conversation history.
         self._conversation.append_user_turn(caller_text)
+
+        # Checked before the model is called at all (item 24c). Enforcing it
+        # here rather than by asking the model to refuse is the point: the
+        # model never sees a blocked request, so no prompt wording and no
+        # amount of caller persistence can talk it into answering. CLAUDE.md
+        # section 36 - model output never authorizes anything.
+        blocked = blocked_topic_in(caller_text, self._blocked_topics)
+
+        if blocked is not None:
+            # The matched topic, never the caller's words (section 27).
+            logger.info(
+                "turn refused: assistant=%s blocked_topic=%r", self._assistant_id, blocked
+            )
+            self._conversation.append_assistant_turn(BLOCKED_TOPIC_REPLY)
+            await self.push_frame(
+                OutputTransportMessageUrgentFrame(
+                    message={"type": "llm_delta", "text": BLOCKED_TOPIC_REPLY}
+                )
+            )
+            await self.push_frame(
+                OutputTransportMessageUrgentFrame(
+                    message={"type": "llm_complete", "text": BLOCKED_TOPIC_REPLY}
+                )
+            )
+
+            return
 
         stream = None
         first_delta: str | None = None
@@ -713,25 +783,74 @@ class LLMTurnProcessor(FrameProcessor):
         # whatever was said so far.
         try:
             reply_parts: list[str] = []
+            # Sentence-gated so each one can be checked before the caller
+            # hears it (item 24b). Costs no audible latency: TTSProcessor
+            # already buffers through its own SentenceChunker and speaks
+            # nothing until a sentence is complete.
+            chunker = SentenceChunker()
+            blocked = False
 
-            if first_delta is not None:
-                self._turn_metrics.mark_llm_first_token(generation)
-                reply_parts.append(first_delta)
-                await self.push_frame(
-                    OutputTransportMessageUrgentFrame(
-                        message={"type": "llm_delta", "text": first_delta}
-                    )
-                )
+            async def emit(sentence: str) -> bool:
+                """Push one sentence, or the fallback if it cannot be spoken."""
 
-                async for delta in stream:
-                    reply_parts.append(delta)
+                reason = self._unsupported_claim_in(sentence, retrieved_context)
+
+                if reason is None:
+                    reply_parts.append(sentence)
                     await self.push_frame(
                         OutputTransportMessageUrgentFrame(
-                            message={"type": "llm_delta", "text": delta}
+                            message={"type": "llm_delta", "text": sentence}
                         )
                     )
 
-            full_reply = "".join(reply_parts)
+                    return True
+
+                # Never the sentence itself - CLAUDE.md section 27.
+                logger.warning(
+                    "reply blocked: assistant=%s reason=%s", self._assistant_id, reason
+                )
+                reply_parts.append(SAFE_FALLBACK)
+                await self.push_frame(
+                    OutputTransportMessageUrgentFrame(
+                        message={"type": "llm_delta", "text": SAFE_FALLBACK}
+                    )
+                )
+
+                return False
+
+            if first_delta is not None:
+                self._turn_metrics.mark_llm_first_token(generation)
+
+                for sentence in chunker.feed(first_delta):
+                    if not await emit(sentence):
+                        blocked = True
+                        break
+
+                if not blocked:
+                    async for delta in stream:
+                        for sentence in chunker.feed(delta):
+                            if not await emit(sentence):
+                                blocked = True
+                                break
+
+                        if blocked:
+                            break
+
+            # The trailing fragment is a real sentence the caller should hear
+            # (see TTSProcessor._handle_llm_finished), so it is checked too
+            # rather than dropped. A reply with no sentence-ending
+            # punctuation at all arrives here as its only sentence.
+            if not blocked:
+                trailing = chunker.flush()
+
+                if trailing:
+                    await emit(trailing)
+
+            # Joined with a space, not concatenated: reply_parts now holds
+            # whole sentences from the chunker, which trims them, so
+            # concatenation would run "...at nine.We close..." together in
+            # the transcript and in the conversation history.
+            full_reply = " ".join(reply_parts)
             self._conversation.append_assistant_turn(full_reply)
             self._turn_metrics.mark_llm_complete(generation)
             await self.push_frame(
@@ -742,6 +861,25 @@ class LLMTurnProcessor(FrameProcessor):
             self._session_resilience.record_turn_succeeded()
         except LLMProviderError:
             await self._give_up_on_turn()
+
+    def _unsupported_claim_in(self, sentence: str, grounded_text: str) -> str | None:
+        """
+        The validator's verdict, or None to speak - including when the
+        validator itself fails.
+
+        Fails open deliberately. The failure this guardrail could introduce -
+        an assistant that answers "I don't have that" to everything - is
+        worse than the one it removes, and far harder to notice: nobody sees
+        a correct answer that was silently withheld. CLAUDE.md's "silence is
+        the worst possible failure" points the same way.
+        """
+
+        try:
+            return find_unsupported_claim(sentence, grounded_text=grounded_text)
+        except Exception:
+            logger.exception("grounding check failed - speaking the sentence anyway")
+
+            return None
 
     async def _give_up_on_turn(self) -> None:
         """
@@ -1600,6 +1738,7 @@ def build_voice_session_pipeline_worker(
     sensitivity: float = 0.5,
     system_prompt: str = "",
     creativity: float = 0.3,
+    blocked_topics: Sequence[str] = (),
     voice_id: str = "default",
     speech_rate: float = 1.0,
     vad_analyzer: VADAnalyzer | None = None,
@@ -1658,6 +1797,7 @@ def build_voice_session_pipeline_worker(
                 assistant_id=assistant_id,
                 system_prompt=system_prompt,
                 creativity=creativity,
+                blocked_topics=blocked_topics,
             ),
             TTSProcessor(
                 tts_provider,

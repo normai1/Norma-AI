@@ -1,7 +1,7 @@
 import uuid
 from datetime import datetime
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 
 class AssistantCreate(BaseModel):
@@ -34,6 +34,23 @@ class AssistantUpdate(BaseModel):
     max_silence_timeout_seconds: int | None = Field(default=None, ge=5, le=300)
     record_calls: bool | None = None
     auto_delete_on_declined_consent: bool | None = None
+    # Subjects the assistant must not discuss (item 24c). An empty list means
+    # no blocking - operator configuration is authoritative, so this never
+    # acquires defaults of its own.
+    blocked_topics: list[str] | None = Field(default=None, max_length=50)
+
+    @field_validator("blocked_topics")
+    @classmethod
+    def _clean_topics(cls, topics: list[str] | None) -> list[str] | None:
+        """
+        Trim each entry and drop blanks, so a trailing newline in the editor
+        does not become a topic that matches everything.
+        """
+
+        if topics is None:
+            return None
+
+        return [trimmed for topic in topics if (trimmed := topic.strip())]
 
 
 class AssistantResponse(BaseModel):
@@ -58,4 +75,5 @@ class AssistantResponse(BaseModel):
     max_silence_timeout_seconds: int | None
     record_calls: bool
     auto_delete_on_declined_consent: bool
+    blocked_topics: list[str]
     created_at: datetime

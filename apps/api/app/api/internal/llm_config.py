@@ -1,7 +1,8 @@
 """
-Internal, service-to-service route exposing the two pieces of assistant
-configuration the realtime LLM turn loop (item 20d) needs once per session:
-the resolved system prompt and creativity. Resolved once at session setup,
+Internal, service-to-service route exposing the assistant configuration the
+realtime LLM turn loop needs once per session: the resolved system prompt,
+creativity, and the topics the assistant must not discuss (item 24c).
+Resolved once at session setup, not per turn. Resolved once at session setup,
 not per turn - unlike retrieval (app/api/internal/retrieval.py), an
 assistant's prompt/persona/creativity do not change mid-call.
 """
@@ -28,10 +29,14 @@ async def get_llm_config(
     assistant_id: uuid.UUID,
     db: DbSession,
     _: RequireInternalSecret,
-) -> dict[str, str | float]:
+) -> dict[str, str | float | list[str]]:
     try:
         config = await resolve_llm_config(db, assistant_id)
     except AssistantNotFound as exc:
         raise _ASSISTANT_NOT_FOUND from exc
 
-    return {"system_prompt": config.system_prompt, "creativity": config.creativity}
+    return {
+        "system_prompt": config.system_prompt,
+        "creativity": config.creativity,
+        "blocked_topics": config.blocked_topics,
+    }

@@ -1195,3 +1195,49 @@ async def test_delete_in_one_organization_is_not_reachable_through_another(
     )
 
     assert response.status_code == 404
+
+
+async def test_update_round_trips_blocked_topics(client: AsyncClient) -> None:
+    """
+    Item 24c: the operator's list is stored and returned as given, minus
+    blanks - a trailing newline in the editor must not become a topic that
+    matches every question.
+    """
+
+    owner_headers, organization_id = await _org_with_owner(
+        client, "asst-blocked-topics@example.com"
+    )
+    workspace = await _create_workspace(
+        client, organization_id, owner_headers, "Clinic"
+    )
+    created = await _create_assistant(
+        client, organization_id, workspace["id"], owner_headers, "Front desk"
+    )
+
+    response = await client.patch(
+        f"{_assistants_url(organization_id, workspace['id'])}/{created['id']}",
+        json={"blocked_topics": ["legal advice", "  competitor pricing  ", "", "   "]},
+        headers=owner_headers,
+    )
+
+    assert response.status_code == 200
+    assert response.json()["blocked_topics"] == ["legal advice", "competitor pricing"]
+
+
+async def test_a_new_assistant_blocks_nothing(client: AsyncClient) -> None:
+    """
+    Operator configuration is authoritative: blocking is opt-in and must not
+    acquire defaults of its own.
+    """
+
+    owner_headers, organization_id = await _org_with_owner(
+        client, "asst-blocked-default@example.com"
+    )
+    workspace = await _create_workspace(
+        client, organization_id, owner_headers, "Clinic"
+    )
+    created = await _create_assistant(
+        client, organization_id, workspace["id"], owner_headers, "Front desk"
+    )
+
+    assert created["blocked_topics"] == []

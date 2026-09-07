@@ -1,8 +1,11 @@
 import logging
 import os
 import uuid
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, WebSocket
+from norma_shared.logging_setup import configure_logging, install_redaction
 from norma_shared.voice_session_ticket import (
     InvalidVoiceSessionTicket,
     decode_voice_session_ticket,
@@ -29,14 +32,33 @@ _TICKET_REJECTED_CLOSE_CODE = 4401
 # handlers, so every logger.info() in this app is silently discarded - the
 # per-turn diagnostics CLAUDE.md section 27 asks for never reach the logs at
 # all. Found the hard way: a live barge-in investigation produced an entirely
-# empty log for a call that had definitely happened. Pipecat logs through
-# loguru and is unaffected either way.
-logging.basicConfig(
-    level=os.environ.get("LOG_LEVEL", "INFO").upper(),
-    format="%(asctime)s | %(levelname)-8s | %(name)s | %(message)s",
-)
+# empty log for a call that had definitely happened.
+#
+# Item 24d: this also installs the redacting formatter, which is why the call
+# lives in norma_shared now. It is re-applied on startup below, once uvicorn
+# has installed its own handlers - the session ticket travels in the query
+# string uvicorn's access logger prints verbatim. It also pins pipecat's
+# loguru logger, which the stdlib formatter cannot reach.
+configure_logging(os.environ.get("LOG_LEVEL", "INFO"))
 
-app = FastAPI(title="Norma AI Voice")
+
+@asynccontextmanager
+async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
+    """
+    Re-apply item 24d's redaction once uvicorn's own handlers exist.
+
+    The import-time call above covers this process's own logging; this one
+    covers uvicorn's access logger, which formats the raw request line - the
+    line that was printing every session ticket in full. Whichever order the
+    two happen in, redaction ends up installed.
+    """
+
+    install_redaction()
+
+    yield
+
+
+app = FastAPI(title="Norma AI Voice", lifespan=lifespan)
 
 # Placeholder until item 20 (real-time voice session engine) gives this a real
 # session registry. The shape is the contract the deployment platform's
@@ -124,6 +146,7 @@ async def media_session(
         sensitivity=sensitivity,
         system_prompt=llm_config.system_prompt,
         creativity=llm_config.creativity,
+        blocked_topics=llm_config.blocked_topics,
         voice_id=tts_config.voice_id,
         speech_rate=tts_config.speech_rate,
     )

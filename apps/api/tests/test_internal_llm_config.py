@@ -46,7 +46,12 @@ async def test_returns_the_assistants_config(
     )
 
     assert response.status_code == 200
-    assert response.json() == {"system_prompt": "Be warm.", "creativity": 0.8}
+    assert response.json() == {
+        "system_prompt": "Be warm.",
+        "creativity": 0.8,
+        # Item 24c travels with the rest of the per-session config.
+        "blocked_topics": [],
+    }
 
 
 async def test_returns_the_default_config_for_an_unconfigured_assistant(
