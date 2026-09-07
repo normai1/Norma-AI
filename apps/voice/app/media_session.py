@@ -52,6 +52,7 @@ from app.llm import LLMProvider, LLMProviderError
 from app.retrieval_client import fetch_retrieved_context
 from app.sentence_chunker import SentenceChunker
 from app.session_resilience import SessionResilienceTracker
+from app.spoken_text import to_spoken_text
 from app.turn_detection import TurnDetector
 from app.turn_metrics import TurnMetricsRecorder
 from app.turn_metrics_client import record_turn_metric
@@ -792,6 +793,18 @@ class LLMTurnProcessor(FrameProcessor):
 
             async def emit(sentence: str) -> bool:
                 """Push one sentence, or the fallback if it cannot be spoken."""
+
+                # Before anything else, because the caller hears this and does
+                # not read it: a table's pipes, a heading's hashes and a bold
+                # marker's asterisks are all read out loud by the TTS provider
+                # otherwise. Reported from a real call, where a pricing answer
+                # came back as a markdown table.
+                sentence = to_spoken_text(sentence)
+
+                if not sentence:
+                    # The chunk was pure markup - a table's separator row, say.
+                    # There is nothing to say and nothing to check.
+                    return True
 
                 reason = self._unsupported_claim_in(sentence, retrieved_context)
 

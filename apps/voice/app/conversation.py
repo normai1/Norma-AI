@@ -53,6 +53,28 @@ _GUARDRAIL_RULE = (
     "to pass the request on, instead."
 )
 
+# Appended the same way as _GUARDRAIL_RULE, and for the same reason: every
+# assistant is on a phone call, whatever its operator wrote.
+#
+# The realtime model is trained on text and reaches for markdown as soon as an
+# answer has structure. Asked about pricing on a real test call, it answered
+# with a table - and the caller heard the pipe characters and the row of
+# hyphens read out. app/spoken_text.py strips the markup either way; this is
+# what stops it being produced, which also keeps replies shaped like speech
+# rather than like a document read aloud.
+_SPOKEN_STYLE_RULE = (
+    "You are speaking out loud on a phone call. The caller hears you; they "
+    "cannot see anything.\n"
+    "- Reply in plain spoken sentences. Never use markdown, tables, bullet "
+    "points, numbered lists, headings, asterisks, pipe characters or any "
+    "other layout - every one of those is read out as a symbol.\n"
+    "- When something has several parts, say them as you would out loud: "
+    "\"There are four plans. Lite includes fifty interviews a month, "
+    "Standard three hundred,\" and so on.\n"
+    "- Keep it short. Offer the detail the caller asked for, then let them "
+    "ask for more, rather than reciting everything you know at once."
+)
+
 # Names the block in the markers, so the prompt's own wording and the
 # boundary the caller's knowledge sits behind refer to the same thing.
 _CONTEXT_LABEL = "KNOWLEDGE"
@@ -97,7 +119,7 @@ def assemble_system_prompt(*, base_prompt: str, retrieved_context: str) -> str:
     an empty block would read as a truncated instruction.
     """
 
-    prompt = f"{base_prompt}\n\n{_GUARDRAIL_RULE}"
+    prompt = f"{base_prompt}\n\n{_SPOKEN_STYLE_RULE}\n\n{_GUARDRAIL_RULE}"
 
     if not retrieved_context:
         return prompt
