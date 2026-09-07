@@ -11,6 +11,17 @@ from app.core.exceptions import (
 from app.models.assistant import Assistant
 from app.repositories import assistant as assistant_repo
 from app.repositories import workspace as workspace_repo
+from app.services.prompt_rendering import render_prompt
+
+# Mirrors llm_config.py's _resolve_system_prompt exactly - only the
+# namespace/field *names* used here matter for validation (a typo'd
+# placeholder is what render_prompt rejects), not the actual values a real
+# call would substitute, so stand-ins are fine.
+_PROMPT_VALIDATION_CONTEXT: dict[str, dict[str, Any]] = {
+    "workspace": {"name": ""},
+    "assistant": {"name": ""},
+    "caller": {"name": None},
+}
 
 
 async def _resolve_workspace_id(
@@ -133,6 +144,16 @@ async def update_assistant(
     """
     Apply a partial update to an assistant the caller may manage - name
     and/or any configuration field, whichever `fields` actually contains.
+
+    A custom_prompt is validated by actually rendering it here, against the
+    same namespace/field shape a live call resolves it with (see
+    llm_config.py's _resolve_system_prompt). Without this, a typo'd
+    placeholder (e.g. {{business.name}} - workspace.name is the real one)
+    would save successfully and then silently fall back to the assistant's
+    persona, then the fixed generic default, on every real call - with
+    nothing telling the operator their own instructions were never actually
+    in effect. Raises PromptRenderError, same as a live call's own render
+    would, but here it stops the save instead of being swallowed.
     """
 
     assistant = await resolve_assistant(
@@ -141,6 +162,10 @@ async def update_assistant(
         workspace_id=workspace_id,
         assistant_id=assistant_id,
     )
+
+    custom_prompt = fields.get("custom_prompt")
+    if custom_prompt:
+        render_prompt(custom_prompt, _PROMPT_VALIDATION_CONTEXT)
 
     return await assistant_repo.update(db, assistant, fields=fields)
 

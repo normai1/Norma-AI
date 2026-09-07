@@ -77,7 +77,7 @@ export default function Home() {
         <div className="mb-8 flex flex-wrap items-start justify-between gap-4">
           <div>
             <p className="mb-3 text-sm font-medium text-slate-400">
-              AI Receptionist Platform
+              AI Assistant Platform
             </p>
 
             <h1 className="text-5xl font-bold tracking-tight">

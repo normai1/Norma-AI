@@ -8,6 +8,7 @@ from app.api.workspace_deps import CurrentWorkspace
 from app.core.exceptions import (
     AssistantArchived,
     AssistantNotFound,
+    PromptRenderError,
     WorkspaceNotFound,
 )
 from app.schemas.assistant import AssistantCreate, AssistantResponse, AssistantUpdate
@@ -167,6 +168,11 @@ async def update_assistant(
         raise _WORKSPACE_NOT_FOUND from exc
     except AssistantNotFound as exc:
         raise _ASSISTANT_NOT_FOUND from exc
+    except PromptRenderError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=f"Custom prompt could not be saved: {exc}",
+        ) from exc
 
     await db.commit()
 

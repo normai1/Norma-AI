@@ -467,6 +467,77 @@ async def test_update_rejects_an_out_of_bounds_speech_rate(
     assert response.status_code == 422
 
 
+async def test_update_rejects_a_custom_prompt_with_an_unknown_placeholder(
+    client: AsyncClient,
+) -> None:
+    """
+    A typo'd {{namespace.field}} (only workspace/assistant/caller are real)
+    must be rejected at save time with a clear reason - not saved
+    successfully and then silently discarded on every real call (falling
+    back to persona, then the generic default) with nothing telling the
+    operator their own instructions were never actually in effect.
+    """
+
+    owner_headers, organization_id = await _org_with_owner(
+        client,
+        "asst-update-badprompt@example.com",
+    )
+    workspace = await _create_workspace(
+        client, organization_id, owner_headers, "Clinic"
+    )
+    created = await _create_assistant(
+        client,
+        organization_id,
+        workspace["id"],
+        owner_headers,
+        "Front Desk",
+    )
+
+    response = await client.patch(
+        f"{_assistants_url(organization_id, workspace['id'])}/{created['id']}",
+        json={"custom_prompt": "You work for {{business.name}}."},
+        headers=owner_headers,
+    )
+
+    assert response.status_code == 422
+    assert "business" in response.json()["detail"]
+
+    unchanged = await client.get(
+        f"{_assistants_url(organization_id, workspace['id'])}/{created['id']}",
+        headers=owner_headers,
+    )
+    assert unchanged.json()["custom_prompt"] is None
+
+
+async def test_update_accepts_a_custom_prompt_using_the_real_placeholders(
+    client: AsyncClient,
+) -> None:
+    owner_headers, organization_id = await _org_with_owner(
+        client,
+        "asst-update-goodprompt@example.com",
+    )
+    workspace = await _create_workspace(
+        client, organization_id, owner_headers, "Clinic"
+    )
+    created = await _create_assistant(
+        client,
+        organization_id,
+        workspace["id"],
+        owner_headers,
+        "Front Desk",
+    )
+    prompt = "You are {{assistant.name}}, calling on behalf of {{workspace.name}}."
+
+    response = await client.patch(
+        f"{_assistants_url(organization_id, workspace['id'])}/{created['id']}",
+        json={"custom_prompt": prompt},
+        headers=owner_headers,
+    )
+
+    assert response.status_code == 200
+    assert response.json()["custom_prompt"] == prompt
+
+
 async def test_update_is_forbidden_for_a_member(client: AsyncClient) -> None:
     organization_id, owner_headers, member_headers = await _org_with_member(
         client,

@@ -7,6 +7,7 @@ from app.core.config import settings
 from app.models.assistant import Assistant
 from app.models.organization import Organization
 from app.models.workspace import Workspace
+from app.services.llm_config import DEFAULT_SYSTEM_PROMPT
 
 _LLM_CONFIG_URL = "/internal/v1/assistants/{assistant_id}/llm-config"
 
@@ -61,7 +62,7 @@ async def test_returns_the_default_config_for_an_unconfigured_assistant(
     assert response.status_code == 200
     body = response.json()
     assert body["creativity"] == 0.3
-    assert "helpful" in body["system_prompt"].lower()
+    assert body["system_prompt"] == DEFAULT_SYSTEM_PROMPT
 
 
 async def test_404s_for_an_unknown_assistant(client: AsyncClient) -> None:

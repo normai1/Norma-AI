@@ -67,6 +67,13 @@ const EDITOR_TABS = [
 
 type EditorTabKey = (typeof EDITOR_TABS)[number]["key"];
 
+const KNOWLEDGE_SUB_TABS = [
+  { key: "source", label: "Source" },
+  { key: "knowledge", label: "Knowledge" },
+] as const;
+
+type KnowledgeSubTabKey = (typeof KNOWLEDGE_SUB_TABS)[number]["key"];
+
 function AssistantStatusBadge({ status }: { status: string }) {
   return (
     <span
@@ -109,6 +116,8 @@ export default function AssistantEditorPage() {
   const [error, setError] = useState<string | null>(null);
 
   const [activeTab, setActiveTab] = useState<EditorTabKey>("general");
+  const [knowledgeSubTab, setKnowledgeSubTab] =
+    useState<KnowledgeSubTabKey>("source");
 
   const [name, setName] = useState("");
   const [renaming, setRenaming] = useState(false);
@@ -1076,6 +1085,226 @@ export default function AssistantEditorPage() {
 
   const archived = assistant.status === "archived";
 
+  const renderKnowledgeSourceItem = (source: KnowledgeSource) => (
+    <li key={source.id} className="rounded-xl border border-slate-800 px-4 py-3">
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <div>
+          <span className="text-xs font-medium text-slate-500">
+            {knowledgeSourceTypeLabel(source.type)}
+          </span>
+          <span className="ml-3 font-medium">
+            {knowledgeSourceDisplayName(source)}
+          </span>
+        </div>
+
+        <KnowledgeSourceStatusBadge status={source.status} />
+      </div>
+
+      {source.type === "website" && source.crawled_pages && (
+        <p className="mt-1 text-xs text-slate-500">
+          {source.crawled_pages.length} page
+          {source.crawled_pages.length === 1 ? "" : "s"} crawled
+        </p>
+      )}
+
+      {source.status === "failed" && source.error_message && (
+        <div className="mt-2">
+          <ErrorText message={source.error_message} />
+        </div>
+      )}
+
+      <div className="mt-2 flex gap-2">
+        {canRetryKnowledgeSource(source) && (
+          <Button
+            variant="secondary"
+            disabled={retryingId === source.id}
+            onClick={() => handleRetry(source.id)}
+          >
+            {retryingId === source.id ? "Retrying..." : "Retry"}
+          </Button>
+        )}
+
+        {canRecrawlKnowledgeSource(source) && (
+          <Button
+            variant="secondary"
+            disabled={recrawlingId === source.id}
+            onClick={() => handleRecrawl(source.id)}
+          >
+            {recrawlingId === source.id ? "Recrawling..." : "Recrawl"}
+          </Button>
+        )}
+
+        {source.type === "manual_faq" && (
+          <Button
+            variant="secondary"
+            onClick={() => handleToggleFaqSource(source.id)}
+          >
+            {expandedFaqSourceId === source.id ? "Hide entries" : "Manage entries"}
+          </Button>
+        )}
+
+        <Button
+          variant="danger"
+          disabled={deletingSourceId === source.id}
+          onClick={() => handleDeleteSource(source.id)}
+        >
+          {deletingSourceId === source.id ? "Deleting..." : "Delete"}
+        </Button>
+      </div>
+
+      {source.type === "manual_faq" && expandedFaqSourceId === source.id && (
+        <div className="mt-4 border-t border-slate-800 pt-4">
+          {faqEntriesError && (
+            <div className="mb-3">
+              <ErrorText message={faqEntriesError} />
+            </div>
+          )}
+
+          {faqEntries === null && !faqEntriesError && (
+            <LoadingState message="Loading entries..." />
+          )}
+
+          {faqEntries !== null && faqEntries.length === 0 && (
+            <EmptyState message="No entries yet." />
+          )}
+
+          {faqEntries !== null && faqEntries.length > 0 && (
+            <ul className="space-y-3">
+              {faqEntries.map((entry) =>
+                editingFaqEntryId === entry.id ? (
+                  <li
+                    key={entry.id}
+                    className="rounded-xl border border-slate-800 px-4 py-3"
+                  >
+                    {editFaqEntryError && (
+                      <div className="mb-3">
+                        <ErrorText message={editFaqEntryError} />
+                      </div>
+                    )}
+
+                    <div className="space-y-2">
+                      <input
+                        aria-label="Edit question"
+                        className="w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-white placeholder:text-slate-500 focus:border-slate-500 focus:outline-none focus:ring-2 focus:ring-slate-600"
+                        placeholder="Question"
+                        disabled={savingFaqEntryEdit}
+                        value={editFaqQuestion}
+                        onChange={(event) => setEditFaqQuestion(event.target.value)}
+                      />
+                      <input
+                        aria-label="Edit answer"
+                        className="w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-white placeholder:text-slate-500 focus:border-slate-500 focus:outline-none focus:ring-2 focus:ring-slate-600"
+                        placeholder="Answer"
+                        disabled={savingFaqEntryEdit}
+                        value={editFaqAnswer}
+                        onChange={(event) => setEditFaqAnswer(event.target.value)}
+                      />
+                    </div>
+
+                    <div className="mt-3 flex gap-3">
+                      <Button
+                        disabled={
+                          savingFaqEntryEdit ||
+                          !editFaqQuestion.trim() ||
+                          !editFaqAnswer.trim()
+                        }
+                        onClick={() => handleSaveFaqEntryEdit(source.id, entry.id)}
+                      >
+                        {savingFaqEntryEdit ? "Saving..." : "Save"}
+                      </Button>
+                      <Button
+                        variant="secondary"
+                        disabled={savingFaqEntryEdit}
+                        onClick={handleCancelEditFaqEntry}
+                      >
+                        Cancel
+                      </Button>
+                    </div>
+                  </li>
+                ) : (
+                  <li
+                    key={entry.id}
+                    className="rounded-xl border border-slate-800 px-4 py-3"
+                  >
+                    <p className="font-medium">{entry.question}</p>
+                    <p className="mt-1 text-sm text-slate-400">{entry.answer}</p>
+
+                    <div className="mt-3 flex gap-2">
+                      <Button
+                        variant="secondary"
+                        disabled={deletingFaqEntryId === entry.id}
+                        onClick={() => handleStartEditFaqEntry(entry)}
+                      >
+                        Edit
+                      </Button>
+                      <Button
+                        variant="secondary"
+                        disabled={deletingFaqEntryId === entry.id}
+                        onClick={() => handleDeleteFaqEntry(source.id, entry.id)}
+                      >
+                        {deletingFaqEntryId === entry.id ? "Deleting..." : "Delete"}
+                      </Button>
+                    </div>
+                  </li>
+                ),
+              )}
+            </ul>
+          )}
+
+          {deleteFaqEntryError && (
+            <div className="mt-3">
+              <ErrorText message={deleteFaqEntryError} />
+            </div>
+          )}
+
+          <form
+            onSubmit={(event) => handleCreateFaqEntry(event, source.id)}
+            className="mt-4 space-y-3"
+            noValidate
+          >
+            <h3 className="text-sm font-semibold text-slate-300">Add entry</h3>
+
+            {createFaqEntryError && <ErrorText message={createFaqEntryError} />}
+
+            <input
+              aria-label="Question"
+              className="w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-white placeholder:text-slate-500 focus:border-slate-500 focus:outline-none focus:ring-2 focus:ring-slate-600"
+              placeholder="Question"
+              required
+              disabled={creatingFaqEntry}
+              value={newFaqQuestion}
+              onChange={(event) => setNewFaqQuestion(event.target.value)}
+            />
+            <input
+              aria-label="Answer"
+              className="w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-white placeholder:text-slate-500 focus:border-slate-500 focus:outline-none focus:ring-2 focus:ring-slate-600"
+              placeholder="Answer"
+              required
+              disabled={creatingFaqEntry}
+              value={newFaqAnswer}
+              onChange={(event) => setNewFaqAnswer(event.target.value)}
+            />
+            <Button
+              type="submit"
+              disabled={
+                creatingFaqEntry || !newFaqQuestion.trim() || !newFaqAnswer.trim()
+              }
+            >
+              {creatingFaqEntry ? "Adding..." : "Add entry"}
+            </Button>
+          </form>
+        </div>
+      )}
+    </li>
+  );
+
+  const sourceTabKnowledgeSources = knowledgeSources?.filter(
+    (source) => source.type !== "manual_faq",
+  );
+  const faqTabKnowledgeSources = knowledgeSources?.filter(
+    (source) => source.type === "manual_faq",
+  );
+
   return (
     <PageShell title={assistant.name} description="Assistant configuration.">
       <div className="mb-6 flex items-center justify-between gap-4">
@@ -1334,348 +1563,176 @@ export default function AssistantEditorPage() {
           <Card>
             <h2 className="text-lg font-semibold">Knowledge</h2>
             <p className="mt-1 text-sm text-slate-400">
-              Files, websites, and manual FAQs this assistant can answer from.
+              Files, websites, and FAQs this assistant can answer from.
             </p>
 
-            <form
-              onSubmit={handleUploadFile}
-              className="mt-4 flex flex-wrap items-center gap-3 border-b border-slate-800 pb-4"
-              noValidate
-            >
-              <input
-                aria-label="Upload a file"
-                type="file"
-                accept=".pdf,.docx,.md,.txt"
-                disabled={uploading}
-                onChange={(event) => setUploadFile(event.target.files?.[0] ?? null)}
-                className="text-sm text-slate-300 file:mr-3 file:rounded-lg file:border file:border-slate-700 file:bg-slate-950 file:px-3 file:py-2 file:text-sm file:text-white"
+            <div className="mt-4">
+              <Tabs
+                items={KNOWLEDGE_SUB_TABS}
+                activeKey={knowledgeSubTab}
+                onChange={setKnowledgeSubTab}
               />
-              <Button type="submit" disabled={uploading || !uploadFile}>
-                {uploading ? "Uploading..." : "Upload file"}
-              </Button>
-              {uploadError && <ErrorText message={uploadError} />}
-            </form>
+            </div>
 
-            <form
-              onSubmit={handleAddWebsite}
-              className="mt-4 flex flex-wrap items-center gap-3 border-b border-slate-800 pb-4"
-              noValidate
-            >
-              <input
-                aria-label="Website URL"
-                type="url"
-                placeholder="https://example.com"
-                required
-                disabled={addingWebsite}
-                value={websiteUrl}
-                onChange={(event) => setWebsiteUrl(event.target.value)}
-                className="min-w-64 flex-1 rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-white placeholder:text-slate-500 focus:border-slate-500 focus:outline-none focus:ring-2 focus:ring-slate-600"
-              />
-              <Button type="submit" disabled={addingWebsite || !websiteUrl.trim()}>
-                {addingWebsite ? "Adding..." : "Add website"}
-              </Button>
-              {addWebsiteError && <ErrorText message={addWebsiteError} />}
-            </form>
-
-            <form
-              onSubmit={handleAddFaqSource}
-              className="mt-4 flex flex-wrap items-center gap-3 border-b border-slate-800 pb-4"
-              noValidate
-            >
-              <input
-                aria-label="FAQ source name"
-                placeholder="FAQ source name"
-                required
-                disabled={addingFaqSource}
-                value={faqSourceName}
-                onChange={(event) => setFaqSourceName(event.target.value)}
-                className="min-w-64 flex-1 rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-white placeholder:text-slate-500 focus:border-slate-500 focus:outline-none focus:ring-2 focus:ring-slate-600"
-              />
-              <Button type="submit" disabled={addingFaqSource || !faqSourceName.trim()}>
-                {addingFaqSource ? "Adding..." : "Add FAQ source"}
-              </Button>
-              {addFaqSourceError && <ErrorText message={addFaqSourceError} />}
-            </form>
-
-            {retryError && (
+            {knowledgeSubTab === "source" && (
               <div className="mt-4">
-                <ErrorText message={retryError} />
+                <p className="text-sm text-slate-400">
+                  Upload a file or add your company&apos;s website - the
+                  assistant answers from what it finds here.
+                </p>
+
+                <form
+                  onSubmit={handleUploadFile}
+                  className="mt-4 flex flex-wrap items-center gap-3 border-b border-slate-800 pb-4"
+                  noValidate
+                >
+                  <input
+                    aria-label="Upload a file"
+                    type="file"
+                    accept=".pdf,.docx,.md,.txt"
+                    disabled={uploading}
+                    onChange={(event) =>
+                      setUploadFile(event.target.files?.[0] ?? null)
+                    }
+                    className="text-sm text-slate-300 file:mr-3 file:rounded-lg file:border file:border-slate-700 file:bg-slate-950 file:px-3 file:py-2 file:text-sm file:text-white"
+                  />
+                  <Button type="submit" disabled={uploading || !uploadFile}>
+                    {uploading ? "Uploading..." : "Upload file"}
+                  </Button>
+                  {uploadError && <ErrorText message={uploadError} />}
+                </form>
+
+                <form
+                  onSubmit={handleAddWebsite}
+                  className="mt-4 flex flex-wrap items-center gap-3 border-b border-slate-800 pb-4"
+                  noValidate
+                >
+                  <input
+                    aria-label="Website URL"
+                    type="url"
+                    placeholder="https://example.com"
+                    required
+                    disabled={addingWebsite}
+                    value={websiteUrl}
+                    onChange={(event) => setWebsiteUrl(event.target.value)}
+                    className="min-w-64 flex-1 rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-white placeholder:text-slate-500 focus:border-slate-500 focus:outline-none focus:ring-2 focus:ring-slate-600"
+                  />
+                  <Button type="submit" disabled={addingWebsite || !websiteUrl.trim()}>
+                    {addingWebsite ? "Adding..." : "Add website"}
+                  </Button>
+                  {addWebsiteError && <ErrorText message={addWebsiteError} />}
+                </form>
+
+                {retryError && (
+                  <div className="mt-4">
+                    <ErrorText message={retryError} />
+                  </div>
+                )}
+
+                {recrawlError && (
+                  <div className="mt-4">
+                    <ErrorText message={recrawlError} />
+                  </div>
+                )}
+
+                {deleteSourceError && (
+                  <div className="mt-4">
+                    <ErrorText message={deleteSourceError} />
+                  </div>
+                )}
+
+                {knowledgeSourcesError && (
+                  <div className="mt-4">
+                    <ErrorText message={knowledgeSourcesError} />
+                  </div>
+                )}
+
+                {knowledgeSources === null && !knowledgeSourcesError && (
+                  <div className="mt-4">
+                    <LoadingState message="Loading knowledge sources..." />
+                  </div>
+                )}
+
+                {knowledgeSources !== null &&
+                  sourceTabKnowledgeSources?.length === 0 && (
+                    <div className="mt-4">
+                      <EmptyState message="No knowledge sources yet." />
+                    </div>
+                  )}
+
+                {knowledgeSources !== null &&
+                  sourceTabKnowledgeSources &&
+                  sourceTabKnowledgeSources.length > 0 && (
+                    <ul className="mt-4 space-y-3">
+                      {sourceTabKnowledgeSources.map(renderKnowledgeSourceItem)}
+                    </ul>
+                  )}
               </div>
             )}
 
-            {recrawlError && (
+            {knowledgeSubTab === "knowledge" && (
               <div className="mt-4">
-                <ErrorText message={recrawlError} />
-              </div>
-            )}
+                <p className="text-sm text-slate-400">
+                  Questions and answers the assistant can use on a call -
+                  written by you, or generated automatically from a file or
+                  website you add under Source.
+                </p>
 
-            {deleteSourceError && (
-              <div className="mt-4">
-                <ErrorText message={deleteSourceError} />
-              </div>
-            )}
-
-            {knowledgeSourcesError && (
-              <div className="mt-4">
-                <ErrorText message={knowledgeSourcesError} />
-              </div>
-            )}
-
-            {knowledgeSources === null && !knowledgeSourcesError && (
-              <div className="mt-4">
-                <LoadingState message="Loading knowledge sources..." />
-              </div>
-            )}
-
-            {knowledgeSources !== null && knowledgeSources.length === 0 && (
-              <div className="mt-4">
-                <EmptyState message="No knowledge sources yet." />
-              </div>
-            )}
-
-            {knowledgeSources !== null && knowledgeSources.length > 0 && (
-              <ul className="mt-4 space-y-3">
-                {knowledgeSources.map((source) => (
-                  <li
-                    key={source.id}
-                    className="rounded-xl border border-slate-800 px-4 py-3"
+                <form
+                  onSubmit={handleAddFaqSource}
+                  className="mt-4 flex flex-wrap items-center gap-3 border-b border-slate-800 pb-4"
+                  noValidate
+                >
+                  <input
+                    aria-label="FAQ source name"
+                    placeholder="FAQ source name"
+                    required
+                    disabled={addingFaqSource}
+                    value={faqSourceName}
+                    onChange={(event) => setFaqSourceName(event.target.value)}
+                    className="min-w-64 flex-1 rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-white placeholder:text-slate-500 focus:border-slate-500 focus:outline-none focus:ring-2 focus:ring-slate-600"
+                  />
+                  <Button
+                    type="submit"
+                    disabled={addingFaqSource || !faqSourceName.trim()}
                   >
-                    <div className="flex flex-wrap items-center justify-between gap-3">
-                      <div>
-                        <span className="text-xs font-medium text-slate-500">
-                          {knowledgeSourceTypeLabel(source.type)}
-                        </span>
-                        <span className="ml-3 font-medium">
-                          {knowledgeSourceDisplayName(source)}
-                        </span>
-                      </div>
+                    {addingFaqSource ? "Adding..." : "Add FAQ source"}
+                  </Button>
+                  {addFaqSourceError && <ErrorText message={addFaqSourceError} />}
+                </form>
 
-                      <KnowledgeSourceStatusBadge status={source.status} />
-                    </div>
+                {deleteSourceError && (
+                  <div className="mt-4">
+                    <ErrorText message={deleteSourceError} />
+                  </div>
+                )}
 
-                    {source.type === "website" && source.crawled_pages && (
-                      <p className="mt-1 text-xs text-slate-500">
-                        {source.crawled_pages.length} page
-                        {source.crawled_pages.length === 1 ? "" : "s"} crawled
-                      </p>
-                    )}
+                {knowledgeSourcesError && (
+                  <div className="mt-4">
+                    <ErrorText message={knowledgeSourcesError} />
+                  </div>
+                )}
 
-                    {source.status === "failed" && source.error_message && (
-                      <div className="mt-2">
-                        <ErrorText message={source.error_message} />
-                      </div>
-                    )}
+                {knowledgeSources === null && !knowledgeSourcesError && (
+                  <div className="mt-4">
+                    <LoadingState message="Loading knowledge sources..." />
+                  </div>
+                )}
 
-                    <div className="mt-2 flex gap-2">
-                      {canRetryKnowledgeSource(source) && (
-                        <Button
-                          variant="secondary"
-                          disabled={retryingId === source.id}
-                          onClick={() => handleRetry(source.id)}
-                        >
-                          {retryingId === source.id ? "Retrying..." : "Retry"}
-                        </Button>
-                      )}
+                {knowledgeSources !== null && faqTabKnowledgeSources?.length === 0 && (
+                  <div className="mt-4">
+                    <EmptyState message="No FAQs yet." />
+                  </div>
+                )}
 
-                      {canRecrawlKnowledgeSource(source) && (
-                        <Button
-                          variant="secondary"
-                          disabled={recrawlingId === source.id}
-                          onClick={() => handleRecrawl(source.id)}
-                        >
-                          {recrawlingId === source.id ? "Recrawling..." : "Recrawl"}
-                        </Button>
-                      )}
-
-                      {source.type === "manual_faq" && (
-                        <Button
-                          variant="secondary"
-                          onClick={() => handleToggleFaqSource(source.id)}
-                        >
-                          {expandedFaqSourceId === source.id
-                            ? "Hide entries"
-                            : "Manage entries"}
-                        </Button>
-                      )}
-
-                      <Button
-                        variant="danger"
-                        disabled={deletingSourceId === source.id}
-                        onClick={() => handleDeleteSource(source.id)}
-                      >
-                        {deletingSourceId === source.id ? "Deleting..." : "Delete"}
-                      </Button>
-                    </div>
-
-                    {source.type === "manual_faq" &&
-                      expandedFaqSourceId === source.id && (
-                        <div className="mt-4 border-t border-slate-800 pt-4">
-                          {faqEntriesError && (
-                            <div className="mb-3">
-                              <ErrorText message={faqEntriesError} />
-                            </div>
-                          )}
-
-                          {faqEntries === null && !faqEntriesError && (
-                            <LoadingState message="Loading entries..." />
-                          )}
-
-                          {faqEntries !== null && faqEntries.length === 0 && (
-                            <EmptyState message="No entries yet." />
-                          )}
-
-                          {faqEntries !== null && faqEntries.length > 0 && (
-                            <ul className="space-y-3">
-                              {faqEntries.map((entry) =>
-                                editingFaqEntryId === entry.id ? (
-                                  <li
-                                    key={entry.id}
-                                    className="rounded-xl border border-slate-800 px-4 py-3"
-                                  >
-                                    {editFaqEntryError && (
-                                      <div className="mb-3">
-                                        <ErrorText message={editFaqEntryError} />
-                                      </div>
-                                    )}
-
-                                    <div className="space-y-2">
-                                      <input
-                                        aria-label="Edit question"
-                                        className="w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-white placeholder:text-slate-500 focus:border-slate-500 focus:outline-none focus:ring-2 focus:ring-slate-600"
-                                        placeholder="Question"
-                                        disabled={savingFaqEntryEdit}
-                                        value={editFaqQuestion}
-                                        onChange={(event) =>
-                                          setEditFaqQuestion(event.target.value)
-                                        }
-                                      />
-                                      <input
-                                        aria-label="Edit answer"
-                                        className="w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-white placeholder:text-slate-500 focus:border-slate-500 focus:outline-none focus:ring-2 focus:ring-slate-600"
-                                        placeholder="Answer"
-                                        disabled={savingFaqEntryEdit}
-                                        value={editFaqAnswer}
-                                        onChange={(event) =>
-                                          setEditFaqAnswer(event.target.value)
-                                        }
-                                      />
-                                    </div>
-
-                                    <div className="mt-3 flex gap-3">
-                                      <Button
-                                        disabled={
-                                          savingFaqEntryEdit ||
-                                          !editFaqQuestion.trim() ||
-                                          !editFaqAnswer.trim()
-                                        }
-                                        onClick={() =>
-                                          handleSaveFaqEntryEdit(source.id, entry.id)
-                                        }
-                                      >
-                                        {savingFaqEntryEdit ? "Saving..." : "Save"}
-                                      </Button>
-                                      <Button
-                                        variant="secondary"
-                                        disabled={savingFaqEntryEdit}
-                                        onClick={handleCancelEditFaqEntry}
-                                      >
-                                        Cancel
-                                      </Button>
-                                    </div>
-                                  </li>
-                                ) : (
-                                  <li
-                                    key={entry.id}
-                                    className="rounded-xl border border-slate-800 px-4 py-3"
-                                  >
-                                    <p className="font-medium">{entry.question}</p>
-                                    <p className="mt-1 text-sm text-slate-400">
-                                      {entry.answer}
-                                    </p>
-
-                                    <div className="mt-3 flex gap-2">
-                                      <Button
-                                        variant="secondary"
-                                        disabled={deletingFaqEntryId === entry.id}
-                                        onClick={() => handleStartEditFaqEntry(entry)}
-                                      >
-                                        Edit
-                                      </Button>
-                                      <Button
-                                        variant="secondary"
-                                        disabled={deletingFaqEntryId === entry.id}
-                                        onClick={() =>
-                                          handleDeleteFaqEntry(source.id, entry.id)
-                                        }
-                                      >
-                                        {deletingFaqEntryId === entry.id
-                                          ? "Deleting..."
-                                          : "Delete"}
-                                      </Button>
-                                    </div>
-                                  </li>
-                                ),
-                              )}
-                            </ul>
-                          )}
-
-                          {deleteFaqEntryError && (
-                            <div className="mt-3">
-                              <ErrorText message={deleteFaqEntryError} />
-                            </div>
-                          )}
-
-                          <form
-                            onSubmit={(event) =>
-                              handleCreateFaqEntry(event, source.id)
-                            }
-                            className="mt-4 space-y-3"
-                            noValidate
-                          >
-                            <h3 className="text-sm font-semibold text-slate-300">
-                              Add entry
-                            </h3>
-
-                            {createFaqEntryError && (
-                              <ErrorText message={createFaqEntryError} />
-                            )}
-
-                            <input
-                              aria-label="Question"
-                              className="w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-white placeholder:text-slate-500 focus:border-slate-500 focus:outline-none focus:ring-2 focus:ring-slate-600"
-                              placeholder="Question"
-                              required
-                              disabled={creatingFaqEntry}
-                              value={newFaqQuestion}
-                              onChange={(event) =>
-                                setNewFaqQuestion(event.target.value)
-                              }
-                            />
-                            <input
-                              aria-label="Answer"
-                              className="w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-white placeholder:text-slate-500 focus:border-slate-500 focus:outline-none focus:ring-2 focus:ring-slate-600"
-                              placeholder="Answer"
-                              required
-                              disabled={creatingFaqEntry}
-                              value={newFaqAnswer}
-                              onChange={(event) => setNewFaqAnswer(event.target.value)}
-                            />
-                            <Button
-                              type="submit"
-                              disabled={
-                                creatingFaqEntry ||
-                                !newFaqQuestion.trim() ||
-                                !newFaqAnswer.trim()
-                              }
-                            >
-                              {creatingFaqEntry ? "Adding..." : "Add entry"}
-                            </Button>
-                          </form>
-                        </div>
-                      )}
-                  </li>
-                ))}
-              </ul>
+                {knowledgeSources !== null &&
+                  faqTabKnowledgeSources &&
+                  faqTabKnowledgeSources.length > 0 && (
+                    <ul className="mt-4 space-y-3">
+                      {faqTabKnowledgeSources.map(renderKnowledgeSourceItem)}
+                    </ul>
+                  )}
+              </div>
             )}
           </Card>
         </div>
@@ -1713,6 +1770,14 @@ export default function AssistantEditorPage() {
                   value={customPrompt}
                   onChange={(event) => setCustomPrompt(event.target.value)}
                 />
+                <p className="mt-2 text-xs text-slate-500">
+                  Optional variables:{" "}
+                  <code className="text-slate-400">{"{{workspace.name}}"}</code>,{" "}
+                  <code className="text-slate-400">{"{{assistant.name}}"}</code>,{" "}
+                  <code className="text-slate-400">{"{{caller.name}}"}</code>. Any
+                  other <code className="text-slate-400">{"{{...}}"}</code> will be
+                  rejected when you save.
+                </p>
               </div>
 
               <Button type="submit" disabled={saving || !voiceId || !greeting.trim()}>
