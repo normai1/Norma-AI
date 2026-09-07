@@ -15,13 +15,44 @@ import {
 } from "@/components/organizations/ui";
 import { fetchTestCallTicket, getAssistant, type Assistant } from "@/lib/assistants";
 import {
+  ECHO_GATE_IDLE,
+  type EchoGateState,
   floatToPCM16,
   interpretCloseCode,
+  nextEchoGate,
   pcm16ToFloat32,
   resampleLinear,
+  rms,
 } from "@/lib/audio";
 
 const VOICE_WS_URL = process.env.NEXT_PUBLIC_VOICE_WS_URL ?? "ws://localhost:8080";
+
+/**
+ * Identifies which build of this page a session is actually running, sent to
+ * the voice worker so it appears in that session's server logs.
+ *
+ * A browser serving a cached bundle is indistinguishable, from the server
+ * side, from a fix that did not work - and several rounds of barge-in
+ * debugging were spent unable to tell those apart. Bump this whenever the
+ * audio path here changes.
+ */
+const CLIENT_BUILD = "v5-direct-audio";
+
+/**
+ * Whether to gate the microphone while the assistant is speaking.
+ *
+ * Off by default. It was built to stop the assistant hearing itself on a
+ * speaker setup, but its threshold is a multiple of the *peak* echo it
+ * learns, and with loud speakers that bar can land above the caller's own
+ * voice - locking them out for the whole reply, which is precisely when an
+ * interruption needs to get through. Measured in a real session: audio
+ * arriving at the server sat at 0.02-0.06 of full scale throughout, while
+ * the caller was speaking normally.
+ *
+ * Set NEXT_PUBLIC_ECHO_GATE=on to re-enable it for a setup where the
+ * feedback loop is the bigger problem.
+ */
+const ECHO_GATE_ENABLED = process.env.NEXT_PUBLIC_ECHO_GATE === "on";
 const TARGET_SAMPLE_RATE = 16000;
 
 type CallStatus =
@@ -135,6 +166,7 @@ type ServerMessage =
   | { type: "transcript"; text: string; is_final: boolean }
   | { type: "turn_ended"; text: string }
   | { type: "caller_speech_started" }
+  | { type: "playback_cancelled" }
   | { type: "llm_delta"; text: string }
   | { type: "llm_complete"; text: string }
   | { type: "llm_error"; text: string }
@@ -163,6 +195,36 @@ export default function TestCallPage() {
   const micStreamRef = useRef<MediaStream | null>(null);
   const playbackQueueRef = useRef<AudioBufferSourceNode[]>([]);
   const nextPlaybackTimeRef = useRef(0);
+  /**
+   * Set only while playback is successfully routed through playbackAudioRef's
+   * element; null means "play straight to context.destination instead". The
+   * AudioBufferSourceNode graph and its precise gapless scheduling are
+   * identical either way - this only changes where that graph's output goes.
+   */
+  const playbackDestinationRef = useRef<MediaStreamAudioDestinationNode | null>(null);
+  /**
+   * A real, DOM-rendered <audio> element (see the JSX below), used as the
+   * playback sink so the browser's echo canceller on the mic stream has an
+   * actual played reference to cancel against - which it does not get from
+   * raw context.destination output, leaving the assistant's own voice to
+   * bleed into the mic on speaker setups and keep VAD reading "caller
+   * speaking" continuously, defeating barge-in.
+   *
+   * It must genuinely be in the DOM: a first attempt at this used a detached
+   * `new Audio()`, which Chrome accepted without complaint and then played
+   * nothing at all, silencing every reply with no error anywhere. Hence both
+   * that element and the fallback below - echo cancellation is worth having,
+   * but never at the risk of a call the caller cannot hear.
+   */
+  const playbackAudioRef = useRef<HTMLAudioElement | null>(null);
+  /**
+   * Keeps the assistant from hearing itself: while its reply is playing out
+   * of these speakers, microphone frames that are just that playback coming
+   * back are replaced with silence, and only genuinely louder speech is
+   * forwarded. See nextEchoGate for why this is the fix rather than anything
+   * in the barge-in path.
+   */
+  const echoGateRef = useRef<EchoGateState>(ECHO_GATE_IDLE);
 
   const fetchAssistant = useCallback(async () => {
     if (!activeWorkspace) {
@@ -215,6 +277,14 @@ export default function TestCallPage() {
     }
     playbackQueueRef.current = [];
 
+    // The element itself is owned by React (it is rendered in the JSX below),
+    // so only its playback state is unwound here - never the ref.
+    playbackAudioRef.current?.pause();
+    if (playbackAudioRef.current) {
+      playbackAudioRef.current.srcObject = null;
+    }
+    playbackDestinationRef.current = null;
+
     void audioContextRef.current?.close();
     audioContextRef.current = null;
     nextPlaybackTimeRef.current = 0;
@@ -222,22 +292,63 @@ export default function TestCallPage() {
 
   useEffect(() => () => teardown(), [teardown]);
 
-  const flushPlayback = useCallback(() => {
-    for (const node of playbackQueueRef.current) {
+  /**
+   * Reports what the browser did, back to the server, so it lands in the
+   * call's own log. The audio the caller actually hears is scheduled here,
+   * not on the server, so without this the server cannot tell "I cancelled
+   * and the browser stopped" from "I cancelled and the browser carried
+   * on" - the exact ambiguity that made this bug so hard to place.
+   */
+  const reportToServer = useCallback((event: Record<string, unknown>) => {
+    const ws = wsRef.current;
+
+    if (ws?.readyState === WebSocket.OPEN) {
       try {
-        node.stop();
+        ws.send(JSON.stringify({ source: "client", ...event }));
       } catch {
-        // Already stopped or finished naturally.
+        // Diagnostics must never break a call.
       }
     }
-    playbackQueueRef.current = [];
-
-    if (audioContextRef.current) {
-      nextPlaybackTimeRef.current = audioContextRef.current.currentTime;
-    }
-
-    setSpeaking(false);
   }, []);
+
+  const flushPlayback = useCallback(
+    (reason: string) => {
+      const queued = playbackQueueRef.current.length;
+      let stopped = 0;
+
+      for (const node of playbackQueueRef.current) {
+        try {
+          node.stop();
+          stopped += 1;
+        } catch {
+          // Already stopped or finished naturally.
+        }
+      }
+      playbackQueueRef.current = [];
+
+      const context = audioContextRef.current;
+      // How much audio was still scheduled to play - the thing the caller
+      // would have gone on hearing had this not run.
+      const remaining = context
+        ? Math.max(0, nextPlaybackTimeRef.current - context.currentTime)
+        : 0;
+
+      if (context) {
+        nextPlaybackTimeRef.current = context.currentTime;
+      }
+
+      setSpeaking(false);
+
+      reportToServer({
+        event: "flush",
+        reason,
+        queued,
+        stopped,
+        remaining: Number(remaining.toFixed(2)),
+      });
+    },
+    [reportToServer],
+  );
 
   const playAudioChunk = useCallback((buffer: ArrayBuffer) => {
     const context = audioContextRef.current;
@@ -395,7 +506,16 @@ export default function TestCallPage() {
           finalizeAssistantLine(message.text);
           break;
         case "caller_speech_started":
-          flushPlayback();
+          flushPlayback("caller_speech_started");
+          break;
+        case "playback_cancelled":
+          // The server abandoned the reply it was speaking. Audio arrives
+          // ahead of playback and is scheduled locally, so without dropping
+          // what is already queued here the assistant audibly carries on for
+          // seconds after being interrupted - which is what made a
+          // server-side barge-in look like it did nothing at all whenever
+          // caller_speech_started above was not the thing that triggered it.
+          flushPlayback("playback_cancelled");
           break;
         case "reply_finished":
           setSpeaking(false);
@@ -467,7 +587,19 @@ export default function TestCallPage() {
 
     try {
       micStream = await navigator.mediaDevices.getUserMedia({
-        audio: { channelCount: 1 },
+        // Explicit rather than relying on browser defaults, and only half of
+        // the defence: echo cancellation can only subtract audio the browser
+        // sees as a played reference, which raw context.destination output is
+        // not. playbackAudioRef's element is the other half - without it this
+        // constraint has little to work with on a speaker setup, and the
+        // assistant's own TTS bleeds into the mic, keeping VAD reading
+        // "caller speaking" continuously and defeating barge-in.
+        audio: {
+          channelCount: 1,
+          echoCancellation: true,
+          noiseSuppression: true,
+          autoGainControl: true,
+        },
       });
     } catch {
       setCallStatus("mic-denied");
@@ -486,7 +618,8 @@ export default function TestCallPage() {
     setCallStatus("connecting");
 
     const ws = new WebSocket(
-      `${VOICE_WS_URL}/media/session?ticket=${encodeURIComponent(ticket)}`,
+      `${VOICE_WS_URL}/media/session?ticket=${encodeURIComponent(ticket)}` +
+        `&client=${encodeURIComponent(CLIENT_BUILD)}`,
     );
     ws.binaryType = "arraybuffer";
     wsRef.current = ws;
@@ -509,7 +642,24 @@ export default function TestCallPage() {
           samples = resampleLinear(samples, context.sampleRate, TARGET_SAMPLE_RATE);
         }
 
-        ws.send(floatToPCM16(samples));
+        // nextPlaybackTimeRef is the AudioContext-clock time the queued reply
+        // finishes, so this is exactly "the assistant is audible right now".
+        const assistantPlaying =
+          ECHO_GATE_ENABLED && context.currentTime < nextPlaybackTimeRef.current;
+        const decision = nextEchoGate(echoGateRef.current, {
+          level: rms(samples),
+          assistantPlaying,
+          now: performance.now(),
+        });
+
+        echoGateRef.current = decision.state;
+
+        // Silence rather than dropping the frame: the server's turn detection
+        // and STT both read this as a continuous stream, and skipping frames
+        // would compress its sense of time.
+        ws.send(
+          floatToPCM16(decision.passThrough ? samples : new Float32Array(samples.length)),
+        );
       };
 
       source.connect(workletNode);
@@ -567,6 +717,15 @@ export default function TestCallPage() {
       title={`Test call - ${assistant.name}`}
       description="Talk to your assistant right from the browser. No phone number needed."
     >
+      {/*
+        The assistant's own voice comes out of here, not straight out of the
+        AudioContext - see playbackAudioRef. Rendered rather than constructed
+        in JavaScript because a detached element silently plays nothing at
+        all. It has no controls and so draws nothing; the caller drives the
+        call from the buttons below.
+      */}
+      <audio ref={playbackAudioRef} playsInline aria-hidden="true" />
+
       <div className="mb-6">
         <Link
           href={`/assistants/${assistant.id}`}
@@ -581,6 +740,14 @@ export default function TestCallPage() {
           <div>
             <p className="text-sm text-slate-400">Status</p>
             <p className="text-lg font-medium">{STATUS_LABEL[callStatus]}</p>
+            {/*
+              Visible on purpose. A browser quietly serving a cached bundle
+              looks exactly like a fix that did not work, and that ambiguity
+              cost several rounds of debugging here - the voice worker was
+              recording a client build two releases behind the one being
+              tested. Now it can be read off the screen in one glance.
+            */}
+            <p className="mt-1 text-xs text-slate-500">build {CLIENT_BUILD}</p>
           </div>
 
           {showDisconnect ? (

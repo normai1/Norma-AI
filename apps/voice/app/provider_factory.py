@@ -68,7 +68,10 @@ def get_tts_provider(name: str | None = None) -> TextToSpeechProvider:
                 "provider requires it.",
             )
 
-        return ElevenLabsTTS(api_key=config.ELEVENLABS_API_KEY)
+        return ElevenLabsTTS(
+            api_key=config.ELEVENLABS_API_KEY,
+            model_id=config.TTS_MODEL_ID,
+        )
 
     raise UnknownSpeechProviderError(
         f"Unknown TTS_PROVIDER {provider_name!r}. Valid options: "

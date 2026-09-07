@@ -154,6 +154,7 @@ class ElevenLabsTTS:
         *,
         voice_id: str,
         speed: float = 1.0,
+        previous_text: str = "",
     ) -> AsyncIterator[bytes]:
         if not text:
             return
@@ -161,16 +162,26 @@ class ElevenLabsTTS:
         client = self._client or httpx.AsyncClient()
         owns_client = self._client is None
 
+        # ElevenLabs' own documented mechanism for keeping prosody
+        # continuous when one piece of speech is requested as several
+        # separate generations - which is exactly what sentence-by-sentence
+        # streaming does. Omitted entirely (rather than sent empty) for a
+        # reply's first sentence, which has nothing before it.
+        body: dict[str, Any] = {
+            "text": text,
+            "model_id": self._model_id,
+            "voice_settings": {"speed": speed},
+        }
+
+        if previous_text:
+            body["previous_text"] = previous_text
+
         try:
             async with client.stream(
                 "POST",
                 f"{self._base_url}/v1/text-to-speech/{voice_id}/stream",
                 params={"output_format": "pcm_16000"},
-                json={
-                    "text": text,
-                    "model_id": self._model_id,
-                    "voice_settings": {"speed": speed},
-                },
+                json=body,
                 headers={"xi-api-key": self._api_key},
                 timeout=self._timeout_seconds,
             ) as response:

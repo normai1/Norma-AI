@@ -1,11 +1,45 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  ECHO_GATE_HOLD_MS,
+  ECHO_GATE_IDLE,
+  ECHO_GATE_LEARN_FRAMES,
+  type EchoGateState,
   floatToPCM16,
   interpretCloseCode,
+  nextEchoGate,
   pcm16ToFloat32,
   resampleLinear,
+  rms,
 } from "./audio";
+
+/** Runs `frames` frames of the given level through the gate, in order. */
+function feed(
+  state: EchoGateState,
+  level: number,
+  frames: number,
+  { assistantPlaying = true, now = 0 } = {},
+): { state: EchoGateState; sent: number } {
+  let sent = 0;
+  let current = state;
+
+  for (let i = 0; i < frames; i++) {
+    const decision = nextEchoGate(current, { level, assistantPlaying, now: now + i * 20 });
+
+    current = decision.state;
+
+    if (decision.passThrough) {
+      sent += 1;
+    }
+  }
+
+  return { state: current, sent };
+}
+
+/** The gate having learned this room's echo level, ready to judge against it. */
+function trained(echoLevel: number): EchoGateState {
+  return feed(ECHO_GATE_IDLE, echoLevel, ECHO_GATE_LEARN_FRAMES).state;
+}
 
 describe("floatToPCM16", () => {
   it("maps 0.0 to 0", () => {
@@ -78,6 +112,109 @@ describe("resampleLinear", () => {
     const result = resampleLinear(samples, 16000, 48000);
 
     expect(result).toHaveLength(6);
+  });
+});
+
+describe("rms", () => {
+  it("is zero for silence and for an empty frame", () => {
+    expect(rms(new Float32Array(64))).toBe(0);
+    expect(rms(new Float32Array(0))).toBe(0);
+  });
+
+  it("grows with loudness", () => {
+    expect(rms(new Float32Array([0.5, -0.5]))).toBeGreaterThan(
+      rms(new Float32Array([0.05, -0.05])),
+    );
+  });
+});
+
+describe("nextEchoGate", () => {
+  it("never gates while the assistant is silent, however loud the room is", () => {
+    // The caller asking the original question must always get through -
+    // gating that would leave the assistant deaf rather than merely
+    // over-talkative.
+    const quiet = feed(ECHO_GATE_IDLE, 0.001, 5, { assistantPlaying: false });
+    const loud = feed(ECHO_GATE_IDLE, 0.9, 5, { assistantPlaying: false });
+
+    expect(quiet.sent).toBe(5);
+    expect(loud.sent).toBe(5);
+  });
+
+  it("swallows the assistant's own playback coming back through the mic", () => {
+    // The feedback loop this exists to break: steady echo at the level the
+    // gate just learned must not reach the server, or it is transcribed and
+    // answered as if the caller had said it.
+    const { sent } = feed(trained(0.08), 0.08, 40);
+
+    expect(sent).toBe(0);
+  });
+
+  it("lets the caller through when they genuinely talk over the reply", () => {
+    // Speech into the machine's own mic is far louder than its speakers
+    // heard back across the room.
+    const decision = nextEchoGate(trained(0.05), {
+      level: 0.4,
+      assistantPlaying: true,
+      now: 1_000,
+    });
+
+    expect(decision.passThrough).toBe(true);
+  });
+
+  it("holds the gate open through the pauses between a caller's words", () => {
+    const opened = nextEchoGate(trained(0.05), {
+      level: 0.4,
+      assistantPlaying: true,
+      now: 1_000,
+    });
+
+    // A brief dip mid-sentence, well inside the hold window.
+    const gap = nextEchoGate(opened.state, {
+      level: 0.05,
+      assistantPlaying: true,
+      now: 1_000 + ECHO_GATE_HOLD_MS / 2,
+    });
+
+    expect(gap.passThrough).toBe(true);
+  });
+
+  it("closes again once the caller has actually stopped", () => {
+    const opened = nextEchoGate(trained(0.05), {
+      level: 0.4,
+      assistantPlaying: true,
+      now: 1_000,
+    });
+
+    const afterHold = nextEchoGate(opened.state, {
+      level: 0.05,
+      assistantPlaying: true,
+      now: 1_000 + ECHO_GATE_HOLD_MS + 1,
+    });
+
+    expect(afterHold.passThrough).toBe(false);
+  });
+
+  it("does not let the caller's own speech raise the echo baseline", () => {
+    // Otherwise a caller who keeps talking trains the gate to ignore them.
+    const before = trained(0.05);
+    const after = nextEchoGate(before, { level: 0.9, assistantPlaying: true, now: 1_000 });
+
+    expect(after.state.echoLevel).toBe(before.echoLevel);
+  });
+
+  it("resets once the reply finishes, so each reply is judged afresh", () => {
+    const during = trained(0.3);
+    const after = nextEchoGate(during, { level: 0.01, assistantPlaying: false, now: 5_000 });
+
+    expect(after.state).toEqual(ECHO_GATE_IDLE);
+  });
+
+  it("still gates a room quiet enough that the learned level is negligible", () => {
+    // With headphones the learned echo is ~0, so the absolute floor is what
+    // stops faint room noise being forwarded as if it were speech.
+    const { sent } = feed(trained(0.0001), 0.005, 20);
+
+    expect(sent).toBe(0);
   });
 });
 

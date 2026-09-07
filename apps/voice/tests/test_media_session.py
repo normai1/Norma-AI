@@ -1,5 +1,8 @@
 import json
+import time
+import uuid
 from concurrent.futures import CancelledError as FutureCancelledError
+from unittest.mock import MagicMock
 
 import jwt
 import pytest
@@ -14,6 +17,10 @@ import app.media_session as media_session_module
 from app import config
 from app.llm import LLMProviderUnavailable
 from app.main import app
+from app.media_session import (
+    _mostly_already_said,
+    build_voice_session_pipeline_worker,
+)
 from app.mock_llm import MockLLM
 from tests.conftest import (
     _TEST_JWT_ALGORITHM,
@@ -466,9 +473,12 @@ def test_media_session_cancels_an_in_flight_llm_call_on_caller_speech_started(
 
         # Turn 1's LLM call is now in flight (MockLLM is sleeping
         # chunk_delay_seconds before its first delta) - interrupt it.
-        # Also produces reply_finished (turn_ended() is still latched True
-        # from turn 1's own reset not having run yet, so TTSProcessor's
-        # barge-in guard treats this as a real interruption to announce).
+        # No playback_cancelled here: not one audio frame has reached the
+        # output transport yet, so there is nothing buffered for the caller
+        # to still be hearing and nothing to flush. reply_finished still
+        # follows (turn_ended() is latched True from turn 1's own reset not
+        # having run yet, so the barge-in is a real interruption to
+        # announce).
         ws.send_bytes(chunk)
         barge_in_messages = [json.loads(ws.receive_text()) for _ in range(2)]
 
@@ -581,6 +591,543 @@ def test_media_session_streams_sentence_audio_before_the_llm_finishes(
         "type": "llm_complete",
         "text": "We open at nine. We close at five.",
     } in text_messages
+
+
+def test_media_session_prefetches_the_next_sentences_tts_while_the_current_one_plays(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """
+    The bug fix behind "the assistant sounds like it's reading a script":
+    the second sentence's TTS first-byte round-trip must overlap the first
+    sentence's own playback, not start only once it finishes. Proven via
+    MockTTS.call_started_at: the pre-fix behavior could not start call 2
+    until call 1's own time_to_first_byte_seconds wait (plus its streaming)
+    had fully elapsed; overlapped, call 2 starts within a small scheduling
+    delta of call 1 - regardless of unrelated fixed overhead elsewhere in
+    the pipeline (turn detection, worker startup), which this comparison
+    of the two calls' own relative timing is immune to.
+    """
+
+    final = TranscriptEvent(text="What are your hours?", is_final=True)
+    mock_stt = MockSTT(script=[final], chunks_before_event=[1])
+    mock_llm = MockLLM(response="We open at nine. We close at five.")
+    mock_tts = MockTTS(time_to_first_byte_seconds=0.2)
+
+    monkeypatch.setattr(main_module, "get_stt_provider", lambda: mock_stt)
+    monkeypatch.setattr(main_module, "get_llm_provider", lambda: mock_llm)
+    monkeypatch.setattr(main_module, "fetch_glossary_terms", _fake_fetch_glossary_terms)
+    monkeypatch.setattr(main_module, "fetch_turn_sensitivity", _fake_fetch_turn_sensitivity)
+    _patch_session_setup(monkeypatch)
+    monkeypatch.setattr(main_module, "get_tts_provider", lambda: mock_tts)
+    monkeypatch.setattr(
+        media_session_module, "fetch_retrieved_context", _fake_fetch_retrieved_context
+    )
+    _patch_turn_detector_vad(
+        monkeypatch,
+        _ScriptedVADAnalyzer([VADState.SPEAKING, VADState.QUIET, VADState.QUIET]),
+    )
+
+    assistant_id = "00000000-0000-0000-0000-000000000016"
+    chunk = bytes(range(256)) * 5
+
+    with (
+        TestClient(app) as client,
+        client.websocket_connect(_media_session_url(assistant_id)) as ws,
+    ):
+        for _ in range(3):
+            ws.send_bytes(chunk)
+
+        received = []
+        expected_audio_length = (len("We open at nine.") + len("We close at five.")) * 320
+
+        while (
+            len(b"".join(value for kind, value in received if kind == "bytes"))
+            < expected_audio_length
+        ):
+            entry = _receive_one(ws)
+            received.append(entry)
+
+    assert mock_tts.call_count == 2
+    call_gap = mock_tts.call_started_at[1] - mock_tts.call_started_at[0]
+    # Sequential (pre-fix) could not start call 2 until call 1's own 0.2s
+    # first-byte wait had elapsed; overlapped, call 2 starts within a
+    # small scheduling delta of call 1 - well under half that delay even
+    # with real test-environment jitter.
+    assert call_gap < 0.1
+
+
+def test_media_session_reconnects_when_stt_closes_without_transcribing_anything(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """
+    Reported as "the assistant is not responding anything", and measured
+    against the live provider: ElevenLabs' realtime STT socket sometimes
+    closes a second or two into a session, cleanly, having yielded nothing
+    and raised nothing. That is invisible to any retry keyed on exceptions,
+    and the original code treated it as a stream that had finished its work
+    - so the caller was never transcribed again for the whole call, with no
+    transcript, no error and no failover to show for it. The session must
+    reconnect and go on to answer normally.
+    """
+
+    final = TranscriptEvent(text="What are your hours?", is_final=True)
+    mock_stt = MockSTT(script=[final], chunks_before_event=[1], silent_closes=1)
+    mock_llm = MockLLM(response="We open at nine.")
+    mock_tts = MockTTS()
+
+    monkeypatch.setattr(main_module, "get_stt_provider", lambda: mock_stt)
+    monkeypatch.setattr(main_module, "get_llm_provider", lambda: mock_llm)
+    monkeypatch.setattr(main_module, "fetch_glossary_terms", _fake_fetch_glossary_terms)
+    monkeypatch.setattr(main_module, "fetch_turn_sensitivity", _fake_fetch_turn_sensitivity)
+    _patch_session_setup(monkeypatch)
+    monkeypatch.setattr(main_module, "get_tts_provider", lambda: mock_tts)
+    monkeypatch.setattr(
+        media_session_module, "fetch_retrieved_context", _fake_fetch_retrieved_context
+    )
+    _patch_turn_detector_vad(
+        monkeypatch,
+        _ScriptedVADAnalyzer([VADState.SPEAKING, VADState.QUIET, VADState.QUIET]),
+    )
+
+    assistant_id = "00000000-0000-0000-0000-00000000001a"
+    chunk = bytes(range(256)) * 5
+
+    with (
+        TestClient(app) as client,
+        client.websocket_connect(_media_session_url(assistant_id)) as ws,
+    ):
+        for _ in range(3):
+            ws.send_bytes(chunk)
+
+        messages = []
+
+        while True:
+            kind, value = _receive_one(ws)
+
+            if kind == "text":
+                messages.append(value)
+
+                if value == {"type": "reply_finished"}:
+                    break
+
+    assert mock_stt.call_count == 2, "the silent close should have been reconnected"
+    assert {"type": "turn_ended", "text": "What are your hours?"} in messages
+    assert not any(message.get("type") == "session_failover" for message in messages)
+
+
+def test_media_session_reconnects_when_stt_closes_after_working_normally(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """
+    Reported as "the assistant stops answering after two responses", and
+    found in a real session's logs: the STT stream transcribed 14 events
+    over four healthy minutes, closed, and the remaining 56 seconds of that
+    call reached nothing at all.
+
+    A stream that has done useful work and then closes is the *common* case
+    of a live provider ending its own stream, not a sign the call is over -
+    only our own end-of-input means that. An earlier fix here reconnected
+    solely on closes that had produced no transcripts, which left exactly
+    this case unhandled. close_after_script=True models the provider hanging
+    up on its own after delivering its script.
+    """
+
+    mock_stt = MockSTT(
+        script=[TranscriptEvent(text="What are your hours?", is_final=True)],
+        chunks_before_event=[1],
+        close_after_script=True,
+    )
+    mock_llm = MockLLM(response="We open at nine.")
+    mock_tts = MockTTS()
+
+    monkeypatch.setattr(main_module, "get_stt_provider", lambda: mock_stt)
+    monkeypatch.setattr(main_module, "get_llm_provider", lambda: mock_llm)
+    monkeypatch.setattr(main_module, "fetch_glossary_terms", _fake_fetch_glossary_terms)
+    monkeypatch.setattr(main_module, "fetch_turn_sensitivity", _fake_fetch_turn_sensitivity)
+    _patch_session_setup(monkeypatch)
+    monkeypatch.setattr(main_module, "get_tts_provider", lambda: mock_tts)
+    monkeypatch.setattr(
+        media_session_module, "fetch_retrieved_context", _fake_fetch_retrieved_context
+    )
+    _patch_turn_detector_vad(
+        monkeypatch,
+        _ScriptedVADAnalyzer([VADState.SPEAKING, VADState.QUIET, VADState.QUIET]),
+    )
+    # The real delay only exists to keep a refusing provider from becoming a
+    # hot loop; waiting it out here would just make the test slow.
+    monkeypatch.setattr(config, "STT_RECONNECT_DELAY_SECONDS", 0.01)
+
+    assistant_id = "00000000-0000-0000-0000-00000000001b"
+    chunk = bytes(range(256)) * 5
+
+    with (
+        TestClient(app) as client,
+        client.websocket_connect(_media_session_url(assistant_id)) as ws,
+    ):
+        for _ in range(3):
+            ws.send_bytes(chunk)
+
+        while True:
+            kind, value = _receive_one(ws)
+
+            if kind == "text" and value == {"type": "reply_finished"}:
+                break
+
+        # Reconnected rather than leaving the caller unheard for the rest of
+        # the call - the whole point. Polled because the reconnect is a
+        # background task with a deliberate delay in front of it, not
+        # something the reply itself waits on.
+        deadline = time.monotonic() + 5
+
+        while mock_stt.call_count < 2 and time.monotonic() < deadline:
+            time.sleep(0.05)
+
+    assert mock_stt.call_count > 1, (
+        "a stream that closed after transcribing must still be reconnected"
+    )
+
+
+def test_media_session_reconnecting_stt_does_not_starve_the_new_stream_of_audio(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """
+    The reconnect must hand the replacement stream the caller's audio, not
+    lose it to the stream it replaced.
+
+    Each reconnect builds a fresh iterator over the same audio queue. The
+    previous one is left suspended inside queue.get(), and that pending
+    waiter keeps taking frames the new stream then never sees - so every
+    reconnect leaves another thief behind and each new stream is starved a
+    little further. Measured in a real session: reconnect counts past
+    fifteen, every stream ending with zero events, while the caller's audio
+    was arriving at full volume the whole time. The caller went entirely
+    unheard, so nothing could interrupt anything.
+
+    Two silent closes force two reconnects; the third stream must still
+    receive enough audio to transcribe.
+    """
+
+    mock_stt = MockSTT(
+        script=[TranscriptEvent(text="What are your hours?", is_final=True)],
+        chunks_before_event=[3],
+        silent_closes=2,
+    )
+    mock_llm = MockLLM(response="We open at nine.")
+    mock_tts = MockTTS()
+
+    monkeypatch.setattr(main_module, "get_stt_provider", lambda: mock_stt)
+    monkeypatch.setattr(main_module, "get_llm_provider", lambda: mock_llm)
+    monkeypatch.setattr(main_module, "fetch_glossary_terms", _fake_fetch_glossary_terms)
+    monkeypatch.setattr(main_module, "fetch_turn_sensitivity", _fake_fetch_turn_sensitivity)
+    _patch_session_setup(monkeypatch)
+    monkeypatch.setattr(main_module, "get_tts_provider", lambda: mock_tts)
+    monkeypatch.setattr(
+        media_session_module, "fetch_retrieved_context", _fake_fetch_retrieved_context
+    )
+    monkeypatch.setattr(config, "STT_RECONNECT_DELAY_SECONDS", 0.01)
+    _patch_turn_detector_vad(
+        monkeypatch,
+        _ScriptedVADAnalyzer([VADState.SPEAKING, VADState.QUIET, VADState.QUIET]),
+    )
+
+    assistant_id = "00000000-0000-0000-0000-00000000001c"
+    chunk = bytes(range(256)) * 5
+
+    with (
+        TestClient(app) as client,
+        client.websocket_connect(_media_session_url(assistant_id)) as ws,
+    ):
+        # Sent steadily rather than all at once, so a thieving iterator left
+        # over from a previous stream has the chance to take some.
+        for _ in range(12):
+            ws.send_bytes(chunk)
+            time.sleep(0.02)
+
+        messages = []
+
+        while True:
+            kind, value = _receive_one(ws)
+
+            if kind == "text":
+                messages.append(value)
+
+                if value == {"type": "reply_finished"}:
+                    break
+
+    assert mock_stt.call_count == 3, "both silent closes should have been reconnected"
+    assert {"type": "turn_ended", "text": "What are your hours?"} in messages
+
+
+def test_media_session_pipeline_has_no_idle_timeout() -> None:
+    """
+    Pipecat's idle watchdog cancels the pipeline - ending the call - after
+    five minutes without a BotSpeakingFrame or UserSpeakingFrame. This
+    pipeline emits neither, driving speech through Norma's own processors
+    instead, so the watchdog saw no activity however busy the call was and
+    hung up mid-answer on a caller who was still talking to it. Reported as
+    "test call automatically ended in between answering", twice.
+
+    Asserted on the constructed worker rather than by waiting five minutes,
+    which no test suite should do.
+    """
+
+    worker = build_voice_session_pipeline_worker(
+        MagicMock(),
+        MockSTT(),
+        MockLLM(),
+        MockTTS(),
+        assistant_id=uuid.uuid4(),
+        call_id=uuid.uuid4(),
+        language="en",
+        keywords=(),
+        sensitivity=0.5,
+        system_prompt="You are a test assistant.",
+        creativity=0.3,
+        voice_id="voice-1",
+        speech_rate=1.0,
+        vad_analyzer=_ScriptedVADAnalyzer([VADState.QUIET]),
+    )
+
+    assert worker._idle_timeout_secs is None
+
+
+def test_mostly_already_said_distinguishes_echo_from_a_real_interruption() -> None:
+    """
+    The guard that decides whether a mid-reply transcript is the caller
+    genuinely talking over the assistant, or just the assistant's own
+    playback (or the caller's own already-answered turn) coming back.
+    Getting this wrong in either direction is a real, reported failure:
+    too strict and every reply cuts itself off on a speaker setup, too
+    loose and interruptions keep being ignored.
+    """
+
+    spoken = "We open at nine. We close at five."
+
+    # The assistant's own sentence returning through an open mic, as STT
+    # renders it - different casing and punctuation, same words.
+    assert _mostly_already_said("we open at nine", spoken)
+    assert _mostly_already_said("We close at five!", spoken)
+
+    # A caller actually interrupting, including one sharing an ordinary
+    # word with what is being said.
+    assert not _mostly_already_said("stop", spoken)
+    assert not _mostly_already_said("what about weekends", spoken)
+    assert not _mostly_already_said("okay got it, cancel that", spoken)
+
+    # Nothing to act on either way.
+    assert _mostly_already_said("   ", spoken)
+    assert not _mostly_already_said("anything at all", "")
+
+
+def test_media_session_interruption_transcript_stops_the_reply_without_a_vad_edge(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """
+    The reported bug: the caller speaks over a reply and has to sit through
+    the rest of it before being answered. Turn detection latches for the
+    whole reply, and the only signal that breaks that latch early -
+    caller_speech_started - is a VAD onset *edge* the assistant's own audio
+    in an open mic can hold high straight through the caller starting to
+    talk. This scripts exactly that: VAD never reports a fresh onset after
+    the first turn, so no caller_speech_started can fire, and the second
+    final transcript is the only evidence the caller said anything. The
+    reply must still be cut off.
+    """
+
+    # The interrupting final is held back until a fourth chunk arrives, which
+    # the body below only sends once the reply is audibly under way - an
+    # interruption has to land *during* a reply to be one at all.
+    mock_stt = MockSTT(
+        script=[
+            TranscriptEvent(text="What are your hours?", is_final=True),
+            TranscriptEvent(text="Actually cancel that.", is_final=True),
+        ],
+        chunks_before_event=[1, 4],
+    )
+    mock_llm = MockLLM(response="We open at nine. We close at five. See you then.")
+    # Slow enough that the reply is unambiguously still in flight when the
+    # interrupting transcript lands.
+    mock_tts = MockTTS(time_to_first_byte_seconds=0.4)
+
+    monkeypatch.setattr(main_module, "get_stt_provider", lambda: mock_stt)
+    monkeypatch.setattr(main_module, "get_llm_provider", lambda: mock_llm)
+    monkeypatch.setattr(main_module, "fetch_glossary_terms", _fake_fetch_glossary_terms)
+    monkeypatch.setattr(main_module, "fetch_turn_sensitivity", _fake_fetch_turn_sensitivity)
+    _patch_session_setup(monkeypatch)
+    monkeypatch.setattr(main_module, "get_tts_provider", lambda: mock_tts)
+    monkeypatch.setattr(
+        media_session_module, "fetch_retrieved_context", _fake_fetch_retrieved_context
+    )
+    # SPEAKING only for the very first chunk, then quiet forever: the first
+    # turn gets its onset edge, the interruption never does.
+    _patch_turn_detector_vad(
+        monkeypatch,
+        _ScriptedVADAnalyzer([VADState.SPEAKING, VADState.QUIET, VADState.QUIET]),
+    )
+
+    assistant_id = "00000000-0000-0000-0000-000000000018"
+    chunk = bytes(range(256)) * 5
+
+    with (
+        TestClient(app) as client,
+        client.websocket_connect(_media_session_url(assistant_id)) as ws,
+    ):
+        for _ in range(3):
+            ws.send_bytes(chunk)
+
+        messages = []
+
+        # Wait until the reply is actually being spoken before interrupting.
+        while True:
+            kind, value = _receive_one(ws)
+
+            if kind == "text":
+                messages.append(value)
+            elif kind == "bytes":
+                break
+
+        # The fourth chunk releases the interrupting final transcript.
+        ws.send_bytes(chunk)
+
+        while True:
+            kind, value = _receive_one(ws)
+
+            if kind == "text":
+                messages.append(value)
+
+                # reply_finished here is the cancelled reply's own reset,
+                # which is what proves it was cut off rather than played out.
+                if value == {"type": "reply_finished"}:
+                    break
+
+    onsets = [message for message in messages if message == {"type": "caller_speech_started"}]
+
+    assert len(onsets) == 1, (
+        "only the caller's opening utterance should produce a VAD onset edge - "
+        "a second one would mean this proves the old path, not the "
+        "transcript-driven one"
+    )
+    assert mock_tts.cancelled, "the in-flight sentence should have been cancelled"
+    # Cancelling server-side only stops *sending*. Audio already delivered is
+    # scheduled for playback at the other end, so without this message the
+    # caller keeps hearing the abandoned reply and the barge-in has no
+    # audible effect whatsoever - the exact bug that made the first version
+    # of this feature pass its tests while changing nothing on a real call.
+    assert {"type": "playback_cancelled"} in messages
+
+
+def test_media_session_does_not_treat_its_own_echo_as_an_interruption(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """
+    The other half, and the reason the guard exists at all: on the speaker
+    setup this feature targets, the assistant's own playback is transcribed
+    right back. Acting on that would cut every reply short mid-sentence -
+    strictly worse than the late answer being fixed. Here the second final
+    transcript is the assistant's own first sentence coming back, and the
+    reply must play through both sentences untouched.
+    """
+
+    mock_stt = MockSTT(
+        script=[
+            TranscriptEvent(text="What are your hours?", is_final=True),
+            TranscriptEvent(text="we open at nine", is_final=True),
+        ],
+        chunks_before_event=[1, 2],
+    )
+    mock_llm = MockLLM(response="We open at nine. We close at five.")
+    mock_tts = MockTTS()
+
+    monkeypatch.setattr(main_module, "get_stt_provider", lambda: mock_stt)
+    monkeypatch.setattr(main_module, "get_llm_provider", lambda: mock_llm)
+    monkeypatch.setattr(main_module, "fetch_glossary_terms", _fake_fetch_glossary_terms)
+    monkeypatch.setattr(main_module, "fetch_turn_sensitivity", _fake_fetch_turn_sensitivity)
+    _patch_session_setup(monkeypatch)
+    monkeypatch.setattr(main_module, "get_tts_provider", lambda: mock_tts)
+    monkeypatch.setattr(
+        media_session_module, "fetch_retrieved_context", _fake_fetch_retrieved_context
+    )
+    _patch_turn_detector_vad(
+        monkeypatch,
+        _ScriptedVADAnalyzer([VADState.SPEAKING, VADState.QUIET, VADState.QUIET]),
+    )
+
+    assistant_id = "00000000-0000-0000-0000-000000000019"
+    chunk = bytes(range(256)) * 5
+
+    with (
+        TestClient(app) as client,
+        client.websocket_connect(_media_session_url(assistant_id)) as ws,
+    ):
+        for _ in range(3):
+            ws.send_bytes(chunk)
+
+        received = []
+        expected_audio_length = (len("We open at nine.") + len("We close at five.")) * 320
+
+        while (
+            len(b"".join(value for kind, value in received if kind == "bytes"))
+            < expected_audio_length
+        ):
+            received.append(_receive_one(ws))
+
+    assert not mock_tts.cancelled
+    assert mock_tts.call_count == 2
+
+
+def test_media_session_carries_prosody_context_across_a_replys_sentences(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """
+    The bug fix behind "the assistant changes voice tone mid-call": a reply
+    is synthesized one sentence at a time, and a provider handed each
+    sentence in isolation restarts its prosody from scratch every time,
+    audibly shifting tone, pitch and energy between sentences of what the
+    caller hears as a single answer. Each sentence after the first must
+    therefore carry the previous one as context. The first has nothing
+    before it and correctly gets "".
+    """
+
+    final = TranscriptEvent(text="What are your hours?", is_final=True)
+    mock_stt = MockSTT(script=[final], chunks_before_event=[1])
+    mock_llm = MockLLM(response="We open at nine. We close at five.")
+    mock_tts = MockTTS()
+
+    monkeypatch.setattr(main_module, "get_stt_provider", lambda: mock_stt)
+    monkeypatch.setattr(main_module, "get_llm_provider", lambda: mock_llm)
+    monkeypatch.setattr(main_module, "fetch_glossary_terms", _fake_fetch_glossary_terms)
+    monkeypatch.setattr(main_module, "fetch_turn_sensitivity", _fake_fetch_turn_sensitivity)
+    _patch_session_setup(monkeypatch)
+    monkeypatch.setattr(main_module, "get_tts_provider", lambda: mock_tts)
+    monkeypatch.setattr(
+        media_session_module, "fetch_retrieved_context", _fake_fetch_retrieved_context
+    )
+    _patch_turn_detector_vad(
+        monkeypatch,
+        _ScriptedVADAnalyzer([VADState.SPEAKING, VADState.QUIET, VADState.QUIET]),
+    )
+
+    assistant_id = "00000000-0000-0000-0000-000000000017"
+    chunk = bytes(range(256)) * 5
+
+    with (
+        TestClient(app) as client,
+        client.websocket_connect(_media_session_url(assistant_id)) as ws,
+    ):
+        for _ in range(3):
+            ws.send_bytes(chunk)
+
+        received = []
+
+        while True:
+            entry = _receive_one(ws)
+            received.append(entry)
+
+            if entry == ("text", {"type": "reply_finished"}):
+                break
+
+    assert mock_tts.call_count == 2
+    assert mock_tts.received_previous_texts == ["", "We open at nine."]
 
 
 def test_media_session_emits_tts_error_when_the_provider_fails(
@@ -1039,7 +1586,7 @@ def test_media_session_disconnecting_before_any_turn_starts_posts_nothing(
     assert calls == []
 
 
-def test_media_session_stt_crash_triggers_immediate_session_failover(
+def test_media_session_stt_crash_triggers_session_failover_after_retries_exhausted(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """
@@ -1047,7 +1594,11 @@ def test_media_session_stt_crash_triggers_immediate_session_failover(
     actively talking, no scripted event or fallback timeout has ended a
     turn - must not just go silently dead. fail_without_draining lets
     MockSTT raise without first waiting for the (never-arriving) end of a
-    live connection's audio - see its own docstring.
+    live connection's audio - see its own docstring. A persistent failure
+    (every stream() call raises) still exhausts MAX_STT_STREAM_RETRIES and
+    fails over exactly as before the retry was added - only a transient
+    failure that later recovers (see the retry-recovers test below) is new
+    behavior.
     """
 
     mock_stt = MockSTT(
@@ -1080,7 +1631,11 @@ def test_media_session_stt_crash_triggers_immediate_session_failover(
 
     assert all(kind == "text" for kind, _ in received)
     text_messages = [value for _, value in received]
+    # playback_cancelled precedes it: failover drops whatever the abandoned
+    # reply had already been delivered to the client, so the apology is not
+    # heard queued behind it.
     assert text_messages == [
+        {"type": "playback_cancelled"},
         {
             "type": "session_failover",
             "reason": "stt_unavailable",
@@ -1088,8 +1643,62 @@ def test_media_session_stt_crash_triggers_immediate_session_failover(
                 "I'm sorry, I'm having trouble with the call right now. "
                 "Please try again in a few minutes."
             ),
-        }
+        },
     ]
+    # At least the original attempts; it keeps retrying afterwards rather
+    # than abandoning the caller, so this is a floor, not an exact count.
+    assert mock_stt.call_count >= config.MAX_STT_STREAM_RETRIES + 1
+
+
+def test_media_session_stt_stream_retries_and_recovers_from_a_transient_failure(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """
+    Item 20g (raised for the "test call automatically ended" bug): a single
+    STT stream error that the next reconnect attempt survives must not end
+    the call at all - the caller keeps talking and gets transcribed once
+    the fresh stream is up, exactly as if nothing had happened. fail_times=1
+    caps MockSTT's failure to only the first stream() call; the second call
+    (the retry) succeeds and re-yields the same scripted transcript, proving
+    a real reconnect - not just a swallowed exception.
+    """
+
+    transcript = TranscriptEvent(text="What are your hours?", is_final=True)
+    mock_stt = MockSTT(
+        script=[transcript],
+        failure=SpeechProviderUnavailable("boom"),
+        fail_without_draining=True,
+        fail_times=1,
+    )
+
+    monkeypatch.setattr(main_module, "get_stt_provider", lambda: mock_stt)
+    monkeypatch.setattr(main_module, "fetch_glossary_terms", _fake_fetch_glossary_terms)
+    monkeypatch.setattr(main_module, "fetch_turn_sensitivity", _fake_fetch_turn_sensitivity)
+    _patch_session_setup(monkeypatch)
+    _patch_turn_detector_vad(monkeypatch, _ScriptedVADAnalyzer([VADState.QUIET]))
+
+    assistant_id = "00000000-0000-0000-0000-000000000015"
+
+    with (
+        TestClient(app) as client,
+        client.websocket_connect(_media_session_url(assistant_id)) as ws,
+    ):
+        received = []
+
+        # The retry is silent (no message marks a successful reconnect), so
+        # synchronize on the transcript itself: call 1 yields it then
+        # raises, the retry's call 2 yields it again before returning
+        # cleanly - receiving it twice proves the second stream() call ran.
+        for _ in range(2):
+            received.append(_receive_one(ws))
+
+    assert all(kind == "text" for kind, _ in received)
+    text_messages = [value for _, value in received]
+    assert text_messages == [
+        {"type": "transcript", "text": "What are your hours?", "is_final": True},
+        {"type": "transcript", "text": "What are your hours?", "is_final": True},
+    ]
+    assert mock_stt.call_count == 2
 
 
 def _patch_short_llm_timeout(monkeypatch: pytest.MonkeyPatch, *, seconds: float = 0.05) -> None:
@@ -1292,23 +1901,19 @@ def test_media_session_tts_that_never_responds_is_retried_before_giving_up(
     assert all(kind == "text" for kind, _ in received)
 
 
-def test_media_session_session_failover_speaks_apology_and_closes_the_connection(
+def test_media_session_session_failover_speaks_apology_and_keeps_the_call_open(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """
-    Item 20g's end-to-end proof, driven by the STT-crash trigger (Step 2):
-    the failover apology is actually spoken, and the WebSocket connection
-    genuinely closes server-side afterward - not just "the test stopped
-    reading." A close-type ASGI message has neither a "bytes" nor "text"
-    key, so this reads raw ws.receive() dicts directly rather than through
-    _receive_one, which would raise KeyError on exactly that message.
+    The failover apology is spoken, and - the part this test now exists to
+    hold - the connection stays open afterwards.
 
-    Verified empirically before writing this test (see this feature's
-    spec): an EndFrame pushed from inside the pipeline does not, by
-    itself, make the WebSocket close - main.py needed a new
-    on_pipeline_finished handler to actually cancel the WorkerRunner once
-    an EndFrame reaches the sink. Without that handler, this test would
-    hang instead of ever observing the close.
+    It used to assert the opposite: an EndFrame was pushed and the socket
+    closed server-side. That behavior was removed because it hung up on
+    the caller mid-session, reported twice as "the test call ended
+    automatically". A test call ends when the person on it disconnects.
+    The apology tells them something went wrong while the STT stream keeps
+    being retried underneath.
     """
 
     mock_stt = MockSTT(
@@ -1328,35 +1933,35 @@ def test_media_session_session_failover_speaks_apology_and_closes_the_connection
 
     assistant_id = "00000000-0000-0000-0000-000000000014"
     received = []
+    closed_by_server = False
 
-    try:
-        with (
-            TestClient(app) as client,
-            client.websocket_connect(_media_session_url(assistant_id)) as ws,
-        ):
-            while True:
-                message = ws.receive()
+    with (
+        TestClient(app) as client,
+        client.websocket_connect(_media_session_url(assistant_id)) as ws,
+    ):
+        # Read up to the spoken apology, then stop - there is deliberately
+        # no close to wait for any more.
+        while not any(
+            kind == "text" and value.get("type") == "session_failover"
+            for kind, value in received
+        ) or not any(kind == "bytes" for kind, _ in received):
+            message = ws.receive()
 
-                if message["type"] == "websocket.close":
-                    break
+            if message["type"] == "websocket.close":
+                closed_by_server = True
+                break
 
-                if "bytes" in message:
-                    received.append(("bytes", message["bytes"]))
-                else:
-                    received.append(("text", json.loads(message["text"])))
-    except FutureCancelledError:
-        # TestClient's own __exit__ can intermittently raise this when the
-        # *server* (not the client) initiates the close - verified this is
-        # a test-harness-only artifact, not a real bug: a standalone script
-        # against a real session (see this feature's spec) confirmed the
-        # server-side close behavior itself is correct, and a real
-        # deployment has no analogous "check a background future's result"
-        # step for Uvicorn to race against. received is populated before
-        # this can happen, so the assertions below still run against
-        # whatever was actually captured.
-        pass
+            if "bytes" in message:
+                received.append(("bytes", message["bytes"]))
+            else:
+                received.append(("text", json.loads(message["text"])))
 
-    assert received[0] == (
+    assert not closed_by_server, "the call must outlive a provider failure"
+
+    # playback_cancelled first, so the apology below is not heard queued
+    # behind whatever of the abandoned reply the client already holds.
+    assert received[0] == ("text", {"type": "playback_cancelled"})
+    assert received[1] == (
         "text",
         {
             "type": "session_failover",

@@ -1,3 +1,5 @@
+import logging
+import os
 import uuid
 
 from fastapi import FastAPI, WebSocket
@@ -22,6 +24,17 @@ from app.turn_detection_client import fetch_turn_sensitivity
 # 4401 is in the private-use WebSocket close-code range (4000-4999); there is
 # no standard code for "invalid application-level credential".
 _TICKET_REJECTED_CLOSE_CODE = 4401
+
+# Without this the standard library's root logger stays at WARNING with no
+# handlers, so every logger.info() in this app is silently discarded - the
+# per-turn diagnostics CLAUDE.md section 27 asks for never reach the logs at
+# all. Found the hard way: a live barge-in investigation produced an entirely
+# empty log for a call that had definitely happened. Pipecat logs through
+# loguru and is unaffected either way.
+logging.basicConfig(
+    level=os.environ.get("LOG_LEVEL", "INFO").upper(),
+    format="%(asctime)s | %(levelname)-8s | %(name)s | %(message)s",
+)
 
 app = FastAPI(title="Norma AI Voice")
 
@@ -49,6 +62,7 @@ async def media_session(
     websocket: WebSocket,
     ticket: str,
     language: str = "en",
+    client: str = "unknown",
 ) -> None:
     """
     Items 20b-20e's full turn-loop proof: accepts a WebSocket connection,
@@ -82,6 +96,14 @@ async def media_session(
     # Session-scoped placeholder call identity for item 20f's TurnMetric
     # rows - Call (build-plan item 27) doesn't exist yet.
     call_id = uuid.uuid4()
+
+    # Which build of the browser page this session is running (see
+    # CLIENT_BUILD there). "unknown" means a client old enough not to send
+    # it at all - which is itself the answer whenever a frontend fix appears
+    # to have had no effect.
+    logging.getLogger(__name__).info(
+        "session started: call=%s assistant=%s client_build=%s", call_id, assistant_id, client
+    )
 
     keywords = await fetch_glossary_terms(assistant_id)
     sensitivity = await fetch_turn_sensitivity(assistant_id)

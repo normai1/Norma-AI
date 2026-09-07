@@ -101,12 +101,22 @@ class TextToSpeechProvider(Protocol):
         *,
         voice_id: str,
         speed: float = 1.0,
+        previous_text: str = "",
     ) -> AsyncIterator[bytes]:
         """
         Synthesize speech audio for text, streaming chunks in the canonical
         format as they are produced. Closing the returned iterator early -
         the barge-in mechanism - must stop synthesis promptly, within the
         200ms barge-in budget.
+
+        previous_text is what was already spoken immediately before this
+        text in the same reply. A reply is synthesized one sentence at a
+        time (so speech can start before the LLM has finished writing it),
+        and a provider given each sentence in isolation restarts its
+        prosody from scratch every time - audible as the voice's tone,
+        pitch and energy visibly shifting between sentences mid-reply.
+        Providers that can carry prosody across separate requests should
+        use this for continuity; those that cannot may ignore it.
         """
         ...
 

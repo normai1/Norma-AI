@@ -5,6 +5,7 @@ depend on a paid or live external API.
 """
 
 import asyncio
+import time
 from collections.abc import AsyncIterator, Sequence
 
 from norma_shared.speech import SpeechProviderError, TranscriptEvent, Voice
@@ -40,6 +41,9 @@ class MockSTT:
         event_delay_seconds: float = 0.0,
         failure: SpeechProviderError | None = None,
         fail_without_draining: bool = False,
+        fail_times: int | None = None,
+        silent_closes: int = 0,
+        close_after_script: bool = False,
     ) -> None:
         self._script = list(script)
         self._chunks_before_event = (
@@ -48,10 +52,49 @@ class MockSTT:
         self._event_delay_seconds = event_delay_seconds
         self._failure = failure
         self._fail_without_draining = fail_without_draining
+        # None (the default) means every stream() call raises `failure`,
+        # matching this class's original all-or-nothing behavior exactly.
+        # An int caps that to only the first fail_times calls, after which
+        # stream() succeeds normally - lets a test prove a caller's
+        # reconnect/retry logic actually recovers, not just that it
+        # eventually gives up (that path is already covered by leaving
+        # this None).
+        self._fail_times = fail_times
+        # How many of the first stream() calls end immediately, cleanly,
+        # having yielded nothing - a real provider behavior (observed
+        # against ElevenLabs' realtime STT closing a second or two into a
+        # live session) that raises no error at all, and so is invisible to
+        # any retry keyed on exceptions.
+        self._silent_closes = silent_closes
+        # Whether the stream ends as soon as its script runs out, instead of
+        # draining audio until the call itself ends. Models a live provider
+        # hanging up mid-call - see _stay_open.
+        self._close_after_script = close_after_script
+        # How many times stream() has been called - a test asserts on this
+        # directly to prove a reconnect attempt actually happened, mirroring
+        # MockTTS.call_count's exact precedent.
+        self.call_count = 0
         # Records the keywords argument of the most recent stream() call, for
         # a test to assert glossary terms actually reached the provider -
         # mirrors MockEmbeddingProvider.embedded_texts's exact precedent.
         self.received_keywords: list[str] | None = None
+
+    async def _stay_open(self) -> None:
+        """
+        By default the stream drains audio until the call itself ends and
+        then returns - what every consumer of this mock expects, and what
+        makes its end mean "the call is over" rather than "the provider
+        hung up".
+
+        close_after_script=True skips that drain, so the stream ends the
+        moment the script runs out while the call is still live - modelling
+        a provider that hangs up mid-call, the condition
+        SpeechToTextProcessor reconnects on. Opt-in deliberately: an
+        earlier attempt made never-ending the default and hung every test
+        that simply iterates stream() to completion.
+        """
+
+        return
 
     async def stream(
         self,
@@ -60,13 +103,21 @@ class MockSTT:
         language: str,
         keywords: Sequence[str] = (),
     ) -> AsyncIterator[TranscriptEvent]:
+        self.call_count += 1
         self.received_keywords = list(keywords)
+
+        if self.call_count <= self._silent_closes:
+            return
+
+        should_fail = self._failure is not None and (
+            self._fail_times is None or self.call_count <= self._fail_times
+        )
 
         if self._chunks_before_event is None:
             # The scripted transcript does not depend on the audio content,
             # but draining the iterator matches a real provider's contract:
             # the caller is streaming audio in, not just waiting on output.
-            if not self._fail_without_draining:
+            if not self._fail_without_draining and not self._close_after_script:
                 async for _ in audio:
                     pass
 
@@ -76,8 +127,10 @@ class MockSTT:
 
                 yield event
 
-            if self._failure is not None:
+            if should_fail:
                 raise self._failure
+
+            await self._stay_open()
 
             return
 
@@ -100,12 +153,14 @@ class MockSTT:
 
             yield event
 
-        if not self._fail_without_draining:
+        if not self._fail_without_draining and not self._close_after_script:
             async for _ in audio_iterator:
                 pass
 
-        if self._failure is not None:
+        if should_fail:
             raise self._failure
+
+        await self._stay_open()
 
 
 class MockTTS:
@@ -135,6 +190,18 @@ class MockTTS:
         # tests assert on this directly, mirroring MockLLM.call_count's
         # exact precedent.
         self.call_count = 0
+        # monotonic() timestamp of each synthesize() call's start, in call
+        # order - lets a test prove two calls overlapped (a prefetch
+        # started before the prior one finished) by comparing the gap
+        # between them against time_to_first_byte_seconds, without relying
+        # on brittle absolute wall-clock thresholds elsewhere in the
+        # pipeline (turn detection, worker startup, etc).
+        self.call_started_at: list[float] = []
+        # The previous_text handed to each synthesize() call, in call order
+        # - lets a test prove prosody continuity actually reaches the
+        # provider rather than existing only as an unused parameter,
+        # mirroring MockSTT.received_keywords's exact precedent.
+        self.received_previous_texts: list[str] = []
 
     async def synthesize(
         self,
@@ -142,8 +209,11 @@ class MockTTS:
         *,
         voice_id: str,
         speed: float = 1.0,
+        previous_text: str = "",
     ) -> AsyncIterator[bytes]:
         self.call_count += 1
+        self.call_started_at.append(time.monotonic())
+        self.received_previous_texts.append(previous_text)
 
         if self._failure is not None:
             raise self._failure

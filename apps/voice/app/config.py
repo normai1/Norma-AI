@@ -16,6 +16,14 @@ TTS_PROVIDER = os.environ.get("TTS_PROVIDER", "mock")
 
 ELEVENLABS_API_KEY = os.environ.get("ELEVENLABS_API_KEY", "")
 
+# eleven_multilingual_v2 (the shared adapter's own internal default) measured
+# 1.1-2.1s time-to-first-byte in this environment - most of a whole turn's
+# latency budget spent on TTS alone. eleven_flash_v2_5 is ElevenLabs' own
+# low-latency model, measured at ~330-380ms first-byte for the same text
+# (English and Hinglish both), a real product-latency win CLAUDE.md's
+# section 37 puts above quality tradeoffs for exactly this reason.
+TTS_MODEL_ID = os.environ.get("TTS_MODEL_ID", "eleven_flash_v2_5")
+
 # Reaches apps/api by its Compose service name - only resolves inside the
 # Compose network, never from the host.
 API_INTERNAL_URL = os.environ.get("API_INTERNAL_URL", "http://api:8000")
@@ -53,7 +61,57 @@ MAX_PROVIDER_RETRIES = int(os.environ.get("MAX_PROVIDER_RETRIES", "1"))
 
 # How many *consecutive* fully-failed LLM turns trigger session failover -
 # a single isolated blip still just gets the existing llm_error message.
-MAX_CONSECUTIVE_LLM_FAILURES = int(os.environ.get("MAX_CONSECUTIVE_LLM_FAILURES", "2"))
+# Raised from the original "2" (item 20g): against a real, rate-limit-prone
+# provider, two bad turns in a row was easy to hit from ordinary transient
+# trouble and ended otherwise-healthy test calls.
+MAX_CONSECUTIVE_LLM_FAILURES = int(os.environ.get("MAX_CONSECUTIVE_LLM_FAILURES", "5"))
+
+# How many times the STT stream reconnects (a fresh provider.stream() call)
+# after a SpeechProviderError before giving up and triggering session
+# failover. A bounded reconnect, not a full replay of audio already
+# in-flight when the old stream broke - see SpeechToTextProcessor's
+# docstring for why a full reconnect-with-replay stays out of scope.
+MAX_STT_STREAM_RETRIES = int(os.environ.get("MAX_STT_STREAM_RETRIES", "2"))
+
+# How many times a *cleanly closed* STT stream is reconnected while the call
+# is still live. Separate from, and far larger than, MAX_STT_STREAM_RETRIES:
+# an error is a sign something is wrong, but a live provider ending its own
+# stream is routine - measured against ElevenLabs' realtime STT closing after
+# a few minutes of a healthy session, and again seconds into one. Either way
+# the caller must keep being heard for the whole call, so this budget is
+# sized for "a long call", not "something is broken".
+MAX_STT_STREAM_RECONNECTS = int(os.environ.get("MAX_STT_STREAM_RECONNECTS", "50"))
+
+# Brief pause before reconnecting a closed stream, so a provider refusing
+# connections outright can never become a hot loop.
+STT_RECONNECT_DELAY_SECONDS = float(os.environ.get("STT_RECONNECT_DELAY_SECONDS", "0.25"))
+
+# Ceiling on that pause as it backs off. Long enough to stop hammering a
+# provider that keeps closing, short enough that a caller is never left
+# untranscribed for long once it recovers.
+MAX_STT_RECONNECT_DELAY_SECONDS = float(
+    os.environ.get("MAX_STT_RECONNECT_DELAY_SECONDS", "2.0")
+)
+
+# Whether a genuine final transcript arriving mid-reply also counts as an
+# interruption, on top of caller_speech_started's VAD speech onset. That
+# onset is edge-triggered, and the assistant's own playback coming back in
+# through an open mic (a speaker setup with no headphones) can hold VAD
+# "speaking" across the moment the caller actually starts talking, so the
+# edge never fires and the reply plays to the end - reported repeatedly from
+# real use. Transcribed words do not depend on that edge at all. Kept as a
+# switch because the guards that keep it from firing on the assistant's own
+# echo are heuristic (see TTSProcessor._handle_transcript): if it ever cuts
+# a reply short in a real deployment, this turns it off without a redeploy.
+BARGE_IN_ON_TRANSCRIPT = os.environ.get("BARGE_IN_ON_TRANSCRIPT", "true").lower() == "true"
+
+# How much of a mid-reply transcript's wording must already appear in the
+# text being compared against for it to be treated as that text coming back
+# rather than the caller genuinely speaking. High enough that a real
+# interruption sharing a few ordinary words ("okay", "so") still counts as
+# an interruption; low enough that an imperfect transcription of the
+# assistant's own sentence still reads as its echo.
+ECHO_WORD_OVERLAP_RATIO = float(os.environ.get("ECHO_WORD_OVERLAP_RATIO", "0.6"))
 
 # Item 21a: verifies the voice-session ticket apps/api issues for a browser
 # test call. Shared with apps/api via docker-compose.yml's env_file - both
