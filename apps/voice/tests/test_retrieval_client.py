@@ -61,3 +61,107 @@ async def test_returns_empty_string_for_a_malformed_body() -> None:
     )
 
     assert context == ""
+
+
+async def test_returns_empty_string_on_timeout(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """
+    The regression this covers: reported live as "the assistant only answers
+    the auto-generated FAQs, nothing else in the document" - traced to
+    retrieval silently timing out under the real embedding provider's
+    latency, indistinguishable from the document genuinely lacking the
+    answer. The caller-facing fallback must stay unchanged; what's new is
+    that this is now logged.
+    """
+
+    import logging
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        raise httpx.ReadTimeout("timed out")
+
+    with caplog.at_level(logging.WARNING):
+        context = await fetch_retrieved_context(
+            _ASSISTANT_ID, "anything", client=_client_returning(handler)
+        )
+
+    assert context == ""
+    assert any("timed out" in record.getMessage() for record in caplog.records)
+    assert any(str(_ASSISTANT_ID) in record.getMessage() for record in caplog.records)
+
+
+async def test_returns_empty_string_for_invalid_json(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """
+    response.json() raises json.JSONDecodeError (a ValueError, not an
+    httpx.HTTPError) on a malformed but 200 body - this must still fail
+    open, not propagate.
+    """
+
+    import logging
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, content=b"not json at all")
+
+    with caplog.at_level(logging.WARNING):
+        context = await fetch_retrieved_context(
+            _ASSISTANT_ID, "anything", client=_client_returning(handler)
+        )
+
+    assert context == ""
+    assert any("not valid JSON" in record.getMessage() for record in caplog.records)
+
+
+async def test_a_non_200_response_is_logged(caplog: pytest.LogCaptureFixture) -> None:
+    import logging
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(404)
+
+    with caplog.at_level(logging.WARNING):
+        await fetch_retrieved_context(
+            _ASSISTANT_ID, "anything", client=_client_returning(handler)
+        )
+
+    assert any("404" in record.getMessage() for record in caplog.records)
+
+
+async def test_a_connection_failure_is_logged(caplog: pytest.LogCaptureFixture) -> None:
+    import logging
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        raise httpx.ConnectError("connection refused")
+
+    with caplog.at_level(logging.WARNING):
+        await fetch_retrieved_context(
+            _ASSISTANT_ID, "anything", client=_client_returning(handler)
+        )
+
+    assert any("ConnectError" in record.getMessage() for record in caplog.records)
+
+
+async def test_the_caller_s_query_text_never_reaches_the_logs(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """
+    CLAUDE.md section 27 / item 24d: the failure logs added here name the
+    assistant and the failure type, never the caller's own words.
+    """
+
+    import logging
+
+    caller_text = "My name is Wilhelmina Bracegirdle and I need the Quaxton file."
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        raise httpx.ReadTimeout("timed out")
+
+    with caplog.at_level(logging.WARNING):
+        await fetch_retrieved_context(
+            _ASSISTANT_ID, caller_text, client=_client_returning(handler)
+        )
+
+    logged = "\n".join(record.getMessage() for record in caplog.records)
+
+    assert "Wilhelmina" not in logged
+    assert "Quaxton" not in logged
