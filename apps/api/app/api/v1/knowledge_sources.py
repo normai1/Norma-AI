@@ -247,6 +247,13 @@ async def _crawl_website_source_in_background(
         if knowledge_source is None:
             return
 
+        # Committed before the crawl starts, on its own, so the very next poll
+        # sees "processing" rather than a "pending" row that looks identical to
+        # one nothing is working on.
+        knowledge_source.status = knowledge_source_service.PROCESSING_STATUS
+        knowledge_source.error_message = None
+        await session.commit()
+
         try:
             await knowledge_source_service.crawl_website_knowledge_source(
                 session,

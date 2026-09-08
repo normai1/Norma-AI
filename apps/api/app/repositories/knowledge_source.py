@@ -10,6 +10,13 @@ FILE_TYPE = "file"
 WEBSITE_TYPE = "website"
 MANUAL_FAQ_TYPE = "manual_faq"
 
+# Beside the types rather than in the service, so faq_generation.py can
+# reach them without importing the service it is itself imported by.
+PENDING_STATUS = "pending"
+PROCESSING_STATUS = "processing"
+COMPLETED_STATUS = "completed"
+FAILED_STATUS = "failed"
+
 
 async def get_by_id(
     db: AsyncSession, knowledge_source_id: uuid.UUID

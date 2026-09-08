@@ -356,3 +356,33 @@ async def test_deleting_a_source_leaves_operator_written_faqs_alone(
     assert [entry["question"] for entry in surviving.json()] == [
         "Do you validate parking?"
     ]
+
+
+async def test_the_generated_faq_container_is_not_left_looking_unfinished(
+    client: AsyncClient,
+    db: AsyncSession,
+    faq_llm_provider: MockLLMProvider,
+) -> None:
+    """
+    The container the generated entries land in is created by the generation
+    run itself. At the 'pending' default it told the operator their knowledge
+    base was still being built while holding the finished questions.
+    """
+
+    faq_llm_provider.response = _GENERATED_PAIRS_JSON
+
+    organization_id, workspace_id, assistant_id, owner_headers = (
+        await _setup_org_workspace(client, "faqgen-container-status")
+    )
+
+    await _upload(client, organization_id, workspace_id, owner_headers, assistant_id)
+
+    container = await db.scalar(
+        select(KnowledgeSource).where(
+            KnowledgeSource.assistant_id == assistant_id,
+            KnowledgeSource.name == GENERATED_FAQ_SOURCE_NAME,
+        )
+    )
+
+    assert container is not None
+    assert container.status == "completed"

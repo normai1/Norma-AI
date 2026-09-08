@@ -3,6 +3,7 @@ from httpx import AsyncClient
 
 from app.core.config import settings
 from app.providers.mock_web_crawler import MockPageFetcher
+from app.services import knowledge_source as knowledge_source_service
 from tests.conftest import _org_with_owner, _signed_in
 
 ORGS = "/api/v1/organizations"
@@ -436,3 +437,46 @@ async def test_create_website_with_an_assistant_id_from_a_sibling_workspace_404s
     )
 
     assert response.status_code == 404
+
+
+async def test_a_website_reports_processing_while_it_is_being_crawled(
+    client: AsyncClient, page_fetcher: MockPageFetcher
+) -> None:
+    """
+    "pending" meant two different things - queued, and parked waiting for the
+    operator to reprocess - so an operator who had just pasted a URL could not
+    tell a crawl in flight from one that was never going to start, and reached
+    for Recrawl. The crawl now says so itself.
+
+    Asserted on the committed row rather than a response, since the whole
+    point is what a poll sees while the background task is still running.
+    """
+
+    organization_id, workspace_id, assistant_id, owner_headers = (
+        await _setup_workspace(client, "ws-processing-status")
+    )
+    page_fetcher.pages["http://example.com/"] = _page("Hello.")
+
+    seen: list[str] = []
+    original = knowledge_source_service.crawl_website_knowledge_source
+
+    async def _capture(db, *args, **kwargs):
+        # Whatever a poll would read at the moment the crawl is under way.
+        seen.append(kwargs["knowledge_source"].status)
+        return await original(db, *args, **kwargs)
+
+    knowledge_source_service.crawl_website_knowledge_source = _capture
+    try:
+        response = await _create_website(
+            client, organization_id, workspace_id, owner_headers, assistant_id
+        )
+    finally:
+        knowledge_source_service.crawl_website_knowledge_source = original
+
+    assert response.status_code == 201
+    assert seen == ["processing"]
+
+    settled = await _get_source(
+        client, organization_id, workspace_id, owner_headers, response.json()["id"]
+    )
+    assert settled["status"] == "completed"

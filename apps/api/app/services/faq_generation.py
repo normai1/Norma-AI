@@ -133,6 +133,10 @@ async def _get_or_create_generated_faq_source(
         type=knowledge_source_repo.MANUAL_FAQ_TYPE,
         owner_user_id=owner_user_id,
         name=GENERATED_FAQ_SOURCE_NAME,
+        # Ready as soon as it exists - a container has nothing to process.
+        # Left at the 'pending' default it reported itself, forever, as a
+        # knowledge base still being built.
+        status=knowledge_source_repo.COMPLETED_STATUS,
     )
     db.add(knowledge_source)
     await db.flush()

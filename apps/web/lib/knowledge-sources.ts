@@ -262,10 +262,9 @@ export function faqEntryOriginLabel(
  * Whether this source is still being worked on, so the UI should keep
  * refreshing until it settles.
  *
- * A website source is created immediately and crawled in the background, so
- * it is "pending" with nothing to show for several seconds - long enough that
- * an operator watching a stuck-looking row reasonably concludes it failed and
- * reaches for Recrawl.
+ * A website source is created immediately and crawled in the background: it
+ * is "pending" for an instant, then "processing" for as long as the crawl,
+ * the embedding and the FAQ generation take.
  *
  * An error_message means the opposite: the source is parked waiting for the
  * operator to do something (a source predating an embedding-provider change
@@ -290,6 +289,10 @@ export function isKnowledgeSourceProcessing(source: KnowledgeSource): boolean {
 export function knowledgeSourceStatusLabel(source: KnowledgeSource): string {
   if (isKnowledgeSourceProcessing(source)) {
     return "Creating knowledge base...";
+  }
+
+  if (source.status === "completed") {
+    return "completed";
   }
 
   if (source.status === "pending" && source.error_message !== null) {

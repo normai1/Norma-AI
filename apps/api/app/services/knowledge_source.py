@@ -29,8 +29,13 @@ from app.services.chunker import ChunkSpan, chunk_text
 from app.services.document_parser import DocumentParseError, parse_document
 from app.services.web_crawler import crawl_website
 
-FAILED_STATUS = "failed"
-COMPLETED_STATUS = "completed"
+FAILED_STATUS = knowledge_source_repo.FAILED_STATUS
+COMPLETED_STATUS = knowledge_source_repo.COMPLETED_STATUS
+# Set the moment a background crawl actually begins. Without it "pending"
+# has to mean two different things - "queued, starting shortly" and
+# "parked, waiting for the operator to reprocess" - and the operator who
+# just pasted a URL cannot tell which one they are looking at.
+PROCESSING_STATUS = knowledge_source_repo.PROCESSING_STATUS
 
 MAX_UPLOAD_SIZE_BYTES = 20 * 1024 * 1024
 
@@ -106,9 +111,14 @@ async def create_manual_faq_knowledge_source(
     name: str,
 ) -> KnowledgeSource:
     """
-    Create a new manual-FAQ-type knowledge source. Status stays 'pending' -
-    unlike a crawl, there is no operation here that can genuinely succeed or
-    fail, so there is nothing to transition it to.
+    Create a new manual-FAQ-type knowledge source, already 'completed'.
+
+    Unlike a crawl there is no operation here that can succeed or fail, so
+    the container is ready the moment it exists. It used to be left at the
+    'pending' default on the reasoning that there was nothing to transition
+    it to - harmless while the UI printed the raw word, but the operator now
+    reads a status rather than a database value, and every FAQ container in
+    the system was reporting itself as still being built.
     """
 
     await _resolve_workspace_id(
@@ -130,6 +140,7 @@ async def create_manual_faq_knowledge_source(
         type=knowledge_source_repo.MANUAL_FAQ_TYPE,
         owner_user_id=owner_user_id,
         name=name,
+        status=COMPLETED_STATUS,
     )
     db.add(knowledge_source)
     await db.flush()

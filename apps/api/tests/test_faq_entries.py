@@ -156,7 +156,9 @@ async def test_create_manual_faq_source_returns_expected_shape(
     assert response.status_code == 201
     body = response.json()
     assert body["type"] == "manual_faq"
-    assert body["status"] == "pending"
+    # A container has nothing to process, so it is ready on creation rather
+    # than sitting at "pending" and reading as still being built.
+    assert body["status"] == "completed"
     assert body["name"] == "General FAQ"
 
 
@@ -533,3 +535,31 @@ async def test_entry_in_one_organization_is_not_reachable_through_another(
     response = await client.get(url, headers=owner_b_headers)
 
     assert response.status_code == 404
+
+
+async def test_a_manual_faq_container_is_ready_as_soon_as_it_exists(
+    client: AsyncClient,
+) -> None:
+    """
+    A container has nothing to parse, crawl or embed, so it is usable
+    immediately. Left at the 'pending' default it reported itself as a
+    knowledge base still being built, for as long as it existed - which is
+    what an operator saw after adding a website whose FAQs had in fact
+    already been generated.
+    """
+
+    owner_headers, organization_id = await _org_with_owner(
+        client, "faq-container-ready@example.com"
+    )
+    workspace = await _create_workspace(
+        client, organization_id, owner_headers, "Clinic"
+    )
+    assistant_id = await _create_assistant(
+        client, organization_id, workspace["id"], owner_headers
+    )
+
+    created = await _create_manual_faq_source(
+        client, organization_id, workspace["id"], owner_headers, assistant_id
+    )
+
+    assert created.json()["status"] == "completed"
