@@ -19,6 +19,17 @@ COPY requirements.txt .
 RUN pip install --no-cache-dir --upgrade pip \
     && pip install --no-cache-dir -r requirements.txt
 
+# Bake the embedding model's tokenizer into the image, so the chunker never
+# reaches the network mid-request. Without this the first document processed
+# after a container starts pays a Hub download - measured at ~15s - and a
+# deployment without egress to huggingface.co would silently fall back to the
+# character estimate instead of the real token count.
+#
+# Only the tokenizer: a vocabulary file, not model weights. Build-arg driven
+# so an image built for a different EMBEDDING_MODEL bakes that one instead.
+ARG EMBEDDING_TOKENIZER=BAAI/bge-base-en-v1.5
+RUN python -c "from transformers import AutoTokenizer; AutoTokenizer.from_pretrained('${EMBEDDING_TOKENIZER}')"
+
 COPY . .
 
 EXPOSE 8000

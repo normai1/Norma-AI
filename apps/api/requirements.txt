@@ -36,3 +36,7 @@ pgvector>=0.3
 pypdf>=6.1
 python-docx>=1.1
 langchain-text-splitters>=1.1
+# The chunker measures its budget with the embedding model's own
+# tokenizer, so chunks are sized against the limit that actually
+# truncates them. Tokenizer only - no model weights are ever loaded.
+transformers>=4.44
