@@ -387,3 +387,49 @@ async def test_reset_for_next_turn_still_detects_a_short_interruption() -> None:
 
     assert detector.turn_ended() is True
     assert detector.last_final_transcript == "Second question."
+
+
+def test_the_vad_is_stricter_than_pipecats_defaults_about_what_counts_as_speech() -> None:
+    """
+    Reported live: the assistant answered voices in the room behind the
+    caller. A turn can only fire once the VAD has reported speech - see
+    TurnDetector, where _silence_since is set only after _ever_spoken - so
+    whatever clears these two thresholds is what the assistant will answer,
+    and pipecat's defaults (0.7 / 0.6) are tuned for "is anyone speaking"
+    rather than "is the person on this call speaking".
+
+    Pinned because the failure is silent in both directions: too low and the
+    room gets answered, too high and a softly-spoken caller is ignored.
+    """
+
+    from app.turn_detection import _build_default_vad_analyzer
+
+    analyzer = _build_default_vad_analyzer(sensitivity=0.5, sample_rate=16000)
+
+    assert analyzer._params.confidence > 0.7
+    assert analyzer._params.min_volume > 0.6
+
+
+def test_the_vad_thresholds_can_be_tuned_without_a_code_change(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """
+    The right threshold depends on the room and the handset, so it has to be
+    reachable without a redeploy.
+    """
+
+    import importlib
+
+    monkeypatch.setenv("VAD_CONFIDENCE", "0.95")
+    monkeypatch.setenv("VAD_MIN_VOLUME", "0.85")
+
+    from app import turn_detection
+
+    reloaded = importlib.reload(turn_detection)
+    try:
+        analyzer = reloaded._build_default_vad_analyzer(sensitivity=0.5, sample_rate=16000)
+        assert analyzer._params.confidence == 0.95
+        assert analyzer._params.min_volume == 0.85
+    finally:
+        monkeypatch.undo()
+        importlib.reload(turn_detection)

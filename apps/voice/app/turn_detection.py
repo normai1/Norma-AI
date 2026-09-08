@@ -8,6 +8,7 @@ context_builder.py precedent - app/media_session.py is the thin adapter
 that wires this into the live pipeline.
 """
 
+import os
 import time
 from collections.abc import Callable
 
@@ -22,6 +23,25 @@ from pipecat.audio.vad.vad_analyzer import VADAnalyzer, VADParams, VADState
 # tuning is explicitly out of scope here.
 _MIN_STOP_SECS = 0.3
 _MAX_STOP_SECS = 1.5
+
+# How certain Silero must be that a frame is speech, and how loud that frame
+# must be, before it counts as the caller talking.
+#
+# Both sit above pipecat's own defaults (0.7 / 0.6), which are tuned for
+# "is anyone speaking anywhere" rather than "is the person on this call
+# speaking". A voice across the room reaches the microphone quieter and less
+# cleanly than the caller's does, so the volume floor is the lever that
+# separates them - and it has to be, because nothing downstream can: a turn
+# only ever fires after the VAD has reported speech (see TurnDetector -
+# _silence_since is set only once _ever_spoken is True), so whatever clears
+# these thresholds is what the assistant will answer.
+#
+# Raising them trades one failure for another, which is why both are
+# tunable: too low and the assistant answers the room, too high and it
+# ignores a softly-spoken caller. These are starting values for a normal
+# handset or headset, not tuned against real call recordings.
+_VAD_CONFIDENCE = float(os.environ.get("VAD_CONFIDENCE", "0.8"))
+_VAD_MIN_VOLUME = float(os.environ.get("VAD_MIN_VOLUME", "0.7"))
 
 # How long sustained silence may persist with a semantically-incomplete
 # transcript before the turn ends anyway. Roughly double the most patient
@@ -70,7 +90,13 @@ def is_semantically_complete(text: str) -> bool:
 
 
 def _build_default_vad_analyzer(*, sensitivity: float, sample_rate: int) -> VADAnalyzer:
-    analyzer = SileroVADAnalyzer(params=VADParams(stop_secs=sensitivity_to_stop_secs(sensitivity)))
+    analyzer = SileroVADAnalyzer(
+        params=VADParams(
+            stop_secs=sensitivity_to_stop_secs(sensitivity),
+            confidence=_VAD_CONFIDENCE,
+            min_volume=_VAD_MIN_VOLUME,
+        )
+    )
 
     # The constructor's sample_rate kwarg alone does not take effect - the
     # analyzer's active sample rate stays 0, and stop_secs/start_secs never
