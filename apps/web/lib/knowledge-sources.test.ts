@@ -5,6 +5,7 @@ import {
   canRetryKnowledgeSource,
   faqEntryOriginLabel,
   isKnowledgeSourceProcessing,
+  knowledgeSourceStatusLabel,
   knowledgeSourceDisplayName,
   knowledgeSourceTypeLabel,
   type FaqEntry,
@@ -218,5 +219,41 @@ describe("isKnowledgeSourceProcessing", () => {
         }),
       ),
     ).toBe(false);
+  });
+});
+
+describe("knowledgeSourceStatusLabel", () => {
+  it("says the knowledge base is being built while a crawl runs", () => {
+    // "pending" is a database word; the operator just pasted a URL and needs
+    // to know something is happening.
+    expect(
+      knowledgeSourceStatusLabel(
+        makeSource({ type: "website", status: "pending", error_message: null }),
+      ),
+    ).toBe("Creating knowledge base...");
+  });
+
+  it("reports completed once the questions and answers exist", () => {
+    // FAQ generation finishes before the status flips, so this is honest.
+    expect(knowledgeSourceStatusLabel(makeSource({ status: "completed" }))).toBe(
+      "completed",
+    );
+  });
+
+  it("distinguishes a source parked on an error from one in flight", () => {
+    expect(
+      knowledgeSourceStatusLabel(
+        makeSource({
+          status: "pending",
+          error_message: "Embedding provider changed; this source needs reprocessing.",
+        }),
+      ),
+    ).toBe("needs reprocessing");
+  });
+
+  it("passes a failure through", () => {
+    expect(knowledgeSourceStatusLabel(makeSource({ status: "failed" }))).toBe(
+      "failed",
+    );
   });
 });

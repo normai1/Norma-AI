@@ -278,3 +278,23 @@ export function isKnowledgeSourceProcessing(source: KnowledgeSource): boolean {
 
   return source.status === "pending" || source.status === "processing";
 }
+
+/**
+ * What to show an operator for a source's state.
+ *
+ * "pending" is the raw database value and means nothing to the person who
+ * just pasted a URL: the crawl, the embedding and the FAQ generation all
+ * happen behind it, and FAQ generation finishes before the status flips, so
+ * "completed" genuinely means the questions and answers are ready.
+ */
+export function knowledgeSourceStatusLabel(source: KnowledgeSource): string {
+  if (isKnowledgeSourceProcessing(source)) {
+    return "Creating knowledge base...";
+  }
+
+  if (source.status === "pending" && source.error_message !== null) {
+    return "needs reprocessing";
+  }
+
+  return source.status;
+}

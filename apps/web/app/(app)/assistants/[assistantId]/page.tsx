@@ -45,6 +45,7 @@ import {
   deleteFaqEntry,
   faqEntryOriginLabel,
   isKnowledgeSourceProcessing,
+  knowledgeSourceStatusLabel,
   deleteKnowledgeSource,
   knowledgeSourceDisplayName,
   knowledgeSourceTypeLabel,
@@ -99,12 +100,19 @@ const KNOWLEDGE_SOURCE_STATUS_TONE: Record<string, string> = {
   failed: "border-red-900 text-red-300",
 };
 
-function KnowledgeSourceStatusBadge({ status }: { status: string }) {
+function KnowledgeSourceStatusBadge({ source }: { source: KnowledgeSource }) {
+  const processing = isKnowledgeSourceProcessing(source);
+
   return (
     <span
-      className={`rounded-full border px-2.5 py-0.5 text-xs font-medium ${KNOWLEDGE_SOURCE_STATUS_TONE[status] ?? "border-slate-700 text-slate-400"}`}
+      className={`rounded-full border px-2.5 py-0.5 text-xs font-medium ${
+        processing
+          ? "border-sky-800 text-sky-300"
+          : (KNOWLEDGE_SOURCE_STATUS_TONE[source.status] ??
+            "border-slate-700 text-slate-400")
+      }`}
     >
-      {status}
+      {knowledgeSourceStatusLabel(source)}
     </span>
   );
 }
@@ -1173,15 +1181,8 @@ export default function AssistantEditorPage() {
           </span>
         </div>
 
-        <KnowledgeSourceStatusBadge status={source.status} />
+        <KnowledgeSourceStatusBadge source={source} />
       </div>
-
-      {source.type === "website" && source.crawled_pages && (
-        <p className="mt-1 text-xs text-slate-500">
-          {source.crawled_pages.length} page
-          {source.crawled_pages.length === 1 ? "" : "s"} crawled
-        </p>
-      )}
 
       {source.status === "failed" && source.error_message && (
         <div className="mt-2">
