@@ -69,13 +69,19 @@ function faqEntriesUrl(
   return `${knowledgeSourceUrl(organizationId, workspaceId, knowledgeSourceId)}/faq-entries`;
 }
 
+/**
+ * One assistant's own knowledge base. Each assistant has a separate one, and
+ * the filtering happens on the server, so a sibling assistant's documents are
+ * never sent to the browser at all.
+ */
 export async function listKnowledgeSources(
   organizationId: string,
   workspaceId: string,
+  assistantId: string,
 ): Promise<KnowledgeSource[]> {
-  return authorizedJson<KnowledgeSource[]>(
-    knowledgeSourcesUrl(organizationId, workspaceId),
-  );
+  const url = `${knowledgeSourcesUrl(organizationId, workspaceId)}?assistant_id=${encodeURIComponent(assistantId)}`;
+
+  return authorizedJson<KnowledgeSource[]>(url);
 }
 
 export async function uploadKnowledgeSourceFile(

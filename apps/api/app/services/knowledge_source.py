@@ -337,10 +337,15 @@ async def list_knowledge_sources(
     *,
     organization_id: uuid.UUID,
     workspace_id: uuid.UUID,
+    assistant_id: uuid.UUID | None = None,
 ) -> list[tuple[KnowledgeSource, Document | None, list[CrawledPage] | None]]:
     """
     Every knowledge source in a workspace, each paired with its document
     (file-type) or crawled pages (website-type) - never both.
+
+    assistant_id narrows the list to one assistant's own knowledge base,
+    which is what the assistant editor asks for; without it the whole
+    workspace comes back, for a caller that genuinely wants every source.
     """
 
     await _resolve_workspace_id(
@@ -349,7 +354,9 @@ async def list_knowledge_sources(
         workspace_id=workspace_id,
     )
 
-    knowledge_sources = await knowledge_source_repo.list_for_workspace(db, workspace_id)
+    knowledge_sources = await knowledge_source_repo.list_for_workspace(
+        db, workspace_id, assistant_id=assistant_id
+    )
 
     file_source_ids = [
         source.id

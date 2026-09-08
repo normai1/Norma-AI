@@ -414,15 +414,23 @@ async def list_chunks(
 async def list_knowledge_sources(
     workspace: CurrentWorkspace,
     db: DbSession,
+    assistant_id: uuid.UUID | None = None,
 ) -> list[KnowledgeSourceResponse]:
     """
     List knowledge sources in a workspace. Any workspace member may see them.
+
+    assistant_id narrows the list to that assistant's own knowledge base -
+    each assistant has a separate one, and retrieval has only ever searched
+    the assistant's own chunks (item 23d). Filtering here rather than in the
+    browser keeps a sibling assistant's documents off the wire entirely.
+    Omitting it returns every source in the workspace, unchanged.
     """
 
     triples = await knowledge_source_service.list_knowledge_sources(
         db,
         organization_id=workspace.organization_id,
         workspace_id=workspace.id,
+        assistant_id=assistant_id,
     )
 
     return [

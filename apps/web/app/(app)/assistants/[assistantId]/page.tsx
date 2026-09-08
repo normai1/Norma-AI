@@ -406,7 +406,11 @@ export default function AssistantEditorPage() {
 
     let cancelled = false;
 
-    listKnowledgeSources(activeWorkspace.organization_id, activeWorkspace.id)
+    listKnowledgeSources(
+      activeWorkspace.organization_id,
+      activeWorkspace.id,
+      assistantId,
+    )
       .then((loaded) => {
         if (!cancelled) {
           setKnowledgeSources(loaded);
@@ -423,7 +427,7 @@ export default function AssistantEditorPage() {
     return () => {
       cancelled = true;
     };
-  }, [activeTab, activeWorkspace, knowledgeSources]);
+  }, [activeTab, activeWorkspace, knowledgeSources, assistantId]);
 
   async function refreshKnowledgeSources() {
     if (!activeWorkspace) {
@@ -432,7 +436,11 @@ export default function AssistantEditorPage() {
 
     try {
       setKnowledgeSources(
-        await listKnowledgeSources(activeWorkspace.organization_id, activeWorkspace.id),
+        await listKnowledgeSources(
+          activeWorkspace.organization_id,
+          activeWorkspace.id,
+          assistantId,
+        ),
       );
     } catch (err) {
       setKnowledgeSourcesError(

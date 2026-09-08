@@ -60,16 +60,30 @@ async def find_by_assistant_type_and_name(
 async def list_for_workspace(
     db: AsyncSession,
     workspace_id: uuid.UUID,
+    *,
+    assistant_id: uuid.UUID | None = None,
 ) -> list[KnowledgeSource]:
     """
-    Every knowledge source in a workspace.
+    Every knowledge source in a workspace, or only one assistant's own when
+    assistant_id is given.
+
+    Each assistant has its own knowledge base (item 23d scoped retrieval to
+    exactly that), so a caller looking at one assistant asks for that
+    assistant's sources rather than filtering the whole workspace in the
+    browser - the sources belonging to its siblings never leave the server.
+
+    Note that filtering excludes rows with a NULL assistant_id, which only
+    pre-23d sources have.
     """
 
-    result = await db.scalars(
-        select(KnowledgeSource)
-        .where(KnowledgeSource.workspace_id == workspace_id)
-        .order_by(KnowledgeSource.created_at),
+    statement = select(KnowledgeSource).where(
+        KnowledgeSource.workspace_id == workspace_id
     )
+
+    if assistant_id is not None:
+        statement = statement.where(KnowledgeSource.assistant_id == assistant_id)
+
+    result = await db.scalars(statement.order_by(KnowledgeSource.created_at))
 
     return list(result.all())
 

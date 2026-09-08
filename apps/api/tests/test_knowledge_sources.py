@@ -617,3 +617,115 @@ async def test_delete_in_one_organization_is_not_reachable_through_another(
     )
 
     assert response.status_code == 404
+
+
+async def test_listing_is_scoped_to_one_assistants_own_knowledge_base(
+    client: AsyncClient,
+) -> None:
+    """
+    Each assistant has a separate knowledge base. Retrieval has been scoped
+    that way since item 23d, but the list endpoint returned every source in
+    the workspace, so a second assistant's Knowledge tab showed the first
+    one's documents.
+
+    Filtered on the server rather than in the browser: a sibling assistant's
+    documents should not be on the wire at all.
+    """
+
+    owner_headers, organization_id = await _org_with_owner(
+        client, "ks-per-assistant@example.com"
+    )
+    workspace = await _create_workspace(
+        client, organization_id, owner_headers, "Clinic"
+    )
+    workspace_id = workspace["id"]
+
+    first_assistant = await _create_assistant(
+        client, organization_id, workspace_id, owner_headers
+    )
+    second_assistant = await _create_assistant(
+        client, organization_id, workspace_id, owner_headers
+    )
+
+    first_upload = await client.post(
+        _knowledge_sources_url(organization_id, workspace_id),
+        files={
+            "file": ("first.txt", b"First assistant only.", "text/plain"),
+        },
+        data={"assistant_id": first_assistant},
+        headers=owner_headers,
+    )
+    assert first_upload.status_code == 201
+
+    second_upload = await client.post(
+        _knowledge_sources_url(organization_id, workspace_id),
+        files={
+            "file": ("second.txt", b"Second assistant only.", "text/plain"),
+        },
+        data={"assistant_id": second_assistant},
+        headers=owner_headers,
+    )
+    assert second_upload.status_code == 201
+
+    first_listing = await client.get(
+        f"{_knowledge_sources_url(organization_id, workspace_id)}"
+        f"?assistant_id={first_assistant}",
+        headers=owner_headers,
+    )
+
+    assert first_listing.status_code == 200
+    first_ids = {source["id"] for source in first_listing.json()}
+    assert first_upload.json()["id"] in first_ids
+    assert second_upload.json()["id"] not in first_ids
+
+    second_listing = await client.get(
+        f"{_knowledge_sources_url(organization_id, workspace_id)}"
+        f"?assistant_id={second_assistant}",
+        headers=owner_headers,
+    )
+
+    second_ids = {source["id"] for source in second_listing.json()}
+    assert second_upload.json()["id"] in second_ids
+    assert first_upload.json()["id"] not in second_ids
+
+
+async def test_listing_without_an_assistant_filter_returns_the_whole_workspace(
+    client: AsyncClient,
+) -> None:
+    """
+    The filter is opt-in, so the existing workspace-wide behaviour is
+    unchanged for any caller that wants every source.
+    """
+
+    owner_headers, organization_id = await _org_with_owner(
+        client, "ks-unfiltered@example.com"
+    )
+    workspace = await _create_workspace(
+        client, organization_id, owner_headers, "Clinic"
+    )
+    workspace_id = workspace["id"]
+
+    first_assistant = await _create_assistant(
+        client, organization_id, workspace_id, owner_headers
+    )
+    second_assistant = await _create_assistant(
+        client, organization_id, workspace_id, owner_headers
+    )
+
+    for name, assistant_id in (
+        ("first.txt", first_assistant),
+        ("second.txt", second_assistant),
+    ):
+        uploaded = await client.post(
+            _knowledge_sources_url(organization_id, workspace_id),
+            files={"file": (name, b"Some content.", "text/plain")},
+            data={"assistant_id": assistant_id},
+            headers=owner_headers,
+        )
+        assert uploaded.status_code == 201
+
+    listing = await client.get(
+        _knowledge_sources_url(organization_id, workspace_id), headers=owner_headers
+    )
+
+    assert len(listing.json()) == 2
