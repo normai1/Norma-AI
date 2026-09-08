@@ -4,6 +4,7 @@ import {
   canRecrawlKnowledgeSource,
   canRetryKnowledgeSource,
   faqEntryOriginLabel,
+  isKnowledgeSourceProcessing,
   knowledgeSourceDisplayName,
   knowledgeSourceTypeLabel,
   type FaqEntry,
@@ -177,5 +178,45 @@ describe("faqEntryOriginLabel", () => {
     const entry = makeFaqEntry({ generated_from_knowledge_source_id: "missing" });
 
     expect(faqEntryOriginLabel(entry, [makeSource()])).toBeNull();
+  });
+});
+
+describe("isKnowledgeSourceProcessing", () => {
+  it("is true for a website that is still being crawled", () => {
+    expect(
+      isKnowledgeSourceProcessing(
+        makeSource({ type: "website", status: "pending", error_message: null }),
+      ),
+    ).toBe(true);
+  });
+
+  it("is true while a source is processing", () => {
+    expect(
+      isKnowledgeSourceProcessing(makeSource({ status: "processing" })),
+    ).toBe(true);
+  });
+
+  it("is false once a source completes", () => {
+    expect(isKnowledgeSourceProcessing(makeSource({ status: "completed" }))).toBe(
+      false,
+    );
+  });
+
+  it("is false for a failed source", () => {
+    expect(isKnowledgeSourceProcessing(makeSource({ status: "failed" }))).toBe(
+      false,
+    );
+  });
+
+  it("is false for a pending source parked on an error", () => {
+    // These wait for the operator, not for a job - polling them never ends.
+    expect(
+      isKnowledgeSourceProcessing(
+        makeSource({
+          status: "pending",
+          error_message: "Embedding provider changed; this source needs reprocessing.",
+        }),
+      ),
+    ).toBe(false);
   });
 });

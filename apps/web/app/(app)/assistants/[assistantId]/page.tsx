@@ -2,7 +2,13 @@
 
 import Link from "next/link";
 import { useParams, useRouter } from "next/navigation";
-import { useCallback, useEffect, useState, type FormEvent } from "react";
+import {
+  useCallback,
+  useEffect,
+  useRef,
+  useState,
+  type FormEvent,
+} from "react";
 
 import { useTenant } from "@/components/app/tenant-provider";
 import {
@@ -38,6 +44,7 @@ import {
   createWebsiteKnowledgeSource,
   deleteFaqEntry,
   faqEntryOriginLabel,
+  isKnowledgeSourceProcessing,
   deleteKnowledgeSource,
   knowledgeSourceDisplayName,
   knowledgeSourceTypeLabel,
@@ -102,6 +109,14 @@ function KnowledgeSourceStatusBadge({ status }: { status: string }) {
   );
 }
 
+// A background crawl takes seconds to minutes; 3s keeps the list feeling live
+// without hammering the endpoint.
+const KNOWLEDGE_POLL_INTERVAL_MS = 3_000;
+
+// Give up after this long. A background task does not survive an API restart,
+// so a source can sit "pending" with nothing actually working on it.
+const KNOWLEDGE_POLL_TIMEOUT_MS = 5 * 60 * 1_000;
+
 export default function AssistantEditorPage() {
   const params = useParams<{ assistantId: string }>();
   const assistantId = params.assistantId;
@@ -157,6 +172,9 @@ export default function AssistantEditorPage() {
   const [knowledgeSources, setKnowledgeSources] = useState<
     KnowledgeSource[] | null
   >(null);
+  // When the current run of background-crawl polling began, so it can stop
+  // rather than follow a source that will never settle.
+  const pollingStartedAtRef = useRef<number | null>(null);
   const [knowledgeSourcesError, setKnowledgeSourcesError] = useState<string | null>(
     null,
   );
@@ -427,6 +445,45 @@ export default function AssistantEditorPage() {
     return () => {
       cancelled = true;
     };
+  }, [activeTab, activeWorkspace, knowledgeSources, assistantId]);
+
+  // A website source is crawled in the background, so it is created "pending"
+  // and only becomes "completed" a while later - 36 pages took the better part
+  // of a minute in testing. Without this the list showed that first "pending"
+  // snapshot and never moved, which reads as a failed crawl and sends the
+  // operator to the Recrawl button for work that was already running.
+  //
+  // Bounded rather than open-ended: a background task does not survive an API
+  // restart, so a source really can sit "pending" forever with nothing behind
+  // it, and polling has to give up rather than hammer the endpoint for the
+  // life of the page.
+  useEffect(() => {
+    if (
+      activeTab !== "knowledge" ||
+      !activeWorkspace ||
+      knowledgeSources === null ||
+      !knowledgeSources.some(isKnowledgeSourceProcessing)
+    ) {
+      pollingStartedAtRef.current = null;
+      return;
+    }
+
+    if (pollingStartedAtRef.current === null) {
+      pollingStartedAtRef.current = Date.now();
+    }
+
+    if (Date.now() - pollingStartedAtRef.current > KNOWLEDGE_POLL_TIMEOUT_MS) {
+      return;
+    }
+
+    const timer = setTimeout(() => {
+      void refreshKnowledgeSources();
+    }, KNOWLEDGE_POLL_INTERVAL_MS);
+
+    return () => clearTimeout(timer);
+    // refreshKnowledgeSources is redefined every render; the effect re-runs on
+    // each new knowledgeSources value, which is exactly the tick we want.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeTab, activeWorkspace, knowledgeSources, assistantId]);
 
   async function refreshKnowledgeSources() {

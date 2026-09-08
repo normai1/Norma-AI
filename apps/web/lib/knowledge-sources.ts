@@ -257,3 +257,24 @@ export function faqEntryOriginLabel(
 
   return origin ? knowledgeSourceDisplayName(origin) : null;
 }
+
+/**
+ * Whether this source is still being worked on, so the UI should keep
+ * refreshing until it settles.
+ *
+ * A website source is created immediately and crawled in the background, so
+ * it is "pending" with nothing to show for several seconds - long enough that
+ * an operator watching a stuck-looking row reasonably concludes it failed and
+ * reaches for Recrawl.
+ *
+ * An error_message means the opposite: the source is parked waiting for the
+ * operator to do something (a source predating an embedding-provider change
+ * carries one and stays pending forever). Polling those would never stop.
+ */
+export function isKnowledgeSourceProcessing(source: KnowledgeSource): boolean {
+  if (source.error_message !== null) {
+    return false;
+  }
+
+  return source.status === "pending" || source.status === "processing";
+}
