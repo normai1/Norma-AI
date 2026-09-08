@@ -195,6 +195,10 @@ async def generate_faq_entries_for_source(
                 knowledge_source_id=faq_source.id,
                 question=question,
                 answer=answer,
+                # The entry lives in the shared generated container, but
+                # remembers the document it came from, so deleting that
+                # document takes this entry with it.
+                generated_from_knowledge_source_id=knowledge_source.id,
             )
         except Exception:
             logger.warning(

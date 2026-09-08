@@ -45,6 +45,8 @@ export interface FaqEntry {
   question: string;
   answer: string;
   created_at: string;
+  /** The file or website source this entry was generated from, if any. */
+  generated_from_knowledge_source_id: string | null;
 }
 
 function knowledgeSourcesUrl(organizationId: string, workspaceId: string): string {
@@ -226,4 +228,26 @@ export function canRetryKnowledgeSource(source: KnowledgeSource): boolean {
 /** Any website source can be recrawled, regardless of its current status. */
 export function canRecrawlKnowledgeSource(source: KnowledgeSource): boolean {
   return source.type === "website";
+}
+
+/**
+ * What to credit a FAQ entry to: the document or site it was generated from,
+ * or null when an operator wrote it by hand.
+ *
+ * Resolved against the sources already loaded for the assistant rather than
+ * sent per entry, so the label matches the rest of the UI exactly.
+ */
+export function faqEntryOriginLabel(
+  entry: FaqEntry,
+  sources: KnowledgeSource[],
+): string | null {
+  if (entry.generated_from_knowledge_source_id === null) {
+    return null;
+  }
+
+  const origin = sources.find(
+    (source) => source.id === entry.generated_from_knowledge_source_id,
+  );
+
+  return origin ? knowledgeSourceDisplayName(origin) : null;
 }

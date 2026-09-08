@@ -211,3 +211,148 @@ async def test_creating_a_website_source_generates_faq_entries(
     questions = {entry.question for entry in entries}
 
     assert questions == {"What are your hours?", "Are you open weekends?"}
+
+
+async def test_generated_entries_record_the_source_they_came_from(
+    client: AsyncClient,
+    db: AsyncSession,
+    faq_llm_provider: MockLLMProvider,
+) -> None:
+    """
+    Generated entries are filed under the shared per-assistant container, so
+    knowledge_source_id points at that container, not at the document. The
+    link back to the document is what makes deletion and attribution
+    possible at all.
+    """
+
+    faq_llm_provider.response = _GENERATED_PAIRS_JSON
+
+    organization_id, workspace_id, assistant_id, owner_headers = (
+        await _setup_org_workspace(client, "faqgen-origin")
+    )
+
+    uploaded = await _upload(
+        client, organization_id, workspace_id, owner_headers, assistant_id
+    )
+
+    entries = await _generated_faq_entries(db, assistant_id)
+
+    assert entries
+    for entry in entries:
+        assert str(entry.generated_from_knowledge_source_id) == uploaded["id"]
+        # Filed in the shared container, not under the document itself.
+        assert str(entry.knowledge_source_id) != uploaded["id"]
+
+
+async def test_deleting_a_source_deletes_the_faqs_generated_from_it(
+    client: AsyncClient,
+    db: AsyncSession,
+    faq_llm_provider: MockLLMProvider,
+) -> None:
+    """
+    Reported live: an operator deleted a document and its generated FAQs
+    stayed behind - still listed, and still embedded and retrievable, so the
+    assistant kept answering from a document that no longer existed.
+    """
+
+    from app.models.chunk import Chunk
+
+    faq_llm_provider.response = _GENERATED_PAIRS_JSON
+
+    organization_id, workspace_id, assistant_id, owner_headers = (
+        await _setup_org_workspace(client, "faqgen-delete")
+    )
+
+    uploaded = await _upload(
+        client, organization_id, workspace_id, owner_headers, assistant_id
+    )
+
+    entries = await _generated_faq_entries(db, assistant_id)
+    assert entries, "precondition: the upload generated FAQ entries"
+    entry_ids = [entry.id for entry in entries]
+
+    # Each entry is backed by an embedded chunk, which is what actually
+    # reaches a live call.
+    chunks_before = await db.scalars(
+        select(Chunk).where(
+            Chunk.chunk_metadata["faq_entry_id"].astext.in_(
+                [str(entry_id) for entry_id in entry_ids]
+            )
+        )
+    )
+    assert list(chunks_before), "precondition: the entries were embedded"
+
+    response = await client.delete(
+        f"{_knowledge_sources_url(organization_id, workspace_id)}/{uploaded['id']}",
+        headers=owner_headers,
+    )
+    assert response.status_code == 204
+
+    db.expire_all()
+
+    assert await _generated_faq_entries(db, assistant_id) == []
+
+    # The row going is not enough - the embedded copy is what would have
+    # gone on answering calls.
+    chunks_after = await db.scalars(
+        select(Chunk).where(
+            Chunk.chunk_metadata["faq_entry_id"].astext.in_(
+                [str(entry_id) for entry_id in entry_ids]
+            )
+        )
+    )
+    assert list(chunks_after) == []
+
+
+async def test_deleting_a_source_leaves_operator_written_faqs_alone(
+    client: AsyncClient,
+    db: AsyncSession,
+    faq_llm_provider: MockLLMProvider,
+) -> None:
+    """
+    Only what the document produced goes with it. An operator's own entries
+    have no origin recorded and must survive - deleting a document must
+    never quietly take their hand-written work with it.
+    """
+
+    faq_llm_provider.response = _GENERATED_PAIRS_JSON
+
+    organization_id, workspace_id, assistant_id, owner_headers = (
+        await _setup_org_workspace(client, "faqgen-delete-manual")
+    )
+
+    uploaded = await _upload(
+        client, organization_id, workspace_id, owner_headers, assistant_id
+    )
+
+    manual_source = await client.post(
+        f"{_knowledge_sources_url(organization_id, workspace_id)}/manual-faq",
+        json={"name": "Hand written", "assistant_id": assistant_id},
+        headers=owner_headers,
+    )
+    manual_source_id = manual_source.json()["id"]
+
+    created = await client.post(
+        f"{_knowledge_sources_url(organization_id, workspace_id)}"
+        f"/{manual_source_id}/faq-entries",
+        json={"question": "Do you validate parking?", "answer": "Yes, for two hours."},
+        headers=owner_headers,
+    )
+    assert created.status_code == 201
+    assert created.json()["generated_from_knowledge_source_id"] is None
+
+    response = await client.delete(
+        f"{_knowledge_sources_url(organization_id, workspace_id)}/{uploaded['id']}",
+        headers=owner_headers,
+    )
+    assert response.status_code == 204
+
+    surviving = await client.get(
+        f"{_knowledge_sources_url(organization_id, workspace_id)}"
+        f"/{manual_source_id}/faq-entries",
+        headers=owner_headers,
+    )
+
+    assert [entry["question"] for entry in surviving.json()] == [
+        "Do you validate parking?"
+    ]

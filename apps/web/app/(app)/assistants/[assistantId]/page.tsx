@@ -37,6 +37,7 @@ import {
   createManualFaqKnowledgeSource,
   createWebsiteKnowledgeSource,
   deleteFaqEntry,
+  faqEntryOriginLabel,
   deleteKnowledgeSource,
   knowledgeSourceDisplayName,
   knowledgeSourceTypeLabel,
@@ -1236,8 +1237,30 @@ export default function AssistantEditorPage() {
                     key={entry.id}
                     className="rounded-xl border border-slate-800 px-4 py-3"
                   >
-                    <p className="font-medium">{entry.question}</p>
-                    <p className="mt-1 text-sm text-slate-400">{entry.answer}</p>
+                    <div className="flex items-start justify-between gap-3">
+                      <div className="min-w-0">
+                        <p className="font-medium">{entry.question}</p>
+                        <p className="mt-1 text-sm text-slate-400">
+                          {entry.answer}
+                        </p>
+                      </div>
+
+                      {(() => {
+                        const origin = faqEntryOriginLabel(
+                          entry,
+                          knowledgeSources ?? [],
+                        );
+
+                        return origin === null ? null : (
+                          <span
+                            className="max-w-[12rem] shrink-0 truncate rounded-full border border-slate-700 px-2 py-0.5 text-xs text-slate-400"
+                            title={`Generated from ${origin}`}
+                          >
+                            From {origin}
+                          </span>
+                        );
+                      })()}
+                    </div>
 
                     <div className="mt-3 flex gap-2">
                       <Button

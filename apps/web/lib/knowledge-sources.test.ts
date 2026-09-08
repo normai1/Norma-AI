@@ -3,8 +3,10 @@ import { describe, expect, it } from "vitest";
 import {
   canRecrawlKnowledgeSource,
   canRetryKnowledgeSource,
+  faqEntryOriginLabel,
   knowledgeSourceDisplayName,
   knowledgeSourceTypeLabel,
+  type FaqEntry,
   type KnowledgeSource,
 } from "./knowledge-sources";
 
@@ -121,5 +123,59 @@ describe("knowledgeSourceDisplayName", () => {
         makeSource({ name: null, document: null, source_url: null }),
       ),
     ).toBe("Untitled source");
+  });
+});
+
+function makeFaqEntry(overrides: Partial<FaqEntry> = {}): FaqEntry {
+  return {
+    id: "faq-1",
+    knowledge_source_id: "generated-container",
+    question: "What are your hours?",
+    answer: "9am to 5pm.",
+    created_at: "2026-01-01T00:00:00Z",
+    generated_from_knowledge_source_id: null,
+    ...overrides,
+  };
+}
+
+describe("faqEntryOriginLabel", () => {
+  it("returns null for an operator-written entry", () => {
+    expect(faqEntryOriginLabel(makeFaqEntry(), [])).toBeNull();
+  });
+
+  it("names the file a generated entry came from", () => {
+    const source = makeSource({
+      id: "source-9",
+      document: {
+        id: "doc-1",
+        filename: "handbook.pdf",
+        content_type: "application/pdf",
+        processing_status: "completed",
+        processing_error: null,
+        created_at: "2026-01-01T00:00:00Z",
+      },
+    });
+
+    const entry = makeFaqEntry({ generated_from_knowledge_source_id: "source-9" });
+
+    expect(faqEntryOriginLabel(entry, [source])).toBe("handbook.pdf");
+  });
+
+  it("names the site a generated entry came from", () => {
+    const source = makeSource({
+      id: "source-9",
+      type: "website",
+      source_url: "https://example.com",
+    });
+
+    const entry = makeFaqEntry({ generated_from_knowledge_source_id: "source-9" });
+
+    expect(faqEntryOriginLabel(entry, [source])).toBe("https://example.com");
+  });
+
+  it("returns null when the origin source is not among those loaded", () => {
+    const entry = makeFaqEntry({ generated_from_knowledge_source_id: "missing" });
+
+    expect(faqEntryOriginLabel(entry, [makeSource()])).toBeNull();
   });
 });

@@ -84,6 +84,7 @@ async def create_faq_entry(
     knowledge_source_id: uuid.UUID,
     question: str,
     answer: str,
+    generated_from_knowledge_source_id: uuid.UUID | None = None,
 ) -> FaqEntry:
     """
     Add a FAQ entry to a manual-FAQ knowledge source the caller may manage.
@@ -91,6 +92,10 @@ async def create_faq_entry(
     propagates to the caller (mapped to a 503 at the route) rather than
     creating an entry with no embedding; nothing is committed either way
     since the caller's db.commit() runs after this returns.
+
+    generated_from_knowledge_source_id records the file or website source an
+    entry was generated from, so deleting that source can take its generated
+    entries with it. It stays None when an operator writes an entry by hand.
     """
 
     knowledge_source = await _resolve_manual_faq_source(
@@ -107,6 +112,7 @@ async def create_faq_entry(
         knowledge_source_id=knowledge_source.id,
         question=question,
         answer=answer,
+        generated_from_knowledge_source_id=generated_from_knowledge_source_id,
     )
 
     await chunk_repo.upsert_for_faq_entry(

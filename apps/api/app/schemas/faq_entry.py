@@ -22,3 +22,10 @@ class FaqEntryResponse(BaseModel):
     question: str
     answer: str
     created_at: datetime
+
+    # The file or website source this entry was generated from, or None for
+    # an operator-authored one. Only the id: the client already holds the
+    # assistant's sources to render the list, so it resolves the display name
+    # through its own knowledgeSourceDisplayName() - one naming rule for the
+    # whole UI, and no per-entry lookup here.
+    generated_from_knowledge_source_id: uuid.UUID | None = None

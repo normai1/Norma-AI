@@ -45,15 +45,20 @@ async def create(
     knowledge_source_id: uuid.UUID,
     question: str,
     answer: str,
+    generated_from_knowledge_source_id: uuid.UUID | None = None,
 ) -> FaqEntry:
     """
     Insert a new FAQ entry.
+
+    generated_from_knowledge_source_id names the file or website source this
+    entry was generated from; it stays None for an operator-authored entry.
     """
 
     faq_entry = FaqEntry(
         knowledge_source_id=knowledge_source_id,
         question=question,
         answer=answer,
+        generated_from_knowledge_source_id=generated_from_knowledge_source_id,
     )
 
     db.add(faq_entry)
@@ -93,3 +98,22 @@ async def delete(db: AsyncSession, faq_entry: FaqEntry) -> None:
 
     await db.delete(faq_entry)
     await db.flush()
+
+
+async def list_generated_from_source(
+    db: AsyncSession, knowledge_source_id: uuid.UUID
+) -> list[FaqEntry]:
+    """
+    Every entry generated from one file/website source, wherever it was
+    filed. Used by the delete path, which has to remove each entry's chunk
+    explicitly - that chunk is linked by a metadata key, not a foreign key,
+    so no database cascade can reach it.
+    """
+
+    result = await db.scalars(
+        select(FaqEntry).where(
+            FaqEntry.generated_from_knowledge_source_id == knowledge_source_id
+        )
+    )
+
+    return list(result)

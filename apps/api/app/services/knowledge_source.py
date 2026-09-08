@@ -19,6 +19,7 @@ from app.providers.storage import StorageObjectNotFound, StorageProvider
 from app.providers.web_crawler import PageFetcher, PageFetchError
 from app.repositories import chunk as chunk_repo
 from app.repositories import crawled_page as crawled_page_repo
+from app.repositories import faq_entry as faq_entry_repo
 from app.repositories import knowledge_source as knowledge_source_repo
 from app.repositories import workspace as workspace_repo
 from app.repositories.chunk import ChunkWrite
@@ -385,6 +386,39 @@ async def list_knowledge_sources(
     return results
 
 
+async def _delete_generated_faq_entries(
+    db: AsyncSession, knowledge_source_id: uuid.UUID
+) -> None:
+    """
+    Remove the FAQ entries generated from this source, and the chunk behind
+    each one.
+
+    Generated entries are filed under a shared per-assistant manual_faq
+    container rather than under the source they came from, so deleting the
+    source never reached them: an operator who deleted a document was left
+    with FAQs still listed in the UI and - worse - still embedded and still
+    being retrieved into live calls, answering from a document they had
+    deleted (CLAUDE.md section 20: deletion must actually delete).
+
+    Each chunk is removed explicitly because a FAQ chunk is tied to its entry
+    by a metadata key rather than a foreign key, so the CASCADE on the entry
+    itself cannot reach it. Doing the entries here, before the source row
+    goes, is what makes that cascade a backstop rather than the mechanism.
+    """
+
+    generated = await faq_entry_repo.list_generated_from_source(
+        db, knowledge_source_id
+    )
+
+    for faq_entry in generated:
+        await chunk_repo.delete_for_faq_entry(
+            db,
+            knowledge_source_id=faq_entry.knowledge_source_id,
+            faq_entry_id=faq_entry.id,
+        )
+        await faq_entry_repo.delete(db, faq_entry)
+
+
 async def delete_knowledge_source(
     db: AsyncSession,
     storage: StorageProvider,
@@ -420,6 +454,8 @@ async def delete_knowledge_source(
                 await storage.delete(document.storage_key)
             except StorageObjectNotFound:
                 pass
+
+    await _delete_generated_faq_entries(db, knowledge_source.id)
 
     await knowledge_source_repo.delete(db, knowledge_source)
 
