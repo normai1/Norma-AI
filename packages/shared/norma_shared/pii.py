@@ -46,7 +46,18 @@ _EMAIL = re.compile(r"[A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,}")
 # separators: "$1,234,567.89" would otherwise read as one nine-digit run.
 _SCAN = re.compile(
     r"(?P<protected>"
-    r"\d{4}-\d{1,2}-\d{1,2}(?:[ T]\d{1,2}:\d{2}(?::\d{2})?)?"  # 2026-09-07, with optional time
+    # A UUID, consumed whole and left alone. Its groups are hyphen-separated
+    # like a phone number, so a UUID that happens to have two adjacent
+    # all-digit groups - "8b24fb84-f98a-4123-4567-f4b46f6ab5a7" - offered the
+    # run pattern below an eight-digit match and came out of the logs as
+    # "8b24fb84-f98a-[phone]-f4b46f6ab5a7". Intermittent by nature, since most
+    # UUIDs have a hex letter somewhere in those groups and escape by luck.
+    #
+    # These identifiers are the whole point of the logs they appear in: call,
+    # assistant and workspace ids are what CLAUDE.md section 27 asks be logged
+    # *instead of* the content. Mangling them defeats the exchange.
+    r"[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}"
+    r"|\d{4}-\d{1,2}-\d{1,2}(?:[ T]\d{1,2}:\d{2}(?::\d{2})?)?"  # 2026-09-07, with optional time
     r"|\d{1,2}:\d{2}(?::\d{2})?"  # 9:30, 10:24:20
     r")"
     r"|(?P<run>\+?\d+(?:[\s().\-]{1,2}\d+)*)"

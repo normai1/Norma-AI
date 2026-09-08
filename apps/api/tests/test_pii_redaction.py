@@ -69,6 +69,27 @@ def test_dates_and_times_are_never_mistaken_for_a_phone_number(spoken: str) -> N
     assert redact_pii(spoken) == spoken
 
 
+@pytest.mark.parametrize(
+    "spoken",
+    [
+        # Found in the running container's own logs as
+        # "8b24fb84-f98a-[phone]-f4b46f6ab5a7". A UUID's groups are
+        # hyphen-separated like a phone number, so two adjacent all-digit
+        # groups offered the run scanner an eight-digit match. Intermittent by
+        # nature - most UUIDs carry a hex letter in those groups and escape.
+        "8b24fb84-f98a-4123-4567-f4b46f6ab5a7",
+        "8B24FB84-F98A-4123-4567-F4B46F6AB5A7",
+        "POST /workspaces/8b24fb84-f98a-4123-4567-f4b46f6ab5a7/knowledge-sources",
+        # The identifiers CLAUDE.md section 27 asks be logged *instead of* the
+        # content. Redacting them defeats the exchange.
+        "call=14ce7019-51cc-4e0e-bbe5-4ec95703da93"
+        " assistant=074be008-f8bb-4a69-928d-49a6ff0e9487",
+    ],
+)
+def test_uuids_are_never_mistaken_for_a_phone_number(spoken: str) -> None:
+    assert redact_pii(spoken) == spoken
+
+
 def test_a_phone_written_with_dots_is_still_redacted() -> None:
     """
     Four trailing digits after a dot is the last group of a phone number, not
