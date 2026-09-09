@@ -54,10 +54,62 @@ def _normalize_url(url: str) -> str:
     return urlparse(url)._replace(fragment="").geturl()
 
 
+# Page furniture, not knowledge. A navigation menu, a cookie bar and a form's
+# field labels are on every page of a site, so leaving them in means every
+# chunk carries the same noise and the FAQ generator writes questions about
+# the menu. Measured on renate.in: 28-41% of extracted text per page.
+#
+# Deliberately narrow. Two wider ideas were tried against real pages and both
+# destroyed the content:
+#
+# - Preferring <main>/<article> when present. This site renders its content in
+#   siblings of a nearly-empty <main>, so it kept 37 of 1,751 characters.
+# - Dropping [hidden]. The whole page is server-rendered inside a wrapper
+#   carrying the attribute and revealed by script, so it kept 37 characters
+#   again. Common in framework-rendered sites, and invisible until measured.
+_NON_CONTENT_TAGS = (
+    "script",
+    "style",
+    "nav",
+    "header",
+    "footer",
+    "aside",
+    "form",
+    "button",
+    "input",
+    "label",
+    "select",
+    "textarea",
+    "noscript",
+    "svg",
+    "iframe",
+)
+
+
 def _extract_text(html: str) -> str:
+    """
+    A page's readable content, with its furniture removed.
+
+    What this cannot do is tell a rendered mockup from real content. A
+    marketing page that draws a fake filled-in form out of positioned divs -
+    renate.in/candidate does exactly this, with a sample phone number - is
+    indistinguishable here from a page stating its real details, and that
+    sample number reached the knowledge base as the company's support line.
+    Nothing in the markup separates the two: the mockup is not a form, not
+    aria-hidden, and not inside any landmark element. Recognising it would
+    take rules about absolute positioning that would discard real content on
+    other sites. The defence for that case lives in the FAQ generation prompt
+    instead.
+    """
+
     soup = BeautifulSoup(html, "html.parser")
 
-    for tag in soup(["script", "style"]):
+    for tag in soup(list(_NON_CONTENT_TAGS)):
+        tag.decompose()
+
+    # Explicitly marked decorative - icons and the like. Note this is the ARIA
+    # attribute only, never the hidden attribute; see above for why.
+    for tag in soup.select('[aria-hidden="true"]'):
         tag.decompose()
 
     text = soup.get_text(separator=" ", strip=True)

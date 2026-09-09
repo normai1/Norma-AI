@@ -359,3 +359,77 @@ async def test_crawl_ignores_a_robots_sitemap_on_another_host() -> None:
     results = await crawl_website(fetcher, "http://example.com/")
 
     assert {r.url for r in results} == {"http://example.com/"}
+
+
+def test_page_furniture_is_not_treated_as_knowledge() -> None:
+    """
+    A menu, a footer and a form's labels appear on every page of a site, so
+    leaving them in means every chunk carries the same noise.
+    """
+
+    from app.services.web_crawler import _extract_text
+
+    html = """
+        <html><body>
+          <nav>Home Pricing Contact</nav>
+          <header>Renate AI</header>
+          <p>We interview candidates by phone in English and Hindi.</p>
+          <form><label>Phone Number</label>
+            <input value="+91 1234123400"></form>
+          <button>SUBMIT</button>
+          <footer>All rights reserved</footer>
+        </body></html>
+    """
+
+    text = _extract_text(html)
+
+    assert "interview candidates by phone" in text
+    for furniture in (
+        "Home Pricing Contact",
+        "SUBMIT",
+        "All rights reserved",
+        "Phone Number",
+    ):
+        assert furniture not in text
+
+
+def test_explicitly_decorative_content_is_dropped() -> None:
+    from app.services.web_crawler import _extract_text
+
+    html = (
+        '<html><body><span aria-hidden="true">icon</span>'
+        "<p>Real content.</p></body></html>"
+    )
+
+    text = _extract_text(html)
+
+    assert text == "Real content."
+
+
+def test_content_inside_a_hidden_wrapper_is_kept() -> None:
+    """
+    Regression, measured against a real site: framework-rendered pages
+    server-render their whole body inside a wrapper carrying the hidden
+    attribute and reveal it with script. Dropping [hidden] kept 37 of 1,751
+    characters - the page, gone.
+    """
+
+    from app.services.web_crawler import _extract_text
+
+    html = (
+        "<html><body><div hidden>"
+        "<p>The clinic opens at nine.</p></div></body></html>"
+    )
+
+    assert "The clinic opens at nine." in _extract_text(html)
+
+
+def test_ordinary_page_content_survives_unchanged() -> None:
+    from app.services.web_crawler import _extract_text
+
+    html = (
+        "<html><body><h1>Pricing</h1>"
+        "<p>Lite is 50 interviews a month.</p></body></html>"
+    )
+
+    assert _extract_text(html) == "Pricing Lite is 50 interviews a month."
