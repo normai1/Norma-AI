@@ -218,3 +218,26 @@ def test_the_first_window_gets_no_avoid_list() -> None:
     from app.services.faq_generation import _avoid_clause
 
     assert _avoid_clause([]) == ""
+
+
+def test_the_prompt_warns_against_example_and_placeholder_content() -> None:
+    """
+    Reported from a real crawl: renate.in's candidate page carries a staged
+    conversation showing a sample form filled in with "+91 1234123400" and an
+    invented name. That number was written into the knowledge base as the
+    company's support line, while its real numbers sat elsewhere in the same
+    crawl.
+
+    The model was not hallucinating - it reported its text faithfully, which
+    is why this has to be handled in the instruction rather than by trusting
+    grounding alone. A page's marketing mockups are crawled just as readily
+    as its facts.
+    """
+
+    from app.services.faq_generation import _SYSTEM_PROMPT
+
+    lowered = _SYSTEM_PROMPT.lower()
+
+    assert "placeholder" in lowered
+    assert "sample form" in lowered or "staged" in lowered
+    assert "sequential" in lowered

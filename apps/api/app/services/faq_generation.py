@@ -94,6 +94,21 @@ _SYSTEM_PROMPT = (
     "ask this business, with answers grounded ONLY in the given text - "
     "never invent a fact, price, hours, or policy that is not present in "
     "it. "
+    # A crawl captures a page's marketing mockups along with its real
+    # content. A staged conversation on renate.in's candidate page showed a
+    # sample form filled in with "+91 1234123400" and a made-up name, and
+    # that number was written into the knowledge base as the company's
+    # support line - the model reported its text faithfully, which is exactly
+    # the problem. Real contact details for the same business were elsewhere
+    # in the same crawl.
+    "Web pages contain example and placeholder content as well as real "
+    "content: sample forms, screenshots of conversations, demo data, and "
+    "invented names, numbers and addresses used for illustration. Never "
+    "present those as the business's real details. A phone number, email or "
+    "name that appears inside a filled-in sample form or a staged "
+    "conversation is an illustration, not a fact - and an obviously "
+    "sequential or repeated number is never a real one. If the text does not "
+    "clearly contain a genuine value, do not write a question about it. "
     # Without a target the model returns two or three pairs regardless of
     # how much the text covers - measured at ~1.8 per window against a real
     # document, which is what left a 50-page PDF with a handful of entries
