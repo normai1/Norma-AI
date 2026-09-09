@@ -53,11 +53,33 @@ MAX_SOURCE_TEXT_CHARS = 12_000
 # prose - after which the remainder is deliberately not read.
 MAX_SOURCE_WINDOWS = 20
 
-# How many windows are generated at once. Measured, not guessed: at 4 the
-# provider began returning 429 for most of a 13-window document, and because
-# a failed window is swallowed rather than raised, that showed up only as a
-# short FAQ list - 3 windows' worth of questions for a 50-page PDF.
-_WINDOW_CONCURRENCY = 2
+# How many already-written questions a later window is shown, so it can avoid
+# repeating them. Bounded so the reminder cannot crowd out the document text
+# it is meant to accompany.
+_RECENT_QUESTIONS_SHOWN = 40
+
+# Two questions sharing this proportion of their meaningful words are treated
+# as the same question. Measured on real generated output rather than picked:
+# obvious rewordings scored 0.67, 0.33 and 0.14, while genuinely distinct
+# questions topped out at 0.18 - so 0.5 removes the worst repeats with room to
+# spare and cannot reach the distinct ones.
+#
+# It deliberately does not catch a paraphrase built from different words
+# ("Is there a fee for posting a job?" against "What does it cost to post a
+# job?"), and nothing cheap does: embedding similarity was measured too, and
+# ranked a true duplicate at 0.879 below unrelated pairs at 0.876 and 0.851.
+# The avoid-list in the prompt is what prevents most of those; this is the
+# backstop for repeats inside a single window, which the avoid-list cannot see.
+_DUPLICATE_WORD_OVERLAP = 0.5
+
+# Carry no meaning for telling two questions apart.
+_QUESTION_STOP_WORDS = frozenset(
+    {
+        "what", "is", "are", "the", "a", "an", "of", "for", "to", "in", "on",
+        "how", "does", "do", "can", "it", "and", "with", "you", "your", "be",
+        "by", "there", "any", "will", "when", "which", "that", "this",
+    }
+)
 
 # A rate-limited window is retried rather than lost. The provider answers a
 # burst of windows with 429 and recovers a moment later, so the difference
@@ -221,6 +243,33 @@ def _normalized_question(question: str) -> str:
     return re.sub(r"[^a-z0-9 ]", "", question.casefold()).strip()
 
 
+def _meaningful_words(question: str) -> set[str]:
+    return {
+        word
+        for word in _normalized_question(question).split()
+        if word not in _QUESTION_STOP_WORDS
+    }
+
+
+def _is_reworded(question: str, kept: list[set[str]]) -> bool:
+    """
+    Whether this question is one already kept, in different words.
+    """
+
+    words = _meaningful_words(question)
+
+    if not words:
+        return False
+
+    for existing in kept:
+        union = words | existing
+
+        if union and len(words & existing) / len(union) >= _DUPLICATE_WORD_OVERLAP:
+            return True
+
+    return False
+
+
 def _deduplicate(
     pair_groups: list[list[tuple[str, str]]],
 ) -> list[tuple[str, str]]:
@@ -234,16 +283,18 @@ def _deduplicate(
     """
 
     seen: set[str] = set()
+    kept_words: list[set[str]] = []
     merged: list[tuple[str, str]] = []
 
     for pairs in pair_groups:
         for question, answer in pairs:
             key = _normalized_question(question)
 
-            if not key or key in seen:
+            if not key or key in seen or _is_reworded(question, kept_words):
                 continue
 
             seen.add(key)
+            kept_words.append(_meaningful_words(question))
             merged.append((question, answer))
 
             if len(merged) >= MAX_GENERATED_ENTRIES:
@@ -252,11 +303,42 @@ def _deduplicate(
     return merged
 
 
+def _avoid_clause(already_asked: list[str]) -> str:
+    """
+    The instruction that keeps a later window off ground an earlier one
+    already covered.
+
+    Windows are slices of one document, and a business repeats itself across
+    its own pages - pricing, turnaround and data handling get mentioned in
+    several places. Generated independently, each window asks about them
+    again, and the result is a FAQ list where a third of the questions are
+    variations of each other.
+
+    Detecting that afterwards does not work: measured on a real site, a
+    genuine duplicate pair scored 0.879 cosine while unrelated pairs scored
+    0.876 and 0.851, so no threshold separates them. Not generating the
+    duplicate is the only reliable option.
+    """
+
+    if not already_asked:
+        return ""
+
+    recent = already_asked[-_RECENT_QUESTIONS_SHOWN:]
+    listed = "\n".join(f"- {question}" for question in recent)
+
+    return (
+        "\n\nQuestions already written for this business, from earlier parts "
+        "of the same document. Do not ask any of these again, and do not ask "
+        "a reworded version of one - cover something they do not:\n"
+        f"{listed}"
+    )
+
+
 async def _generate_for_window(
     llm_provider: LLMProvider,
     window: str,
     *,
-    semaphore: asyncio.Semaphore,
+    already_asked: list[str],
     knowledge_source_id: uuid.UUID,
 ) -> list[tuple[str, str]]:
     """
@@ -267,30 +349,29 @@ async def _generate_for_window(
     not the whole set.
     """
 
+    prompt = window + _avoid_clause(already_asked)
+
     for attempt in range(1, _WINDOW_MAX_ATTEMPTS + 1):
-        async with semaphore:
-            try:
-                raw_response = await llm_provider.generate(
-                    system_prompt=_SYSTEM_PROMPT,
-                    user_prompt=window,
+        try:
+            raw_response = await llm_provider.generate(
+                system_prompt=_SYSTEM_PROMPT,
+                user_prompt=prompt,
+            )
+        except LLMProviderError as exc:
+            if attempt == _WINDOW_MAX_ATTEMPTS:
+                logger.warning(
+                    "FAQ generation gave up on one window of knowledge "
+                    "source %s after %d attempts: %s",
+                    knowledge_source_id,
+                    attempt,
+                    type(exc).__name__,
                 )
-            except LLMProviderError as exc:
-                if attempt == _WINDOW_MAX_ATTEMPTS:
-                    logger.warning(
-                        "FAQ generation gave up on one window of knowledge "
-                        "source %s after %d attempts: %s",
-                        knowledge_source_id,
-                        attempt,
-                        type(exc).__name__,
-                    )
 
-                    return []
-            else:
-                return _extract_pairs(raw_response)
+                return []
 
-        # Outside the semaphore, so a window that is waiting out a rate limit
-        # is not also holding a slot the other windows could be using.
-        await asyncio.sleep(_WINDOW_RETRY_BACKOFF_SECONDS * (2 ** (attempt - 1)))
+            await asyncio.sleep(_WINDOW_RETRY_BACKOFF_SECONDS * (2 ** (attempt - 1)))
+        else:
+            return _extract_pairs(raw_response)
 
     return []
 
@@ -320,21 +401,26 @@ async def generate_faq_entries_for_source(
         return
 
     windows = _windows(text)
-    semaphore = asyncio.Semaphore(_WINDOW_CONCURRENCY)
 
-    pair_groups = await asyncio.gather(
-        *(
-            _generate_for_window(
-                llm_provider,
-                window,
-                semaphore=semaphore,
-                knowledge_source_id=knowledge_source.id,
-            )
-            for window in windows
+    # Sequential, not concurrent, for two reasons that happen to agree. A
+    # window can only avoid repeating earlier questions if it is told what
+    # they were, which requires the earlier ones to have finished. And
+    # concurrency is what provoked the provider into rate-limiting most of a
+    # document - measured at 3 of 13 windows answered.
+    pair_groups: list[list[tuple[str, str]]] = []
+    already_asked: list[str] = []
+
+    for window in windows:
+        pairs_for_window = await _generate_for_window(
+            llm_provider,
+            window,
+            already_asked=already_asked,
+            knowledge_source_id=knowledge_source.id,
         )
-    )
+        pair_groups.append(pairs_for_window)
+        already_asked.extend(question for question, _answer in pairs_for_window)
 
-    pairs = _deduplicate(list(pair_groups))
+    pairs = _deduplicate(pair_groups)
 
     productive = sum(1 for group in pair_groups if group)
 

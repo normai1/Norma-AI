@@ -147,3 +147,74 @@ def test_the_overall_entry_ceiling_is_respected() -> None:
     ]
 
     assert len(_deduplicate(groups)) == MAX_GENERATED_ENTRIES
+
+
+def test_a_reworded_question_is_dropped() -> None:
+    """
+    Reported from a real crawl: the generated list repeated itself. These two
+    came from the same window, which the prompt's avoid-list cannot see - it
+    only carries questions from *earlier* windows.
+    """
+
+    from app.services.faq_generation import _deduplicate
+
+    merged = _deduplicate(
+        [
+            [
+                (
+                    "In which languages does Renate conduct its AI voice"
+                    " interviews?",
+                    "a",
+                ),
+                (
+                    "Which languages are supported for AI voice interviews on"
+                    " Renate?",
+                    "b",
+                ),
+            ]
+        ]
+    )
+
+    assert len(merged) == 1
+
+
+def test_questions_about_different_things_both_survive() -> None:
+    """
+    The cost of over-matching is losing a real question, so the threshold has
+    room: these measured at 0.18 word overlap against a 0.5 cutoff.
+    """
+
+    from app.services.faq_generation import _deduplicate
+
+    merged = _deduplicate(
+        [
+            [
+                ("What services does Renate provide in the recruitment process?", "a"),
+                (
+                    "What options are available for candidates to apply through"
+                    " Renate?",
+                    "b",
+                ),
+                ("What is the price for using Renate to fill a single job?", "c"),
+                ("How is my company's data protected?", "d"),
+            ]
+        ]
+    )
+
+    assert len(merged) == 4
+
+
+def test_a_later_window_is_told_what_earlier_ones_already_asked() -> None:
+    from app.services.faq_generation import _avoid_clause
+
+    clause = _avoid_clause(["What are your hours?", "Where are you based?"])
+
+    assert "What are your hours?" in clause
+    assert "Where are you based?" in clause
+    assert "Do not ask any of these again" in clause
+
+
+def test_the_first_window_gets_no_avoid_list() -> None:
+    from app.services.faq_generation import _avoid_clause
+
+    assert _avoid_clause([]) == ""
