@@ -18,6 +18,7 @@ from app import config
 from app.llm import LLMProviderUnavailable
 from app.main import app
 from app.media_session import (
+    SpeechToTextProcessor,
     _mostly_already_said,
     build_voice_session_pipeline_worker,
 )
@@ -2078,3 +2079,31 @@ def test_media_session_rejects_a_token_of_the_wrong_type(
         ws.receive()
 
     assert exc_info.value.code == 4401
+
+
+async def test_cleanup_stops_the_speech_to_text_reconnect_loop() -> None:
+    """
+    Reported as "assistant isn't responding anything".
+
+    The reconnect loop only exited on _input_ended, set by an EndFrame or a
+    CancelFrame. A browser closing its socket delivers neither, so the loop
+    went on dialling the provider forever for a session with nobody on it.
+    Every test call left one running: 126 were found looping at once, 1,639
+    reconnect attempts in an hour between them, which rate-limited the speech
+    provider and the LLM until genuinely new calls got no reply at all.
+
+    Reconnecting through a provider's own failures stays untouched - a caller
+    decides when a call is over, and this is that.
+    """
+
+    from norma_shared.mock_speech import MockSTT
+
+    processor = SpeechToTextProcessor(MockSTT(), language="en")
+
+    assert processor._input_ended is False
+
+    await processor.cleanup()
+
+    assert processor._input_ended is True, "the loop would keep reconnecting"
+    # The sentinel that unblocks the audio iterator so the stream can finish.
+    assert await processor._audio_queue.get() is None

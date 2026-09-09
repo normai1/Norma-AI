@@ -374,6 +374,37 @@ class SpeechToTextProcessor(FrameProcessor):
             )
         )
 
+    async def cleanup(self) -> None:
+        """
+        Stop transcribing when the session is torn down.
+
+        The reconnect loop only ever exited on _input_ended, which is set by
+        an EndFrame or CancelFrame. A browser simply closing its socket
+        delivers neither - confirmed by the absence of this processor's own
+        "stt input ending" line after a real disconnect - so the loop went on
+        reconnecting to the provider for a session with nobody on it.
+
+        Every test call left one behind. They accumulate: 126 of them were
+        found still looping at once, between them 1,639 reconnects in an hour,
+        which rate-limited the speech provider and Groq alike and left new,
+        real calls with no transcription and no reply. Reported as "assistant
+        isn't responding anything".
+
+        Deliberately narrow. Reconnecting through a provider's own failures is
+        the correct behaviour and is left alone (CLAUDE.md: silence is the
+        worst possible failure, and a caller decides when a call is over).
+        This only ends the loop once there is no longer a call to serve.
+        """
+
+        self._input_ended = True
+        await self._audio_queue.put(None)
+
+        if self._stream_task is not None:
+            await self.cancel_task(self._stream_task)
+            self._stream_task = None
+
+        await super().cleanup()
+
     def _observe_incoming_audio(self, chunk: bytes) -> None:
         """
         Periodically reports how loud the audio actually arriving from the
@@ -1844,4 +1875,30 @@ def build_voice_session_pipeline_worker(
     # exactly the five-minute mark, which the caller experienced as the
     # test call hanging up on them mid-answer around the thirteenth
     # question. A call ends when the person on it disconnects.
-    return PipelineWorker(pipeline, enable_rtvi=False, idle_timeout_secs=None)
+    worker = PipelineWorker(pipeline, enable_rtvi=False, idle_timeout_secs=None)
+
+    @transport.event_handler("on_client_disconnected")
+    async def _on_client_disconnected(_transport, _client) -> None:
+        """
+        End the session when the caller's socket closes.
+
+        Nothing else did. A browser closing its connection delivers neither
+        an EndFrame nor a CancelFrame, and the runner only stops on an
+        external signal, so the pipeline stayed up with nobody on it and the
+        speech-to-text reconnect loop went on dialling the provider forever.
+
+        Every test call left one running. 126 were found looping at once,
+        1,639 reconnect attempts in an hour between them, which rate-limited
+        the speech provider and the LLM and left genuinely new calls with no
+        transcription and no reply at all.
+
+        This is the caller ending the call, which is the one thing that has
+        always been allowed to end it - distinct from a provider failing
+        mid-call, where reconnecting indefinitely remains correct.
+        """
+
+        logger.info("caller disconnected - ending the session")
+
+        await worker.cancel()
+
+    return worker
