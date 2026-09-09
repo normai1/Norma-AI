@@ -1,6 +1,7 @@
 import uuid
 from datetime import UTC, datetime
 
+import pytest
 from httpx import AsyncClient
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -91,3 +92,42 @@ async def test_401s_with_a_wrong_secret_header(
     )
 
     assert response.status_code == 401
+
+
+async def test_the_route_commits_so_the_metric_outlives_the_request(
+    client: AsyncClient, db: AsyncSession, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """
+    The route flushed but never committed. Flushing assigns an id, so the
+    caller got a 200 with an id back while every row was rolled back when the
+    request ended - the table stayed empty and per-turn latency could not be
+    measured at all.
+
+    This asserts the commit happens rather than reading the row back, because
+    reading it back cannot fail here: every test runs inside one transaction
+    that is rolled back afterwards (see conftest), so a flushed-but-
+    uncommitted row is visible to the test session exactly like a committed
+    one. That is precisely why the suite did not catch this, and why the check
+    has to be on the call.
+    """
+
+    assistant = await _make_assistant(db, "turn-metric-commits")
+    await db.flush()
+
+    commits: list[int] = []
+    original = AsyncSession.commit
+
+    async def _counting_commit(self):
+        commits.append(1)
+        await original(self)
+
+    monkeypatch.setattr(AsyncSession, "commit", _counting_commit)
+
+    response = await client.post(
+        _TURN_METRICS_URL.format(assistant_id=assistant.id),
+        json={"call_id": str(uuid.uuid4())},
+        headers={"X-Internal-Secret": settings.internal_api_secret},
+    )
+
+    assert response.status_code == 200
+    assert commits, "the metric was never committed and would be rolled back"

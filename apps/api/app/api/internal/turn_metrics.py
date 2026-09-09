@@ -57,4 +57,10 @@ async def create_turn_metric(
     except AssistantNotFound as exc:
         raise _ASSISTANT_NOT_FOUND from exc
 
+    # Without this the row is flushed - which is enough to return an id, so
+    # the caller sees 200 - and then rolled back when the request ends. Every
+    # turn metric ever recorded was discarded that way, leaving the table
+    # empty and per-turn latency (CLAUDE.md section 27) unmeasurable.
+    await db.commit()
+
     return {"id": str(turn_metric.id)}

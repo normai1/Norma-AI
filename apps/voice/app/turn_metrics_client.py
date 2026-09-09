@@ -7,12 +7,15 @@ affect the call, and there is nothing useful to "fail open" to here, unlike
 fetch_retrieved_context's empty-string fallback.
 """
 
+import logging
 import uuid
 
 import httpx
 
 from app import config
 from app.turn_metrics import TurnMetricRecord
+
+logger = logging.getLogger(__name__)
 
 
 async def record_turn_metric(
@@ -24,7 +27,7 @@ async def record_turn_metric(
     owned_client = client or httpx.AsyncClient()
 
     try:
-        await owned_client.post(
+        response = await owned_client.post(
             f"{config.API_INTERNAL_URL}/internal/v1/assistants/{assistant_id}/turn-metrics",
             json={
                 "call_id": str(record.call_id),
@@ -38,8 +41,22 @@ async def record_turn_metric(
             headers={"X-Internal-Secret": config.INTERNAL_API_SECRET},
             timeout=5.0,
         )
-    except httpx.HTTPError:
-        pass
+
+        if response.status_code != 200:
+            # Silent before, and the status was never even looked at: the
+            # endpoint accepted every metric with a 200 while discarding the
+            # row, and nothing here would have reported a 4xx either.
+            logger.warning(
+                "turn metric rejected with status %d: assistant=%s",
+                response.status_code,
+                assistant_id,
+            )
+    except httpx.HTTPError as exc:
+        logger.warning(
+            "turn metric could not be sent: assistant=%s error=%s",
+            assistant_id,
+            type(exc).__name__,
+        )
     finally:
         if client is None:
             await owned_client.aclose()
