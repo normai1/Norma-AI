@@ -167,8 +167,21 @@ class Settings(BaseSettings):
     # any latency-sensitive path. Raise crawl_max_pages for a genuinely
     # large site; the crawl runs in the background, so a bigger number
     # costs time and embeddings, not a blocked request.
-    crawl_max_pages: int = 200
+    crawl_max_pages: int = 300
     crawl_max_depth: int = 5
+
+    # How many chunks go to the embedding provider in one request. A whole
+    # crawl used to go in a single call, which is fine for a small site and
+    # impossible for a large one - a 200-page crawl made one request carrying
+    # over a thousand chunks, and it timed out every time.
+    embedding_batch_size: int = 32
+
+    # A hosted embedding provider is slow often enough that a timeout in a run
+    # of forty batches is expected rather than exceptional (measured: 0.4s
+    # warm, over 5s cold). Without retries one of those loses the entire
+    # crawl.
+    embedding_max_attempts: int = 3
+    embedding_retry_backoff_seconds: float = 1.0
 
     # ------------------------------------------------------------------
     # FAQ generation (apps/api's own background/batch text generation -

@@ -480,3 +480,55 @@ async def test_a_website_reports_processing_while_it_is_being_crawled(
         client, organization_id, workspace_id, owner_headers, response.json()["id"]
     )
     assert settled["status"] == "completed"
+
+
+async def test_a_large_crawl_embeds_in_batches_rather_than_one_request(
+    client: AsyncClient, page_fetcher: MockPageFetcher, monkeypatch
+) -> None:
+    """
+    The regression this pins: a crawl handed every chunk from the whole site
+    to the provider in one call. A 200-page documentation site produced over
+    a thousand chunks in a single request, timed out, and was marked failed
+    with nothing written - every page fetched, parsed and chunked, discarded.
+    """
+
+    from app.api import deps
+    from app.providers.mock_embedding import MockEmbeddingProvider
+
+    calls: list[int] = []
+
+    class _CountingProvider(MockEmbeddingProvider):
+        async def embed(self, texts):
+            calls.append(len(texts))
+            return await super().embed(texts)
+
+    organization_id, workspace_id, assistant_id, owner_headers = (
+        await _setup_workspace(client, "ws-batched-crawl")
+    )
+
+    # Enough content that one request would carry far more than a batch.
+    body = " ".join(
+        f"Sentence {i} about the clinic and its services." for i in range(400)
+    )
+    page_fetcher.pages["http://example.com/"] = _page(
+        body + "".join(f'<a href="/p{i}">p{i}</a>' for i in range(12))
+    )
+    for i in range(12):
+        page_fetcher.pages[f"http://example.com/p{i}"] = _page(body)
+
+    provider = _CountingProvider(dimension=settings.embedding_dimension)
+    overrides = client._transport.app.dependency_overrides
+    overrides[deps.get_embedding_provider_dependency] = lambda: provider
+    try:
+        response = await _create_website(
+            client, organization_id, workspace_id, owner_headers, assistant_id
+        )
+    finally:
+        overrides.pop(deps.get_embedding_provider_dependency, None)
+
+    assert response.status_code == 201
+
+    chunking_calls = [n for n in calls if n > 1]
+    assert chunking_calls, "the crawl embedded nothing"
+    assert len(chunking_calls) > 1, "the whole crawl still went in one request"
+    assert max(chunking_calls) <= settings.embedding_batch_size

@@ -27,6 +27,7 @@ from app.services import assistant as assistant_service
 from app.services import faq_generation as faq_generation_service
 from app.services.chunker import ChunkSpan, chunk_text
 from app.services.document_parser import DocumentParseError, parse_document
+from app.services.embedding_batch import embed_in_batches
 from app.services.web_crawler import crawl_website
 
 FAILED_STATUS = knowledge_source_repo.FAILED_STATUS
@@ -192,7 +193,9 @@ async def _parse_and_chunk_document(
     spans = chunk_text(text)
 
     try:
-        vectors = await embedding_provider.embed([span.text for span in spans])
+        vectors = await embed_in_batches(
+            embedding_provider, [span.text for span in spans]
+        )
     except EmbeddingProviderError as exc:
         message = str(exc)
         knowledge_source.status = FAILED_STATUS
@@ -566,8 +569,8 @@ async def _crawl_and_reconcile(
             spans_by_url.append((result.url, span))
 
     try:
-        vectors = await embedding_provider.embed(
-            [span.text for _url, span in spans_by_url]
+        vectors = await embed_in_batches(
+            embedding_provider, [span.text for _url, span in spans_by_url]
         )
     except EmbeddingProviderError as exc:
         knowledge_source.status = FAILED_STATUS
