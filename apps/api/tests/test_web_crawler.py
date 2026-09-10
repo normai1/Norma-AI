@@ -433,3 +433,65 @@ def test_ordinary_page_content_survives_unchanged() -> None:
     )
 
     assert _extract_text(html) == "Pricing Lite is 50 interviews a month."
+
+
+def test_a_cloudflare_obfuscated_email_is_decoded() -> None:
+    """
+    Reported from a real call: the assistant told a caller to write to
+    "[email protected]".
+
+    Cloudflare's Email Address Obfuscation replaces every mailto with that
+    literal text and hides the address in a data-cfemail attribute for its
+    own script to decode in the browser. A crawler runs no script, so the
+    placeholder is what reached the knowledge base while the real address -
+    support@renate.in - sat in the attribute on the same page.
+    """
+
+    from app.services.web_crawler import _extract_text
+
+    html = (
+        '<p>Email <a href="/cdn-cgi/l/email-protection" class="__cf_email__" '
+        'data-cfemail="dba8aeababb4a9af9ba9beb5baafbef5b2b5">'
+        "[email&#160;protected]</a> today.</p>"
+    )
+
+    text = _extract_text(html)
+
+    assert "support@renate.in" in text
+    assert "[email" not in text
+
+
+def test_the_address_is_recovered_from_the_link_too() -> None:
+    """
+    The same address is encoded in the href Cloudflare leaves behind, which
+    is what remains when the element carrying the attribute is not matched.
+    """
+
+    from app.services.web_crawler import _extract_text
+
+    html = (
+        '<p>Write to <a href="/cdn-cgi/l/email-protection#'
+        'dba8aeababb4a9af9ba9beb5baafbef5b2b5">here</a>.</p>'
+    )
+
+    assert "support@renate.in" in _extract_text(html)
+
+
+def test_a_malformed_encoding_is_left_alone_rather_than_decoded_to_nonsense() -> None:
+    """
+    Degrading to the placeholder is bad; writing decoded rubbish into the
+    knowledge base as an address would be worse.
+    """
+
+    from app.services.web_crawler import _decode_cloudflare_email
+
+    assert _decode_cloudflare_email("zzzz") is None
+    assert _decode_cloudflare_email("") is None
+    # Decodes cleanly, but is not an address.
+    assert _decode_cloudflare_email("dba8ae") is None
+
+
+def test_an_ordinary_email_on_a_page_is_untouched() -> None:
+    from app.services.web_crawler import _extract_text
+
+    assert "hello@example.com" in _extract_text("<p>Email hello@example.com.</p>")

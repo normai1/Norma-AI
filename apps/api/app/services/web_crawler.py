@@ -67,6 +67,10 @@ def _normalize_url(url: str) -> str:
 # - Dropping [hidden]. The whole page is server-rendered inside a wrapper
 #   carrying the attribute and revealed by script, so it kept 37 characters
 #   again. Common in framework-rendered sites, and invisible until measured.
+# Loose on purpose - this only has to reject decoded bytes that are plainly
+# not an address, not validate deliverability.
+_EMAIL_SHAPE = re.compile(r"^[^@\s]+@[^@\s]+\.[A-Za-z]{2,}$")
+
 _NON_CONTENT_TAGS = (
     "script",
     "style",
@@ -86,6 +90,61 @@ _NON_CONTENT_TAGS = (
 )
 
 
+def _decode_cloudflare_email(encoded: str) -> str | None:
+    """
+    The real address behind a Cloudflare-obfuscated one, or None if the
+    encoding is not what it claims to be.
+
+    Cloudflare's Email Address Obfuscation replaces every mailto on a page
+    with the literal text "[email protected]" and hides the address in a
+    data-cfemail attribute, to be decoded by its own script in the browser.
+    A crawler runs no script, so it extracts the placeholder - and the
+    assistant then tells callers to write to "[email protected]", which was
+    reported from a real call while renate.in's actual address, support@
+    renate.in, sat in the attribute on the same page.
+
+    The encoding is a single-byte XOR: the first hex pair is the key, and
+    every pair after it is a character of the address.
+    """
+
+    try:
+        key = int(encoded[:2], 16)
+        decoded = "".join(
+            chr(int(encoded[i : i + 2], 16) ^ key) for i in range(2, len(encoded), 2)
+        )
+    except ValueError:
+        return None
+
+    # Only accept something that actually looks like an address, so a
+    # malformed or changed encoding degrades to leaving the page alone
+    # rather than writing nonsense into the knowledge base.
+    return decoded if _EMAIL_SHAPE.match(decoded) else None
+
+
+def _restore_obfuscated_emails(soup: BeautifulSoup) -> None:
+    """
+    Put the real addresses back before the page becomes text.
+    """
+
+    for element in soup.select("[data-cfemail]"):
+        decoded = _decode_cloudflare_email(element.get("data-cfemail", ""))
+
+        if decoded:
+            element.replace_with(decoded)
+
+    # The same address is also encoded in the link Cloudflare leaves behind,
+    # which is what remains when the span carrying the attribute is nested
+    # somewhere the selector above did not reach.
+    for anchor in soup.find_all("a", href=True):
+        if "/cdn-cgi/l/email-protection#" not in anchor["href"]:
+            continue
+
+        decoded = _decode_cloudflare_email(anchor["href"].split("#", 1)[1])
+
+        if decoded:
+            anchor.replace_with(decoded)
+
+
 def _extract_text(html: str) -> str:
     """
     A page's readable content, with its furniture removed.
@@ -103,6 +162,10 @@ def _extract_text(html: str) -> str:
     """
 
     soup = BeautifulSoup(html, "html.parser")
+
+    # Before anything is removed: the placeholder is ordinary text, so a
+    # later pass cannot tell it from a real address.
+    _restore_obfuscated_emails(soup)
 
     for tag in soup(list(_NON_CONTENT_TAGS)):
         tag.decompose()
