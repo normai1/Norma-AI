@@ -111,3 +111,61 @@ async def fetch_retrieved_context(
     finally:
         if client is None:
             await owned_client.aclose()
+
+
+# Generous, because nothing is waiting on it: this runs once at session
+# start, alongside the other config fetches, while the greeting plays. The
+# only thing a timeout here costs is that the first few turns embed their
+# own questions the slow way, exactly as they did before warming existed.
+_WARM_TIMEOUT_SECONDS = 20.0
+
+
+async def warm_retrieval_cache(
+    assistant_id: uuid.UUID, *, client: httpx.AsyncClient | None = None
+) -> None:
+    """
+    Ask the API to pre-embed this assistant's FAQ questions before the
+    conversation starts.
+
+    The hosted embedding provider is bimodal - measured at 0.28-0.43s most
+    of the time, with roughly one call in three taking 4-12s - and the
+    per-turn timeout above will not wait for the slow tail. Warming moves
+    that unpredictability out of the turn: the questions callers actually
+    ask are already embedded, so retrieval is a database lookup.
+
+    Never raises. A failure here degrades answer quality slightly and is
+    logged; it must not be able to stop a session from starting.
+    """
+
+    owned_client = client or httpx.AsyncClient()
+
+    try:
+        response = await owned_client.post(
+            f"{config.API_INTERNAL_URL}/internal/v1/assistants/{assistant_id}"
+            "/retrieve/warm",
+            headers={"X-Internal-Secret": config.INTERNAL_API_SECRET},
+            timeout=_WARM_TIMEOUT_SECONDS,
+        )
+
+        if response.status_code != 200:
+            logger.warning(
+                "retrieval cache warm returned status %d: assistant=%s",
+                response.status_code,
+                assistant_id,
+            )
+            return
+
+        logger.info(
+            "retrieval cache warmed: assistant=%s entries=%s",
+            assistant_id,
+            response.json().get("warmed"),
+        )
+    except (httpx.HTTPError, ValueError) as exc:
+        logger.warning(
+            "retrieval cache warm failed: assistant=%s error=%s",
+            assistant_id,
+            type(exc).__name__,
+        )
+    finally:
+        if client is None:
+            await owned_client.aclose()

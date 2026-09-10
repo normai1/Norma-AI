@@ -4,7 +4,7 @@ import httpx
 import pytest
 
 from app import config
-from app.retrieval_client import fetch_retrieved_context
+from app.retrieval_client import fetch_retrieved_context, warm_retrieval_cache
 
 _ASSISTANT_ID = uuid.uuid4()
 
@@ -221,3 +221,91 @@ async def test_the_timeout_is_configurable() -> None:
         importlib.reload(module)
 
     assert module._TIMEOUT_SECONDS == 1.5
+
+
+async def test_warming_calls_the_warm_endpoint_with_the_internal_secret(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(config, "INTERNAL_API_SECRET", "the-real-secret")
+
+    seen: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(request)
+        return httpx.Response(200, json={"warmed": 24})
+
+    await warm_retrieval_cache(_ASSISTANT_ID, client=_client_returning(handler))
+
+    assert len(seen) == 1
+    assert seen[0].url.path.endswith(f"/{_ASSISTANT_ID}/retrieve/warm")
+    assert seen[0].headers["X-Internal-Secret"] == "the-real-secret"
+
+
+async def test_warming_waits_longer_than_a_turn_would() -> None:
+    """
+    Nothing is waiting on this - it runs alongside the other session-start
+    fetches, while the greeting plays - so it can afford the hosted
+    provider's slow tail in a way the per-turn path cannot.
+    """
+
+    seen: list[float | None] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(request.extensions["timeout"]["read"])
+        return httpx.Response(200, json={"warmed": 0})
+
+    await warm_retrieval_cache(_ASSISTANT_ID, client=_client_returning(handler))
+
+    assert seen[0] is not None
+    assert seen[0] >= 10.0
+
+
+async def test_warming_never_raises_so_a_session_can_always_start() -> None:
+    """
+    Warming is an optimisation. A session that could not start because the
+    optimisation failed would be a far worse bug than the latency it exists
+    to remove.
+    """
+
+    for failure in (
+        lambda _r: (_ for _ in ()).throw(httpx.ConnectError("refused")),
+        lambda _r: (_ for _ in ()).throw(httpx.ReadTimeout("timed out")),
+        lambda _r: httpx.Response(500),
+        lambda _r: httpx.Response(200, content=b"not json"),
+    ):
+        await warm_retrieval_cache(_ASSISTANT_ID, client=_client_returning(failure))
+
+
+async def test_a_failed_warm_is_logged(caplog: pytest.LogCaptureFixture) -> None:
+    import logging
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(503)
+
+    with caplog.at_level(logging.WARNING):
+        await warm_retrieval_cache(_ASSISTANT_ID, client=_client_returning(handler))
+
+    assert any("503" in record.getMessage() for record in caplog.records)
+
+
+async def test_warming_logs_a_count_but_never_a_question(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """
+    CLAUDE.md section 27 / item 24d: FAQ questions are knowledge content,
+    and the count is what makes the warm observable without logging any of
+    it.
+    """
+
+    import logging
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json={"warmed": 24})
+
+    with caplog.at_level(logging.INFO):
+        await warm_retrieval_cache(_ASSISTANT_ID, client=_client_returning(handler))
+
+    logged = "|".join(record.getMessage() for record in caplog.records)
+
+    assert "24" in logged
+    assert str(_ASSISTANT_ID) in logged

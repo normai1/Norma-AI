@@ -1,3 +1,4 @@
+import asyncio
 import logging
 import os
 import uuid
@@ -19,8 +20,22 @@ from app.llm_config_client import fetch_llm_config
 from app.llm_provider_factory import get_llm_provider
 from app.media_session import build_voice_session_pipeline_worker
 from app.provider_factory import get_stt_provider, get_tts_provider
+from app.retrieval_client import warm_retrieval_cache
 from app.tts_config_client import fetch_tts_config
 from app.turn_detection_client import fetch_turn_sensitivity
+
+# asyncio only holds a weak reference to a running task, so a task nothing
+# awaits can be garbage-collected mid-flight. Keeping the set is what makes
+# "fire and forget" actually mean "forget", rather than "cancel at an
+# arbitrary point".
+_background_tasks: set[asyncio.Task[None]] = set()
+
+
+def _start_background(coro) -> None:
+    task = asyncio.create_task(coro)
+    _background_tasks.add(task)
+    task.add_done_callback(_background_tasks.discard)
+
 
 # Closes a rejected connection before it is ever accepted (CLAUDE.md section
 # 7: "a browser test call must prove workspace access before audio flows").
@@ -126,6 +141,12 @@ async def media_session(
     logging.getLogger(__name__).info(
         "session started: call=%s assistant=%s client_build=%s", call_id, assistant_id, client
     )
+
+    # Fire-and-forget: this pre-embeds the assistant's FAQ questions so the
+    # first turns are not the ones paying the hosted embedding provider's
+    # slow tail. Deliberately not awaited - the session must start at the
+    # same speed whether or not warming succeeds, or is even finished.
+    _start_background(warm_retrieval_cache(assistant_id))
 
     keywords = await fetch_glossary_terms(assistant_id)
     sensitivity = await fetch_turn_sensitivity(assistant_id)

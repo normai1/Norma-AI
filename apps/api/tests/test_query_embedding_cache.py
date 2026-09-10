@@ -14,6 +14,7 @@ from app.services.query_embedding_cache import (
     MAX_ENTRIES,
     clear_query_embedding_cache,
     embed_query,
+    warm_query_embeddings,
 )
 
 
@@ -146,3 +147,105 @@ async def test_a_provider_failure_propagates_and_caches_nothing() -> None:
     await embed_query(working, "bge", "What are your hours?")
 
     assert len(working.calls) == 1
+
+
+async def test_warming_embeds_every_question_in_one_call() -> None:
+    """
+    One request regardless of how many questions the assistant has - the
+    point is to spend the provider's unpredictable seconds once, before the
+    conversation starts, not once per question.
+    """
+
+    provider = _CountingProvider()
+    questions = [f"question number {i}" for i in range(40)]
+
+    warmed = await warm_query_embeddings(provider, "bge", questions)
+
+    assert warmed == 40
+    assert len(provider.calls) == 1
+    assert provider.calls[0] == questions
+
+
+async def test_a_warmed_question_costs_nothing_when_the_caller_asks_it() -> None:
+    """
+    The whole point: the caller's turn is a cache hit, so retrieval is a
+    database lookup rather than a call to the hosted embedding router.
+    """
+
+    provider = _CountingProvider()
+
+    await warm_query_embeddings(provider, "bge", ["What are your hours?"])
+    calls_after_warming = len(provider.calls)
+
+    await embed_query(provider, "bge", "what are your HOURS?")
+
+    assert len(provider.calls) == calls_after_warming
+
+
+async def test_warming_skips_questions_that_are_already_cached() -> None:
+    provider = _CountingProvider()
+
+    await embed_query(provider, "bge", "What are your hours?")
+    warmed = await warm_query_embeddings(
+        provider, "bge", ["What are your hours?", "Where are you?"]
+    )
+
+    assert warmed == 1
+    assert provider.calls[-1] == ["Where are you?"]
+
+
+async def test_warming_deduplicates_within_one_batch() -> None:
+    """
+    Two knowledge sources can easily generate the same question. Sending it
+    twice would waste provider work and, worse, risk zipping the results
+    back onto the wrong texts.
+    """
+
+    provider = _CountingProvider()
+
+    warmed = await warm_query_embeddings(
+        provider, "bge", ["Are you open?", "are you open?", "Where are you?"]
+    )
+
+    assert warmed == 2
+    assert provider.calls == [["Are you open?", "Where are you?"]]
+
+
+async def test_warming_nothing_never_contacts_the_provider() -> None:
+    provider = _CountingProvider()
+
+    assert await warm_query_embeddings(provider, "bge", []) == 0
+    assert provider.calls == []
+
+
+async def test_warming_stays_within_the_cache_bound() -> None:
+    provider = _CountingProvider()
+
+    await warm_query_embeddings(
+        provider, "bge", [f"question number {i}" for i in range(MAX_ENTRIES + 100)]
+    )
+
+    from app.services.query_embedding_cache import _cache
+
+    assert len(_cache) == MAX_ENTRIES
+
+
+async def test_warming_keeps_each_question_matched_to_its_own_vector() -> None:
+    """
+    A batched call returns a list; mis-zipping it would attach every FAQ
+    question to another question's vector, and retrieval would return
+    confident nonsense rather than an error.
+    """
+
+    provider = _CountingProvider()
+    questions = ["a", "bb", "ccc"]
+
+    await warm_query_embeddings(provider, "bge", questions)
+
+    for question in questions:
+        # The stub encodes each text's length in its vector.
+        assert await embed_query(provider, "bge", question) == [
+            float(len(question)),
+            0.0,
+            1.0,
+        ]

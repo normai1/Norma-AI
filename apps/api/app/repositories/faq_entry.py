@@ -5,6 +5,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.faq_entry import FaqEntry
+from app.models.knowledge_source import KnowledgeSource
 
 # A separate sentinel marks "omitted" for update() - matching
 # glossary_entry.py's exact reasoning, kept consistent even though neither
@@ -117,3 +118,28 @@ async def list_generated_from_source(
     )
 
     return list(result)
+
+
+async def list_questions_for_assistant(
+    db: AsyncSession, assistant_id: uuid.UUID
+) -> list[str]:
+    """
+    Every FAQ question text belonging to one assistant, across all of its
+    knowledge sources.
+
+    Questions only, and no ORM objects: the one caller warms an embedding
+    cache with them (services/query_embedding_cache.py) and has no use for
+    the answers or the rows.
+    """
+
+    result = await db.scalars(
+        select(FaqEntry.question)
+        .join(
+            KnowledgeSource,
+            KnowledgeSource.id == FaqEntry.knowledge_source_id,
+        )
+        .where(KnowledgeSource.assistant_id == assistant_id)
+        .order_by(FaqEntry.created_at),
+    )
+
+    return list(result.all())

@@ -67,6 +67,54 @@ async def embed_query(
     return vector
 
 
+async def warm_query_embeddings(
+    provider: EmbeddingProvider, model: str, queries: list[str]
+) -> int:
+    """
+    Embed every one of `queries` not already cached, in a single provider
+    call, and return how many were added.
+
+    This is what makes the cache worth having on the first call of the day
+    rather than the fiftieth. The hosted embedding router is bimodal -
+    measured at 0.28-0.43s most of the time with roughly one call in three
+    taking 4-12s - and the media plane will not wait that long inside a
+    turn, so an uncached question is a question answered without knowledge.
+    An assistant's own FAQ questions are exactly the phrasings callers use,
+    they are already sitting in the database, and there are tens of them,
+    not thousands: one batched call before the first turn converts most of
+    the misses into 60ms hits.
+
+    CLAUDE.md section 11 asks for this directly - preloading the
+    assistant's highest-frequency FAQ content rather than retrieving it.
+    """
+
+    missing = []
+    seen = set()
+
+    for query in queries:
+        key = _key(model, query)
+
+        if key in _cache or key in seen:
+            continue
+
+        seen.add(key)
+        missing.append(query)
+
+    if not missing:
+        return 0
+
+    vectors = await provider.embed(missing)
+
+    for query, vector in zip(missing, vectors, strict=True):
+        _cache[_key(model, query)] = vector
+        _cache.move_to_end(_key(model, query))
+
+    while len(_cache) > MAX_ENTRIES:
+        _cache.popitem(last=False)
+
+    return len(missing)
+
+
 def clear_query_embedding_cache() -> None:
     """
     Drop every entry. For tests, and for anything that reconfigures the
