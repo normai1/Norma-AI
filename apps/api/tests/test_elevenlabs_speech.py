@@ -684,3 +684,150 @@ async def test_stt_stream_maps_connection_closed_mid_stream_to_unavailable() -> 
     with pytest.raises(SpeechProviderUnavailable):
         async for _ in stt.stream(_audio_chunks([b"audio"]), language="en"):
             pass
+
+
+async def test_a_send_failure_is_raised_rather_than_discarded() -> None:
+    """
+    The send task's exception used to be thrown away by the cancel() in the
+    finally block, and the receive loop would then wait forever for
+    transcripts of audio that was never delivered - an open, silent stream
+    that no reconnect path could see. Reported twice as "assistant not
+    answering anything".
+    """
+
+    class _RefusingConnection(_FakeConnection):
+        async def send(self, message: str) -> None:
+            raise RuntimeError("socket went away")
+
+    connection = _RefusingConnection([])
+    stt = ElevenLabsSTT(api_key="key", connect=lambda url, **kwargs: connection)
+
+    with pytest.raises(SpeechProviderError):
+        async for _ in stt.stream(_audio_chunks([b"one", b"two"]), language="en"):
+            pass
+
+
+async def test_the_message_types_the_server_sent_are_logged(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """
+    Counts by type, never content - what distinguishes "the server sent us
+    nothing" from "the server sent us something we ignore".
+    """
+
+    import logging
+
+    connection = _FakeConnection(
+        [
+            json.dumps({"message_type": "session_started"}),
+            json.dumps({"message_type": "partial_transcript", "text": "hi"}),
+            json.dumps({"message_type": "committed_transcript", "text": "hi there"}),
+        ]
+    )
+    stt = ElevenLabsSTT(api_key="key", connect=lambda url, **kwargs: connection)
+
+    with caplog.at_level(logging.INFO):
+        async for _ in stt.stream(_audio_chunks([b"one"]), language="en"):
+            pass
+
+    logged = " ".join(record.getMessage() for record in caplog.records)
+
+    assert "committed_transcript" in logged
+    assert "hi there" not in logged
+
+
+async def test_an_unhandled_message_type_is_named_once(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    import logging
+
+    connection = _FakeConnection(
+        [
+            json.dumps({"message_type": "vad_score", "score": 0.2}),
+            json.dumps({"message_type": "vad_score", "score": 0.3}),
+            json.dumps({"message_type": "committed_transcript", "text": "hi"}),
+        ]
+    )
+    stt = ElevenLabsSTT(api_key="key", connect=lambda url, **kwargs: connection)
+
+    with caplog.at_level(logging.INFO):
+        async for _ in stt.stream(_audio_chunks([b"one"]), language="en"):
+            pass
+
+    unhandled = [
+        record
+        for record in caplog.records
+        if "unhandled message type" in record.getMessage()
+    ]
+
+    assert len(unhandled) == 1
+    assert "vad_score" in unhandled[0].getMessage()
+
+
+async def test_queue_overflow_ends_the_stream_instead_of_being_ignored() -> None:
+    """
+    The root cause of "assistant not answering anything", confirmed from the
+    provider's own message log: a connection that receives queue_overflow
+    sends nothing else for as long as it is left open - no transcript, no
+    error, no close. It was ignored along with every other unmapped message
+    type, so the stream sat there mute.
+
+    Ending the stream is what hands it to the caller's reconnect path, which
+    is built for exactly this: one connection that has fallen too far behind
+    to be worth anything, replaced by a fresh one.
+    """
+
+    connection = _FakeConnection(
+        [
+            json.dumps({"message_type": "session_started"}),
+            json.dumps({"message_type": "committed_transcript", "text": "hello"}),
+            json.dumps({"message_type": "queue_overflow"}),
+            # The server never actually sends anything after an overflow;
+            # this proves we would not use it if it did.
+            json.dumps({"message_type": "committed_transcript", "text": "ignored"}),
+        ]
+    )
+    stt = ElevenLabsSTT(api_key="key", connect=lambda url, **kwargs: connection)
+
+    events = [
+        event
+        async for event in stt.stream(_audio_chunks([b"one"]), language="en")
+    ]
+
+    assert [event.text for event in events] == ["hello"]
+
+
+async def test_queue_overflow_is_not_an_error_the_caller_has_to_catch() -> None:
+    """
+    Deliberately an end, not a raise. An exception would spend the small
+    error-retry budget and announce failover to the caller after three of
+    them; a clean end reconnects on the much larger budget, which is the
+    right reading of "this connection fell behind".
+    """
+
+    connection = _FakeConnection([json.dumps({"message_type": "queue_overflow"})])
+    stt = ElevenLabsSTT(api_key="key", connect=lambda url, **kwargs: connection)
+
+    events = [
+        event
+        async for event in stt.stream(_audio_chunks([b"one"]), language="en")
+    ]
+
+    assert events == []
+
+
+async def test_an_overflow_is_logged_as_a_warning(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    import logging
+
+    connection = _FakeConnection([json.dumps({"message_type": "queue_overflow"})])
+    stt = ElevenLabsSTT(api_key="key", connect=lambda url, **kwargs: connection)
+
+    with caplog.at_level(logging.WARNING):
+        async for _ in stt.stream(_audio_chunks([b"one"]), language="en"):
+            pass
+
+    assert any(
+        "could not keep up" in record.getMessage() for record in caplog.records
+    )

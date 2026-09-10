@@ -16,12 +16,12 @@ import asyncio
 
 import pytest
 from norma_shared.speech import TranscriptEvent
+from pipecat.clocks.system_clock import SystemClock
 from pipecat.frames.frames import (
     CancelFrame,
     InputAudioRawFrame,
     StartFrame,
 )
-from pipecat.clocks.system_clock import SystemClock
 from pipecat.processors.frame_processor import FrameDirection, FrameProcessorSetup
 from pipecat.utils.asyncio.task_manager import TaskManager
 
@@ -43,7 +43,9 @@ class _SilentStream:
     def __init__(self) -> None:
         self.streams = 0
 
-    async def stream(self, audio, *, language, keywords=(), silence_threshold_secs=None):
+    async def stream(
+        self, audio, *, language, keywords=(), silence_threshold_secs=None
+    ):
         self.streams += 1
 
         # Drain audio the way a real provider does, so the queue does not
@@ -61,7 +63,9 @@ class _TalkativeStream:
     def __init__(self) -> None:
         self.streams = 0
 
-    async def stream(self, audio, *, language, keywords=(), silence_threshold_secs=None):
+    async def stream(
+        self, audio, *, language, keywords=(), silence_threshold_secs=None
+    ):
         self.streams += 1
 
         async for _chunk in audio:

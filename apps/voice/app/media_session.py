@@ -91,6 +91,26 @@ _AUDIO_LEVEL_REPORT_SECONDS = 2.0
 # threshold was wrong.
 _SPEECH_PEAK_FRACTION = 0.08
 
+# The most caller audio that may sit waiting to be sent to the speech
+# provider, in seconds. CLAUDE.md's "no unbounded queues - backpressure must
+# be explicit", applied where the lack of it was doing real damage.
+#
+# The provider has a queue of its own, and when it overflows it says so once
+# and then stops transcribing entirely for the life of that connection - the
+# "assistant not answering anything" failure, confirmed from its own
+# queue_overflow message. The way to overflow it is to hand it a burst, and
+# the two ways a burst arises here are a browser that sends faster than
+# realtime (measured: 149 and 165 frames in a two-second window, against 100
+# at realtime) and a backlog built up while a stream was down, dumped at full
+# speed into its replacement.
+#
+# Two seconds because audio older than that has no value in a live call: by
+# the time it were transcribed the caller has moved on, and holding it only
+# makes the burst that kills the next stream bigger. Dropping the oldest
+# rather than refusing the newest keeps the assistant listening to what is
+# being said now.
+_MAX_QUEUED_AUDIO_SECONDS = 2.0
+
 # 16-bit signed samples, matching norma_shared.speech's canonical format.
 # Only used to convert a chunk's byte length into the seconds of speech it
 # represents (see TTSProcessor._extend_playback).
@@ -257,6 +277,13 @@ class SpeechToTextProcessor(FrameProcessor):
         self._last_speech_at = 0.0
         self._last_event_at = 0.0
         self._watchdog_task: asyncio.Task | None = None
+        # Bytes currently sitting in _audio_queue, so the backlog can be
+        # capped by duration rather than by a frame count that would mean
+        # different things for different frame sizes.
+        self._queued_bytes = 0
+        self._dropped_frames = 0
+        self._dropped_since_report = 0
+        self._dropped_reported_at = 0.0
 
     async def _audio_iterator(self) -> AsyncIterator[bytes]:
         while True:
@@ -265,7 +292,66 @@ class SpeechToTextProcessor(FrameProcessor):
             if chunk is None:
                 return
 
+            self._queued_bytes -= len(chunk)
+
             yield chunk
+
+    def _queue_audio(self, chunk: bytes, *, sample_rate: int) -> None:
+        """
+        Queue one frame for the provider, dropping the oldest audio if the
+        backlog has grown past what is worth sending - see
+        _MAX_QUEUED_AUDIO_SECONDS.
+        """
+
+        self._audio_queue.put_nowait(chunk)
+        self._queued_bytes += len(chunk)
+
+        # 16-bit samples, one channel.
+        cap = int(_MAX_QUEUED_AUDIO_SECONDS * sample_rate * 2)
+        dropped = 0
+
+        while self._queued_bytes > cap:
+            oldest = self._audio_queue.get_nowait()
+
+            if oldest is None:
+                # The end-of-stream sentinel. Never dropped - it is what
+                # ends the current provider stream, and losing it would
+                # leave that stream running with nothing to end it. Putting
+                # it back sends it to the tail, which only means the stream
+                # it ends consumes a little more audio first.
+                self._audio_queue.put_nowait(None)
+                break
+
+            self._queued_bytes -= len(oldest)
+            dropped += 1
+
+        if not dropped:
+            return
+
+        self._dropped_frames += dropped
+        self._dropped_since_report += dropped
+
+        # Summarised on the same cadence as the audio-level line rather than
+        # one line per frame. A burst drops one frame per frame that arrives,
+        # so per-frame logging produced 84 identical warnings inside a single
+        # second - noise that buries the very signal it exists to give.
+        now = time.monotonic()
+
+        if now - self._dropped_reported_at < _AUDIO_LEVEL_REPORT_SECONDS:
+            return
+
+        logger.warning(
+            "caller audio arriving faster than the provider accepts it - "
+            "dropped %d frames in the last %.0fs (%d this session), keeping "
+            "the backlog under %.0fs",
+            self._dropped_since_report,
+            _AUDIO_LEVEL_REPORT_SECONDS,
+            self._dropped_frames,
+            _MAX_QUEUED_AUDIO_SECONDS,
+        )
+
+        self._dropped_since_report = 0
+        self._dropped_reported_at = now
 
     async def _run_stream(self) -> None:
         """
@@ -541,7 +627,7 @@ class SpeechToTextProcessor(FrameProcessor):
             await self.push_frame(frame, direction)
         elif isinstance(frame, InputAudioRawFrame):
             self._observe_incoming_audio(frame.audio)
-            await self._audio_queue.put(frame.audio)
+            self._queue_audio(frame.audio, sample_rate=frame.sample_rate)
             await self.push_frame(frame, direction)
         elif isinstance(frame, (EndFrame, CancelFrame)):
             logger.info(

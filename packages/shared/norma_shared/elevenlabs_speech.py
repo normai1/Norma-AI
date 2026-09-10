@@ -8,7 +8,6 @@ verified request/response shapes and the reasoning behind the choices here.
 
 import asyncio
 import base64
-import contextlib
 import json
 import logging
 from collections.abc import AsyncIterator, Callable, Sequence
@@ -89,6 +88,25 @@ _REALTIME_UNAVAILABLE_MESSAGE_TYPES = frozenset(
 # Values ElevenLabs documents for a mid-session transcription failure that is
 # not a connection/account problem.
 _REALTIME_ERROR_MESSAGE_TYPES = frozenset({"error", "transcriber_error"})
+
+# The server telling us it could not keep up with the audio we sent. It is
+# terminal for the stream: measured live, a connection that received one of
+# these went on to send nothing at all - no transcript, no error, no close -
+# for as long as it was left open. That is the "assistant not answering
+# anything" failure, and it was invisible because this message type was
+# simply ignored along with every other one this module does not map.
+_REALTIME_OVERFLOW_MESSAGE_TYPE = "queue_overflow"
+
+# Everything _map_realtime_message knows what to do with. Anything else is
+# still ignored - a new vendor message type must never drop a live call -
+# but is now logged the first time it appears, rather than vanishing.
+_KNOWN_MESSAGE_TYPES = (
+    frozenset({_REALTIME_OVERFLOW_MESSAGE_TYPE})
+    |
+    frozenset({"partial_transcript", "committed_transcript", "session_started"})
+    | _REALTIME_UNAVAILABLE_MESSAGE_TYPES
+    | _REALTIME_ERROR_MESSAGE_TYPES
+)
 
 
 def _map_realtime_message(message: dict[str, Any]) -> TranscriptEvent | None:
@@ -419,17 +437,87 @@ class ElevenLabsSTT:
                     _send_audio_chunks(connection, audio),
                 )
 
+                # Counted by type, never by content. A stream that goes
+                # quiet mid-call looked identical from the outside to a
+                # caller who stopped talking - "assistant not answering
+                # anything" was diagnosed twice with nothing to go on but
+                # the absence of transcripts. Knowing whether the server
+                # was sending us *anything*, and what, is the difference
+                # between a guess and a diagnosis.
+                seen: dict[str, int] = {}
+
+                # Captured rather than raised from the finally below: a
+                # raise there would replace whatever exception the receive
+                # loop was already propagating.
+                send_error: BaseException | None = None
+
                 try:
                     async for raw_message in connection:
-                        event = _map_realtime_message(json.loads(raw_message))
+                        message = json.loads(raw_message)
+                        message_type = str(message.get("message_type"))
+                        seen[message_type] = seen.get(message_type, 0) + 1
+
+                        # Once per type per stream, so a vendor message we
+                        # do not handle shows up the first time it appears
+                        # rather than only in the closing summary.
+                        if (
+                            seen[message_type] == 1
+                            and message_type not in _KNOWN_MESSAGE_TYPES
+                        ):
+                            logger.info(
+                                "elevenlabs realtime stt sent an unhandled "
+                                "message type: %s",
+                                message_type,
+                            )
+
+                        if message_type == _REALTIME_OVERFLOW_MESSAGE_TYPE:
+                            # Ends the stream rather than raising. A clean
+                            # end is what the caller's reconnect path is
+                            # built for, and this is not the caller's fault
+                            # or a provider outage - it is one connection
+                            # that has fallen too far behind to be worth
+                            # anything, and the answer is a fresh one.
+                            logger.warning(
+                                "elevenlabs realtime stt could not keep up with the "
+                                "audio sent and stopped transcribing - ending this "
+                                "stream after %d transcripts",
+                                seen.get("committed_transcript", 0),
+                            )
+
+                            return
+
+                        event = _map_realtime_message(message)
 
                         if event is not None:
                             yield event
                 finally:
+                    logger.info(
+                        "elevenlabs realtime stt stream closing: messages=%s",
+                        # Sorted so two streams' summaries are comparable.
+                        dict(sorted(seen.items())) or "none",
+                    )
+
                     send_task.cancel()
 
-                    with contextlib.suppress(asyncio.CancelledError):
+                    try:
                         await send_task
+                    except asyncio.CancelledError:
+                        pass
+                    except Exception as exc:  # noqa: BLE001 - re-raised below
+                        send_error = exc
+
+            # A send task that died on its own took the stream's audio with
+            # it, silently: nothing awaited its result, so the receive loop
+            # simply waited forever for transcripts of audio that was never
+            # delivered - an open, mute stream. Raising it as this module's
+            # own error is what lets the caller's reconnect logic see it,
+            # rather than the bare exception reaching a generic handler that
+            # gives up on transcription for the rest of the call.
+            if send_error is not None:
+                raise SpeechProviderError(
+                    "ElevenLabs realtime STT stopped accepting audio: "
+                    f"{type(send_error).__name__}"
+                ) from send_error
         except TimeoutError as exc:
             raise SpeechProviderTimeout(
                 "ElevenLabs realtime STT connection timed out",
