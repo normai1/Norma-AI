@@ -7,6 +7,7 @@ or 20d-20g adding real pipeline stages - only touches this module.
 """
 
 import asyncio
+import contextlib
 import json
 import logging
 import time
@@ -104,12 +105,20 @@ _SPEECH_PEAK_FRACTION = 0.08
 # at realtime) and a backlog built up while a stream was down, dumped at full
 # speed into its replacement.
 #
-# Two seconds because audio older than that has no value in a live call: by
-# the time it were transcribed the caller has moved on, and holding it only
-# makes the burst that kills the next stream bigger. Dropping the oldest
-# rather than refusing the newest keeps the assistant listening to what is
-# being said now.
-_MAX_QUEUED_AUDIO_SECONDS = 2.0
+# Five seconds, which is comfortably more than the longest gap a healthy
+# call has without a consumer - the reconnect backoff between streams, capped
+# at two. It is a memory bound and a burst guard, not a latency control: with
+# a stream actually running the queue sits at zero, and the number that says
+# so is the "queued=" field on the audio-level line.
+#
+# It was two, and that was too tight to survive a separate bug in which
+# nothing drained the queue at all: the cap then evicted a frame for every
+# frame that arrived, 100 dropped per 100 received, and the caller went
+# inaudible for the rest of the session. Dropping the oldest rather than
+# refusing the newest is still right - audio that old cannot help a live
+# call - but a cap this close to normal operation turned someone else's bug
+# into total deafness rather than a bounded loss.
+_MAX_QUEUED_AUDIO_SECONDS = 5.0
 
 # 16-bit signed samples, matching norma_shared.speech's canonical format.
 # Only used to convert a chunk's byte length into the seconds of speech it
@@ -284,6 +293,15 @@ class SpeechToTextProcessor(FrameProcessor):
         self._dropped_frames = 0
         self._dropped_since_report = 0
         self._dropped_reported_at = 0.0
+        # Frames actually handed to the provider. The number that says
+        # whether a full backlog means "the provider is behind" or "nothing
+        # is draining this queue at all".
+        self._frames_sent = 0
+        # The current stream's consumer, and its running event count. The
+        # watchdog cancels the task; the count survives it, so a cancelled
+        # stream can still report how much it managed.
+        self._consume_task: asyncio.Task[int] | None = None
+        self._events_this_stream = 0
 
     async def _audio_iterator(self) -> AsyncIterator[bytes]:
         while True:
@@ -293,6 +311,7 @@ class SpeechToTextProcessor(FrameProcessor):
                 return
 
             self._queued_bytes -= len(chunk)
+            self._frames_sent += 1
 
             yield chunk
 
@@ -393,26 +412,55 @@ class SpeechToTextProcessor(FrameProcessor):
                 # the caller's audio was arriving perfectly well.
                 audio = self._audio_iterator()
 
-                try:
-                    async for event in self._provider.stream(
-                        audio,
-                        language=self._language,
-                        keywords=self._keywords,
-                        silence_threshold_secs=self._silence_threshold_secs,
-                    ):
-                        events += 1
-                        self._last_event_at = time.monotonic()
+                # Consumed in a task of its own so the deafness watchdog can
+                # abandon a stream that has stopped responding.
+                #
+                # It used to end the audio iterator instead, by queueing the
+                # sentinel. That looked equivalent and was not: it stops
+                # anything draining the audio queue immediately, while the
+                # stream itself goes on waiting for a server that has
+                # already gone quiet to close the connection - which it
+                # never did. The call was then left with no consumer at all,
+                # every arriving frame evicting the one before it under the
+                # backlog cap, and the caller inaudible for the rest of the
+                # session: 100 frames arriving per two seconds and 100 being
+                # dropped. Reported, again, as "assistant is not responding
+                # anything".
+                #
+                # Cancelling the consumer instead propagates into the
+                # provider's own generator, which closes its connection on
+                # the way out, and the loop below reconnects with a fresh
+                # stream that starts draining the queue again.
+                self._consume_task = asyncio.create_task(self._consume_stream(audio))
 
-                        await self.push_frame(
-                            OutputTransportMessageUrgentFrame(
-                                message={
-                                    "type": "transcript",
-                                    "text": event.text,
-                                    "is_final": event.is_final,
-                                }
-                            )
-                        )
+                try:
+                    events = await self._consume_task
+                except asyncio.CancelledError:
+                    # The watchdog abandoning this stream. A session
+                    # teardown cancels _run_stream itself, not this task, so
+                    # anything arriving here while the input has ended is
+                    # the real thing and must not be swallowed.
+                    if self._input_ended:
+                        raise
+
+                    events = self._events_this_stream
                 finally:
+                    # Awaiting a task does not cancel it, so a _run_stream
+                    # cancelled during teardown would otherwise leave this
+                    # one running - still holding the provider connection
+                    # open for a call nobody is on. That is the zombie
+                    # session this file has already been bitten by once:
+                    # 126 of them looping at once, rate-limiting the speech
+                    # provider for every real call.
+                    consume_task = self._consume_task
+                    self._consume_task = None
+
+                    if consume_task is not None and not consume_task.done():
+                        consume_task.cancel()
+
+                        with contextlib.suppress(asyncio.CancelledError):
+                            await consume_task
+
                     await audio.aclose()
 
                 logger.info("stt stream ended after %d events", events)
@@ -471,6 +519,36 @@ class SpeechToTextProcessor(FrameProcessor):
 
                 return
 
+    async def _consume_stream(self, audio: AsyncIterator[bytes]) -> int:
+        """
+        Push every transcript the provider yields, and return how many there
+        were. A task of its own purely so it can be cancelled - see
+        _run_stream.
+        """
+
+        self._events_this_stream = 0
+
+        async for event in self._provider.stream(
+            audio,
+            language=self._language,
+            keywords=self._keywords,
+            silence_threshold_secs=self._silence_threshold_secs,
+        ):
+            self._events_this_stream += 1
+            self._last_event_at = time.monotonic()
+
+            await self.push_frame(
+                OutputTransportMessageUrgentFrame(
+                    message={
+                        "type": "transcript",
+                        "text": event.text,
+                        "is_final": event.is_final,
+                    }
+                )
+            )
+
+        return self._events_this_stream
+
     async def _watch_for_deafness(self) -> None:
         """
         Ends a stream that has stopped transcribing, so the reconnect loop
@@ -524,7 +602,8 @@ class SpeechToTextProcessor(FrameProcessor):
             # torn down again on the next poll.
             self._last_event_at = time.monotonic()
 
-            await self._audio_queue.put(None)
+            if self._consume_task is not None:
+                self._consume_task.cancel()
 
     async def _announce_failover(self) -> None:
         await self.push_frame(
@@ -608,10 +687,14 @@ class SpeechToTextProcessor(FrameProcessor):
             return
 
         logger.info(
-            "caller audio: frames=%d peak=%d (%.3f of full scale)",
+            "caller audio: frames=%d peak=%d (%.3f of full scale) "
+            "queued=%d frames/%d bytes sent=%d",
             self._level_frames,
             self._level_peak,
             self._level_peak / 32768,
+            self._audio_queue.qsize(),
+            self._queued_bytes,
+            self._frames_sent,
         )
 
         self._level_frames = 0

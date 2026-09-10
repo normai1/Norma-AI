@@ -211,3 +211,81 @@ async def test_the_watchdog_stops_when_the_call_does() -> None:
     await _run(processor, _SPEECH, seconds=0.4)
 
     assert processor._watchdog_task is None
+
+
+class _SilentAfterOneStream:
+    """
+    Transcribes once, then goes quiet while still draining audio - and, when
+    the audio ends, keeps the stream open rather than returning.
+
+    That last part is the whole point and is what the real adapter does: once
+    the caller's audio ends it waits for the server to close the connection,
+    which a server that has already gone quiet never does. A fake that simply
+    returns when the audio stops cannot tell the old, broken watchdog from
+    the fixed one - both look identical - which is exactly how a first
+    version of these tests passed against the bug they were written for.
+    """
+
+    def __init__(self) -> None:
+        self.streams = 0
+        self.chunks_consumed = 0
+
+    async def stream(
+        self, audio, *, language, keywords=(), silence_threshold_secs=None
+    ):
+        self.streams += 1
+        first = self.streams == 1
+
+        async for _chunk in audio:
+            self.chunks_consumed += 1
+
+            if first:
+                first = False
+                yield TranscriptEvent(text="hello", is_final=True)
+
+        # Audio exhausted. The real provider now waits on the server.
+        await asyncio.sleep(3600)
+
+
+async def test_a_restarted_stream_keeps_draining_the_caller_s_audio() -> None:
+    """
+    The regression this exists to prevent, and the second bug reported as
+    "assistant is not responding anything".
+
+    The watchdog used to end the audio iterator rather than the stream. That
+    stops anything draining the audio queue at once, while the stream itself
+    goes on waiting for a server that has already gone quiet - so the call
+    was left with no consumer at all. Every arriving frame then evicted the
+    one before it under the backlog cap: 100 frames in per two seconds, 100
+    dropped, the caller inaudible for the rest of the session.
+
+    So it is not enough that the watchdog fires. Audio has to still be
+    reaching a provider afterwards.
+    """
+
+    provider = _SilentAfterOneStream()
+    processor = await _make_processor(provider)
+
+    await _run(processor, _SPEECH, seconds=1.2)
+
+    consumed_at_restart = provider.chunks_consumed
+
+    assert provider.streams > 1, "the watchdog never restarted the stream"
+    assert consumed_at_restart > 0
+    # The replacement stream is doing the job the abandoned one stopped
+    # doing, rather than the queue silently filling.
+    assert processor._audio_queue.qsize() < 10
+
+
+async def test_audio_is_not_dropped_wholesale_while_streams_restart() -> None:
+    """
+    The number that gave the bug away in production: frames dropped per
+    two-second window equal to frames arriving in it.
+    """
+
+    provider = _SilentAfterOneStream()
+    processor = await _make_processor(provider)
+
+    await _run(processor, _SPEECH, seconds=1.2)
+
+    assert processor._dropped_frames == 0

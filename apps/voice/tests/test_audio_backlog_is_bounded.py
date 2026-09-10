@@ -167,58 +167,43 @@ def test_dropping_is_summarised_rather_than_logged_per_frame(
     caplog: pytest.LogCaptureFixture, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """
-
     A burst drops one frame for every frame that arrives, so a line each
-
     produced 84 identical warnings inside one second on a real session -
-
     noise that buries the signal it exists to give.
 
-
     The first drop still reports at once, because "this is happening at all"
-
     is worth knowing immediately; everything after it is summarised on the
-
     audio-level report's own cadence, carrying the count that makes one line
-
     worth the hundreds it replaces.
-
     """
 
     import logging
 
     now = [1000.0]
-
     monkeypatch.setattr(media_session.time, "monotonic", lambda: now[0])
 
     processor = _processor()
 
-    with caplog.at_level(logging.WARNING):
-        _feed(processor, 5 * _FRAMES_PER_SECOND)
+    # Derived from the cap rather than hard-coded, so tuning the cap does
+    # not silently turn this into a test of nothing.
+    fits = int(_MAX_QUEUED_AUDIO_SECONDS * _FRAMES_PER_SECOND)
+    burst = fits + 100
 
+    with caplog.at_level(logging.WARNING):
+        _feed(processor, burst)
         first_burst = _drop_lines(caplog)
 
         now[0] += 10.0
-
-        _feed(processor, 5 * _FRAMES_PER_SECOND)
-
+        _feed(processor, burst)
         after_second_burst = _drop_lines(caplog)
 
-    # 500 frames fed, 100 of them fit under the cap, so 400 were dropped -
-
-    # and reported in two lines rather than four hundred.
-
-    assert processor._dropped_frames == 400
-
+    # The first burst overfills by 100; the second is dropped whole.
+    assert processor._dropped_frames == 100 + burst
     assert len(first_burst) == 1
-
     assert len(after_second_burst) == 2
-
     # The second line accounts for everything suppressed since the first.
-
-    assert "150 frames" in after_second_burst[1]
-
-    assert "151 this session" in after_second_burst[1]
+    assert "100 frames" in after_second_burst[1]
+    assert "101 this session" in after_second_burst[1]
 
 
 def _drop_lines(caplog: pytest.LogCaptureFixture) -> list[str]:
