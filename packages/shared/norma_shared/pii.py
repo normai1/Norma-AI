@@ -78,6 +78,10 @@ _AMOUNT_TAIL = re.compile(r"\.\d{1,2}$")
 
 _CURRENCY_PREFIX = re.compile(r"[$£€₹¥]\s?$")
 
+# A space or bracket anywhere in a candidate that also carries a decimal
+# point - see _classify for why that combination means two numbers.
+_MIXED_SEPARATOR = re.compile(r"[\s()]")
+
 # Card numbers run 13-19 digits (Visa 13/16, Amex 15, Maestro up to 19).
 _CARD_MIN_DIGITS = 13
 _CARD_MAX_DIGITS = 19
@@ -99,6 +103,16 @@ def _classify(candidate: str, *, preceding: str) -> str | None:
     # An amount or a price is content the operator needs to read back, not a
     # contact detail.
     if _AMOUNT_TAIL.search(candidate):
+        return None
+
+    # Two separate numbers that the scanner ran together, not one long one.
+    # A written phone number keeps one separator style - "+1 (555) 123-4567"
+    # or "555.123.4567" - so a candidate mixing a decimal point with a space
+    # or bracket is a merge across a boundary. Found live: an audio-level log
+    # reading "peak=12345 (0.377 of full scale)" became "peak=[phone] of full
+    # scale)", destroying the diagnostic it existed to provide, in the same
+    # way the UUID case did.
+    if "." in candidate and _MIXED_SEPARATOR.search(candidate):
         return None
 
     if _CURRENCY_PREFIX.search(preceding):

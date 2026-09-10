@@ -16,6 +16,7 @@ any gap in what was actually indexed.
 """
 
 import logging
+import os
 import time
 import uuid
 
@@ -25,13 +26,26 @@ from app import config
 
 logger = logging.getLogger(__name__)
 
-# Deliberately not raised to "safely" cover a slow embedding call: this fetch
-# runs before config.LLM_FIRST_TOKEN_TIMEOUT_SECONDS's own clock even starts,
-# so a longer timeout here would make the caller wait even longer on the turns
-# that are already struggling, trading one silent failure for a slower one.
-# Logging what actually happened is what makes the trade-off visible instead
-# of guessing at a bigger number.
-_TIMEOUT_SECONDS = 5.0
+# Lowered from 5s once the logging above showed what that cost. A retrieval
+# that took the full five seconds did not merely answer late: the caller heard
+# nothing, concluded the assistant had not understood, and spoke again - and
+# that second utterance barged in and cancelled their own pending turn. The
+# turn metrics recorded it as stt finalized, no retrieval, no LLM token, no
+# audio: seven of thirty-five turns, reported as "sometimes it is not
+# responding anything".
+#
+# So the timeout is a budget for how long a caller will sit in silence, not
+# for how long the provider might take. CLAUDE.md allows retrieval 80ms; the
+# hosted embedding provider measures 0.4s warm and over 5s cold, so this
+# cannot be met today and the honest choice is to answer without knowledge
+# rather than to keep waiting. The assistant then says it does not have the
+# detail, which is a worse answer than the one knowledge would have given and
+# a far better one than silence.
+#
+# Configurable because the right value follows the embedding provider: hosting
+# the model locally, or caching query embeddings, would make a tighter budget
+# affordable and a looser one unnecessary.
+_TIMEOUT_SECONDS = float(os.environ.get("RETRIEVAL_TIMEOUT_SECONDS", "1.5"))
 
 
 async def fetch_retrieved_context(

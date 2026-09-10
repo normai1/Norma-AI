@@ -22,6 +22,7 @@ from app.api.v1.voices import router as voices_router
 from app.api.v1.workspaces import router as workspaces_router
 from app.core.config import settings
 from app.core.redis import redis
+from app.providers.embedding_http_client import close_embedding_http_client
 
 # Item 24d: installs the redacting formatter, so nothing this process logs -
 # including tracebacks from httpx or asyncpg, which can carry a request body
@@ -46,6 +47,7 @@ async def lifespan(app: FastAPI):
 
     # Shutdown
     await redis.aclose()
+    await close_embedding_http_client()
 
 
 app = FastAPI(

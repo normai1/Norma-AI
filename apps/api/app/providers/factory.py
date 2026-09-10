@@ -12,6 +12,7 @@ from norma_shared.speech import SpeechToTextProvider, TextToSpeechProvider
 
 from app.core.config import settings
 from app.providers.embedding import EmbeddingProvider
+from app.providers.embedding_http_client import get_embedding_http_client
 from app.providers.groq_llm import GroqLLMProvider
 from app.providers.huggingface_embedding import HuggingFaceEmbeddingProvider
 from app.providers.llm import LLMProvider
@@ -224,6 +225,7 @@ def get_embedding_provider(name: str | None = None) -> EmbeddingProvider:
             api_key=settings.openai_api_key,
             model=settings.embedding_model,
             dimension=settings.embedding_dimension,
+            client=get_embedding_http_client(),
         )
 
     if provider_name == "huggingface":
@@ -233,10 +235,14 @@ def get_embedding_provider(name: str | None = None) -> EmbeddingProvider:
                 "provider requires it.",
             )
 
+        # Sharing one kept-alive client across every call is what keeps
+        # the per-turn query embedding off a cold TLS handshake - see
+        # embedding_http_client for the measurement.
         return HuggingFaceEmbeddingProvider(
             api_key=settings.hf_token,
             model=settings.embedding_model,
             dimension=settings.embedding_dimension,
+            client=get_embedding_http_client(),
         )
 
     raise UnknownEmbeddingProviderError(

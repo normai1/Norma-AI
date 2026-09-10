@@ -90,6 +90,31 @@ def test_uuids_are_never_mistaken_for_a_phone_number(spoken: str) -> None:
     assert redact_pii(spoken) == spoken
 
 
+@pytest.mark.parametrize(
+    "spoken",
+    [
+        # Found in the running container's own logs as
+        # "peak=[phone] of full scale)". The scanner treats a space as a
+        # group separator, so "12345 (0" read as one six-digit run running on
+        # into the decimal after it - a merge across a boundary, not one
+        # number. It destroyed the audio-level diagnostic it existed to
+        # provide, the same way the UUID case did.
+        #
+        # Each case here carries three or more decimal places, so none of
+        # them is already saved by the trailing-amount rule above.
+        "peak=12345 (0.377 of full scale)",
+        "rms=8192 (0.2513 of full scale)",
+        "latency=1024 (0.4096 seconds)",
+        # A space rather than a bracket, and the decimal in the middle.
+        "chunk 4501 3.1416 tokens",
+    ],
+)
+def test_two_numbers_run_together_are_not_read_as_one_phone_number(
+    spoken: str,
+) -> None:
+    assert redact_pii(spoken) == spoken
+
+
 def test_a_phone_written_with_dots_is_still_redacted() -> None:
     """
     Four trailing digits after a dot is the last group of a phone number, not

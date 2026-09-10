@@ -165,3 +165,59 @@ async def test_the_caller_s_query_text_never_reaches_the_logs(
 
     assert "Wilhelmina" not in logged
     assert "Quaxton" not in logged
+
+
+async def test_the_request_carries_a_timeout_short_enough_to_answer_without_it() -> (
+    None
+):
+    """
+    The regression behind "sometimes it is not responding anything": with a
+    five-second budget here, a slow retrieval did not merely answer late.
+    The caller heard nothing, concluded the assistant had not understood,
+    and spoke again - and that second utterance barged in on and cancelled
+    their own pending turn. Seven of thirty-five turns recorded stt
+    finalized, no retrieval, no LLM token, no audio.
+
+    CLAUDE.md's own numbers are what this has to fit inside: p95 time to
+    first audio is 1200ms, and retrieval is budgeted 80ms of it. Retrieval
+    cannot meet 80ms against a hosted embedding provider today, but it must
+    at least stay short enough that the turn proceeds - answering without
+    knowledge - while the caller is still waiting rather than after they
+    have given up.
+    """
+
+    seen: list[float | None] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(request.extensions["timeout"]["read"])
+        return httpx.Response(200, json={"context": ""})
+
+    await fetch_retrieved_context(
+        _ASSISTANT_ID, "anything", client=_client_returning(handler)
+    )
+
+    assert seen and seen[0] is not None
+    assert seen[0] <= 2.0
+
+
+async def test_the_timeout_is_configurable() -> None:
+    """
+    The right value follows the embedding provider - hosting the model
+    locally, or caching query embeddings, changes what is affordable - so it
+    must not need a code change.
+    """
+
+    import importlib
+    import os
+
+    import app.retrieval_client as module
+
+    os.environ["RETRIEVAL_TIMEOUT_SECONDS"] = "0.25"
+    try:
+        importlib.reload(module)
+        assert module._TIMEOUT_SECONDS == 0.25
+    finally:
+        del os.environ["RETRIEVAL_TIMEOUT_SECONDS"]
+        importlib.reload(module)
+
+    assert module._TIMEOUT_SECONDS == 1.5

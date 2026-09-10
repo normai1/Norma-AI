@@ -12,10 +12,12 @@ from typing import Any
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.config import settings
 from app.core.exceptions import AssistantNotFound
 from app.providers.embedding import EmbeddingProvider
 from app.repositories import assistant as assistant_repo
 from app.repositories import chunk as chunk_repo
+from app.services.query_embedding_cache import embed_query
 
 DEFAULT_TOP_K = 5
 
@@ -60,7 +62,12 @@ async def retrieve(
         db, workspace_id=workspace_id, assistant_id=assistant_id
     )
 
-    [query_vector] = await embedding_provider.embed([query])
+    # Cached, because this embed call is the slowest thing in the turn's
+    # retrieval and callers repeat each other constantly. See
+    # services/query_embedding_cache.py.
+    query_vector = await embed_query(
+        embedding_provider, settings.embedding_model, query
+    )
 
     rows = await chunk_repo.search_by_similarity(
         db,
