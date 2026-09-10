@@ -65,12 +65,23 @@ class SpeechToTextProvider(Protocol):
         *,
         language: str,
         keywords: Sequence[str] = (),
+        silence_threshold_secs: float | None = None,
     ) -> AsyncIterator[TranscriptEvent]:
         """
         Transcribe streaming audio, yielding partial and final events in
         order. keywords are glossary terms (item 13) biasing recognition
         toward domain vocabulary. Closing the returned iterator early must
         stop transcription promptly.
+
+        silence_threshold_secs is how long the caller must be quiet before
+        the provider decides their turn is over and commits a final
+        transcript. It exists because a provider that decides this for
+        itself overrides the operator's turn-sensitivity setting without
+        anyone noticing: Norma's own VAD would call a turn over after
+        0.9s, and ElevenLabs' fixed 1.5s default meant the turn actually
+        ended 1.5s in, every time, whatever the operator had chosen. None
+        leaves the provider's own default alone; an implementation clamps
+        to whatever its API supports.
         """
         ...
 

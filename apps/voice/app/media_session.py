@@ -53,7 +53,7 @@ from app.retrieval_client import fetch_retrieved_context
 from app.sentence_chunker import SentenceChunker
 from app.session_resilience import SessionResilienceTracker
 from app.spoken_text import to_spoken_text
-from app.turn_detection import TurnDetector
+from app.turn_detection import TurnDetector, sensitivity_to_stop_secs
 from app.turn_metrics import TurnMetricsRecorder
 from app.turn_metrics_client import record_turn_metric
 
@@ -232,11 +232,13 @@ class SpeechToTextProcessor(FrameProcessor):
         *,
         language: str,
         keywords: Sequence[str] = (),
+        silence_threshold_secs: float | None = None,
     ) -> None:
         super().__init__()
         self._provider = provider
         self._language = language
         self._keywords = keywords
+        self._silence_threshold_secs = silence_threshold_secs
         self._audio_queue: asyncio.Queue[bytes | None] = asyncio.Queue()
         self._stream_task: asyncio.Task | None = None
         # Rolling window for _observe_incoming_audio's level reporting.
@@ -310,6 +312,7 @@ class SpeechToTextProcessor(FrameProcessor):
                         audio,
                         language=self._language,
                         keywords=self._keywords,
+                        silence_threshold_secs=self._silence_threshold_secs,
                     ):
                         events += 1
                         self._last_event_at = time.monotonic()
@@ -1913,7 +1916,17 @@ def build_voice_session_pipeline_worker(
     pipeline = Pipeline(
         [
             transport.input(),
-            SpeechToTextProcessor(provider, language=language, keywords=keywords),
+            SpeechToTextProcessor(
+                provider,
+                language=language,
+                keywords=keywords,
+                # The same number the local VAD below uses. Two turn
+                # detectors disagreeing means the slower one decides, and
+                # the provider's own default was always the slower one - so
+                # the operator's turn-sensitivity setting had no effect on
+                # when a turn actually ended.
+                silence_threshold_secs=sensitivity_to_stop_secs(sensitivity),
+            ),
             turn_detection_processor,
             LLMTurnProcessor(
                 llm_provider,

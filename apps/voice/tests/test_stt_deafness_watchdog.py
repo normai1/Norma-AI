@@ -43,7 +43,7 @@ class _SilentStream:
     def __init__(self) -> None:
         self.streams = 0
 
-    async def stream(self, audio, *, language, keywords=()):
+    async def stream(self, audio, *, language, keywords=(), silence_threshold_secs=None):
         self.streams += 1
 
         # Drain audio the way a real provider does, so the queue does not
@@ -61,7 +61,7 @@ class _TalkativeStream:
     def __init__(self) -> None:
         self.streams = 0
 
-    async def stream(self, audio, *, language, keywords=()):
+    async def stream(self, audio, *, language, keywords=(), silence_threshold_secs=None):
         self.streams += 1
 
         async for _chunk in audio:

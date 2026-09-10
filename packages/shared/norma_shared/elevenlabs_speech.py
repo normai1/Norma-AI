@@ -261,17 +261,44 @@ class ElevenLabsTTS:
         return voices
 
 
+# The shortest vad_silence_threshold_secs the realtime API honours.
+# Anything below it is silently clamped to this - measured by asking for
+# 0.3 and reading the value back from the session_started message, which
+# came back as 0.5. Clamping here instead means the value Norma thinks it
+# asked for is the value in force.
+MIN_SILENCE_THRESHOLD_SECS = 0.5
+
+# The API's own default when the parameter is omitted, likewise read back
+# from session_started rather than taken from the docs.
+DEFAULT_SILENCE_THRESHOLD_SECS = 1.5
+
+
 def _build_realtime_url(
     base_url: str,
     *,
     language: str,
     keywords: Sequence[str],
+    silence_threshold_secs: float | None = None,
 ) -> str:
     """
     keyterms are repeated query parameters (keyterms=a&keyterms=b), not a
     single delimited value - confirmed against ElevenLabs' realtime STT
     examples while writing this feature's spec, since the docs' schema alone
     does not say.
+
+    vad_silence_threshold_secs is how long the caller must be quiet before
+    the server commits their turn, and it is the single largest term in the
+    delay between someone finishing a sentence and the assistant starting
+    to answer. Measured end to end, at true realtime audio pacing:
+
+        1.5s (the API default): 1.83s from end of speech to committed
+        0.8s:                   1.06s
+        0.5s:                   0.73s
+
+    Left off entirely, the server picks 1.5s and the operator's own
+    turn-sensitivity setting is quietly overruled - Norma's VAD would have
+    ended the turn at 0.9s, and the turn ends when the *later* of the two
+    fires. Passing it is what makes that setting mean something.
     """
 
     params: list[tuple[str, str]] = [
@@ -279,6 +306,15 @@ def _build_realtime_url(
         ("language_code", language),
         ("commit_strategy", "vad"),
     ]
+
+    if silence_threshold_secs is not None:
+        params.append(
+            (
+                "vad_silence_threshold_secs",
+                str(max(silence_threshold_secs, MIN_SILENCE_THRESHOLD_SECS)),
+            )
+        )
+
     params.extend(("keyterms", keyword) for keyword in keywords)
 
     return f"{base_url}/v1/speech-to-text/realtime?{urlencode(params)}"
@@ -362,8 +398,14 @@ class ElevenLabsSTT:
         *,
         language: str,
         keywords: Sequence[str] = (),
+        silence_threshold_secs: float | None = None,
     ) -> AsyncIterator[TranscriptEvent]:
-        url = _build_realtime_url(self._base_url, language=language, keywords=keywords)
+        url = _build_realtime_url(
+            self._base_url,
+            language=language,
+            keywords=keywords,
+            silence_threshold_secs=silence_threshold_secs,
+        )
 
         try:
             connection_cm = self._connect(

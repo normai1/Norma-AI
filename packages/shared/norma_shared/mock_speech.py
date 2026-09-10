@@ -78,6 +78,7 @@ class MockSTT:
         # a test to assert glossary terms actually reached the provider -
         # mirrors MockEmbeddingProvider.embedded_texts's exact precedent.
         self.received_keywords: list[str] | None = None
+        self.received_silence_threshold_secs: float | None = None
 
     async def _stay_open(self) -> None:
         """
@@ -102,9 +103,11 @@ class MockSTT:
         *,
         language: str,
         keywords: Sequence[str] = (),
+        silence_threshold_secs: float | None = None,
     ) -> AsyncIterator[TranscriptEvent]:
         self.call_count += 1
         self.received_keywords = list(keywords)
+        self.received_silence_threshold_secs = silence_threshold_secs
 
         if self.call_count <= self._silent_closes:
             return

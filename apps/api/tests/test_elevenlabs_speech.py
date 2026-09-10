@@ -8,6 +8,7 @@ import pytest
 import websockets.exceptions
 from norma_shared.elevenlabs_speech import (
     _MAX_VOICE_PAGES,
+    MIN_SILENCE_THRESHOLD_SECS,
     ElevenLabsSTT,
     ElevenLabsTTS,
     _map_realtime_message,
@@ -548,6 +549,81 @@ async def test_stt_stream_sends_keywords_as_repeated_keyterms() -> None:
 
     assert captured_urls[0].count("keyterms=acme") == 1
     assert captured_urls[0].count("keyterms=widget") == 1
+
+
+async def test_stt_stream_asks_for_the_given_silence_threshold() -> None:
+    """
+    How long the caller must be quiet before the server commits their turn
+    is the single largest term in the delay between someone finishing a
+    sentence and the assistant starting to answer. Measured against the
+    live API at true realtime audio pacing, end of speech to committed
+    transcript: 1.83s at the API's 1.5s default, 1.06s at 0.8s, 0.73s at
+    0.5s.
+    """
+
+    connection = _FakeConnection([])
+    captured_urls: list[str] = []
+
+    def fake_connect(url: str, **kwargs: object) -> _FakeConnection:
+        captured_urls.append(url)
+        return connection
+
+    stt = ElevenLabsSTT(api_key="key", connect=fake_connect)
+
+    async for _ in stt.stream(
+        _audio_chunks([]), language="en", silence_threshold_secs=0.9
+    ):
+        pass
+
+    assert "vad_silence_threshold_secs=0.9" in captured_urls[0]
+
+
+async def test_stt_stream_omits_the_threshold_when_none_is_given() -> None:
+    """
+    None means "leave the provider's own default alone" - the behaviour
+    every caller had before this parameter existed.
+    """
+
+    connection = _FakeConnection([])
+    captured_urls: list[str] = []
+
+    def fake_connect(url: str, **kwargs: object) -> _FakeConnection:
+        captured_urls.append(url)
+        return connection
+
+    stt = ElevenLabsSTT(api_key="key", connect=fake_connect)
+
+    async for _ in stt.stream(_audio_chunks([]), language="en"):
+        pass
+
+    assert "vad_silence_threshold_secs" not in captured_urls[0]
+
+
+async def test_a_threshold_below_the_api_floor_is_clamped() -> None:
+    """
+    The realtime API silently clamps anything under 0.5s to 0.5s - asking
+    for 0.3 and reading the value back from session_started returns 0.5.
+    Clamping here means the value Norma believes is in force is the value
+    actually in force, rather than a number the server quietly replaced.
+    """
+
+    connection = _FakeConnection([])
+    captured_urls: list[str] = []
+
+    def fake_connect(url: str, **kwargs: object) -> _FakeConnection:
+        captured_urls.append(url)
+        return connection
+
+    stt = ElevenLabsSTT(api_key="key", connect=fake_connect)
+
+    async for _ in stt.stream(
+        _audio_chunks([]), language="en", silence_threshold_secs=0.1
+    ):
+        pass
+
+    expected = f"vad_silence_threshold_secs={MIN_SILENCE_THRESHOLD_SECS}"
+
+    assert expected in captured_urls[0]
 
 
 async def test_stt_stream_empty_audio_terminates_cleanly() -> None:
