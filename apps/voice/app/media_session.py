@@ -81,6 +81,16 @@ AUDIO_SAMPLE_RATE_HZ = 16_000
 # flooding a call's log.
 _AUDIO_LEVEL_REPORT_SECONDS = 2.0
 
+# The peak level, as a fraction of full scale, above which a two-second
+# window of caller audio counts as speech rather than room noise. Measured
+# from real sessions: an idle microphone sits at 0.003-0.04, and speech that
+# transcribes correctly peaks anywhere from 0.13 upwards. 0.08 sits in the
+# gap. It is only ever used to decide whether the caller is saying something
+# the STT stream ought to be reacting to - never to gate audio, which is the
+# mistake that made an earlier version of this file go deaf whenever the
+# threshold was wrong.
+_SPEECH_PEAK_FRACTION = 0.08
+
 # 16-bit signed samples, matching norma_shared.speech's canonical format.
 # Only used to convert a chunk's byte length into the seconds of speech it
 # represents (see TTSProcessor._extend_playback).
@@ -238,6 +248,13 @@ class SpeechToTextProcessor(FrameProcessor):
         # provider stream that finished because the call is over apart from
         # one that closed under us mid-call - see _run_stream.
         self._input_ended = False
+        # The two clocks the deafness watchdog compares: when the caller was
+        # last audibly speaking, and when the stream last had anything to say
+        # about it. Speech newer than the last transcript, for longer than
+        # the watchdog's patience, means this stream has stopped listening.
+        self._last_speech_at = 0.0
+        self._last_event_at = 0.0
+        self._watchdog_task: asyncio.Task | None = None
 
     async def _audio_iterator(self) -> AsyncIterator[bytes]:
         while True:
@@ -275,6 +292,7 @@ class SpeechToTextProcessor(FrameProcessor):
                     "stt stream starting (errors=%d reconnects=%d)", errors, reconnects
                 )
                 events = 0
+                self._last_event_at = time.monotonic()
 
                 # Held so it can be closed explicitly below. An abandoned
                 # iterator stays suspended on its queue.get(), and that
@@ -294,6 +312,7 @@ class SpeechToTextProcessor(FrameProcessor):
                         keywords=self._keywords,
                     ):
                         events += 1
+                        self._last_event_at = time.monotonic()
 
                         await self.push_frame(
                             OutputTransportMessageUrgentFrame(
@@ -363,6 +382,61 @@ class SpeechToTextProcessor(FrameProcessor):
 
                 return
 
+    async def _watch_for_deafness(self) -> None:
+        """
+        Ends a stream that has stopped transcribing, so the reconnect loop
+        can replace it.
+
+        Every recovery path in _run_stream is driven by the provider telling
+        us something - an exception, or a clean close. A stream that stays
+        open and simply says nothing tells us neither, and there was no
+        recovery from it at all: reported as "assistant not working", two
+        sessions in a row where the caller's audio arrived for thirty-four
+        seconds, several windows of it at clear speech level, and the log
+        held one "stt stream starting" line and then nothing until they hung
+        up.
+
+        Ending the current audio iterator (a None on the queue) is all this
+        does. That is the same shape as the provider closing its own stream,
+        so _run_stream's existing "closed mid-call - reconnecting" path takes
+        it from there, including the failover announcement once reconnects
+        stop helping. _input_ended stays False, so this can never be mistaken
+        for the call being over.
+
+        Cannot fire on a caller who is simply quiet: it requires speech-level
+        audio to have arrived *after* the last transcript. A caller thinking
+        in silence produces neither, and is left alone.
+        """
+
+        while not self._input_ended:
+            await asyncio.sleep(config.STT_DEAF_WATCHDOG_POLL_SECONDS)
+
+            if self._input_ended:
+                return
+
+            # Nothing said since the stream last responded - not deafness,
+            # just a pause.
+            if self._last_speech_at <= self._last_event_at:
+                continue
+
+            silent_for = time.monotonic() - self._last_event_at
+
+            if silent_for < config.STT_DEAF_WATCHDOG_SECONDS:
+                continue
+
+            logger.warning(
+                "stt stream heard speech but returned nothing for %.0fs - "
+                "restarting it",
+                silent_for,
+            )
+
+            # Counts as a response for the purposes of this check, so the
+            # replacement stream gets its own full window instead of being
+            # torn down again on the next poll.
+            self._last_event_at = time.monotonic()
+
+            await self._audio_queue.put(None)
+
     async def _announce_failover(self) -> None:
         await self.push_frame(
             OutputTransportMessageUrgentFrame(
@@ -399,6 +473,10 @@ class SpeechToTextProcessor(FrameProcessor):
         self._input_ended = True
         await self._audio_queue.put(None)
 
+        if self._watchdog_task is not None:
+            await self.cancel_task(self._watchdog_task)
+            self._watchdog_task = None
+
         if self._stream_task is not None:
             await self.cancel_task(self._stream_task)
             self._stream_task = None
@@ -432,6 +510,9 @@ class SpeechToTextProcessor(FrameProcessor):
         self._total_frames += 1
         self._level_peak = max(self._level_peak, peak)
 
+        if peak >= _SPEECH_PEAK_FRACTION * 32768:
+            self._last_speech_at = time.monotonic()
+
         now = time.monotonic()
 
         if now - self._level_reported_at < _AUDIO_LEVEL_REPORT_SECONDS:
@@ -453,6 +534,7 @@ class SpeechToTextProcessor(FrameProcessor):
 
         if isinstance(frame, StartFrame):
             self._stream_task = self.create_task(self._run_stream())
+            self._watchdog_task = self.create_task(self._watch_for_deafness())
             await self.push_frame(frame, direction)
         elif isinstance(frame, InputAudioRawFrame):
             self._observe_incoming_audio(frame.audio)

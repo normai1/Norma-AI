@@ -120,3 +120,26 @@ ECHO_WORD_OVERLAP_RATIO = float(os.environ.get("ECHO_WORD_OVERLAP_RATIO", "0.6")
 # ticket verification loudly, never fall back to a guessable default.
 SECRET_KEY = os.environ.get("SECRET_KEY", "")
 JWT_ALGORITHM = os.environ.get("JWT_ALGORITHM", "HS256")
+
+# How long the caller may go on producing speech-level audio while the STT
+# stream returns nothing at all before that stream is treated as deaf and
+# reconnected.
+#
+# Reported as "assistant not working": two consecutive sessions where audio
+# arrived for the full 34 seconds, several windows of it at clear speech
+# level (peaks of 0.13, 0.14, 0.22, 0.28 of full scale), and the provider
+# stream produced not one transcript, not one error, and never closed. The
+# reconnect machinery could not help because nothing ever told it anything
+# was wrong - the log showed "stt stream starting" and then nothing until
+# the caller gave up and hung up.
+#
+# Twelve seconds is chosen to sit far above the worst honest transcription
+# latency measured here (2.7s from end of speech to a committed transcript)
+# and far below a caller's patience. It cannot fire on a quiet caller: the
+# check requires speech-level audio arriving *since* the last transcript.
+STT_DEAF_WATCHDOG_SECONDS = float(os.environ.get("STT_DEAF_WATCHDOG_SECONDS", "12.0"))
+
+# How often that watchdog looks. Cheap - it compares two timestamps.
+STT_DEAF_WATCHDOG_POLL_SECONDS = float(
+    os.environ.get("STT_DEAF_WATCHDOG_POLL_SECONDS", "2.0")
+)
