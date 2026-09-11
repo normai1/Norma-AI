@@ -127,6 +127,22 @@ const KNOWLEDGE_POLL_INTERVAL_MS = 3_000;
 // so a source can sit "pending" with nothing actually working on it.
 const KNOWLEDGE_POLL_TIMEOUT_MS = 5 * 60 * 1_000;
 
+// Generated FAQs arrive long after the document they came from is finished.
+// Parsing and embedding complete inside the upload; writing the questions is a
+// background job that queues itself behind the model provider's per-minute
+// token budget, which for a 50-page PDF is about fourteen minutes.
+//
+// That broke this screen: the source-status poll above stops as soon as
+// nothing is "processing", which is before generation has written a single
+// entry, so the list sat empty and nothing ever refreshed it. Reported as "no
+// faqs created" while the database held twenty-nine of them.
+//
+// Slower than the status poll because it is watching for something that
+// arrives in minutes, not seconds, and bounded well past how long the longest
+// document takes so it is not still going when the answer is simply "none".
+export const FAQ_POLL_INTERVAL_MS = 10_000;
+const FAQ_POLL_TIMEOUT_MS = 20 * 60 * 1_000;
+
 export default function AssistantEditorPage() {
   const params = useParams<{ assistantId: string }>();
   const assistantId = params.assistantId;
@@ -678,6 +694,8 @@ export default function AssistantEditorPage() {
     return created.id;
   }
 
+  const faqPollStartedAtRef = useRef<number | null>(null);
+
   useEffect(() => {
     // Keyed on the sources rather than the tab, because the count is shown
     // on the tab itself - waiting until someone opens it would leave the
@@ -687,6 +705,34 @@ export default function AssistantEditorPage() {
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [knowledgeSources]);
+
+  useEffect(() => {
+    if (activeTab !== "knowledge" || !activeWorkspace) {
+      faqPollStartedAtRef.current = null;
+
+      return;
+    }
+
+    if (faqPollStartedAtRef.current === null) {
+      faqPollStartedAtRef.current = Date.now();
+    }
+
+    if (Date.now() - faqPollStartedAtRef.current > FAQ_POLL_TIMEOUT_MS) {
+      return;
+    }
+
+    const timer = setTimeout(() => {
+      void loadFaqEntries();
+    }, FAQ_POLL_INTERVAL_MS);
+
+    return () => clearTimeout(timer);
+    // Keyed on the workspace *id*, not the workspace: an object rebuilt on
+    // every render would re-run this effect on every render, and its cleanup
+    // would clear the pending timer each time - so the ten seconds never
+    // elapse and the poll silently never fires. faqEntries is the tick,
+    // since it only changes when a load completes.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeTab, activeWorkspace?.id, faqEntries, assistantId]);
 
   async function loadFaqEntries() {
     if (!activeWorkspace) {
@@ -1615,7 +1661,9 @@ export default function AssistantEditorPage() {
                 <p className="text-sm text-slate-400">
                   Questions and answers the assistant can use on a call -
                   written by you, or generated automatically from a file or
-                  website you add under Source.
+                  website you add under Source. Generated ones are written in
+                  the background and appear here as they are ready, which for
+                  a long document takes several minutes.
                 </p>
 
                 {faqEntriesError && (
