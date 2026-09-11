@@ -402,7 +402,7 @@ async def test_a_whole_document_is_covered_at_close_to_the_provider_s_own_pace()
 
     from app.providers.llm import TokenBudget
     from app.services.faq_generation import (
-        _ASSUMED_COMPLETION_TOKENS,
+        _per_call_overhead_tokens,
         window_chars_for_budget,
     )
 
@@ -411,7 +411,8 @@ async def test_a_whole_document_is_covered_at_close_to_the_provider_s_own_pace()
     limiter = _limiter(clock, budget=budget)
 
     chars = window_chars_for_budget(budget)
-    per_window = estimate_tokens("x" * chars) + _ASSUMED_COMPLETION_TOKENS
+    # Everything a call really costs, not just its text.
+    per_window = estimate_tokens("x" * chars) + _per_call_overhead_tokens()
 
     # A fifty-page PDF is roughly 143,000 characters.
     windows = -(-143_000 // chars)
@@ -428,9 +429,20 @@ async def test_a_whole_document_is_covered_at_close_to_the_provider_s_own_pace()
         )
 
     elapsed = clock.now - started
-    floor = (windows * per_window) / budget * 60.0
+
+    # A window is indivisible, so the reachable floor is how many fit in a
+    # minute, not the arithmetic ratio of tokens to budget. At 12,000
+    # characters a window costs 5,748 of an 8,000 allowance: one per minute,
+    # with the remaining 2,252 unusable by anything smaller that would not
+    # cost more in total. Dividing tokens by budget would demand 517s for
+    # work that cannot be done in less than 660.
+    per_minute = max(1, budget // per_window)
+    floor = (windows - 1) / per_minute * 60.0
 
     assert elapsed <= floor + 60.0, (
         f"{windows} windows took {elapsed:.0f}s against a {floor:.0f}s floor - "
         "the pacing is wasting time the provider was not asking for"
     )
+    # And it really is pacing, not racing: a document this size cannot be
+    # sent inside a single minute.
+    assert elapsed >= floor - 60.0

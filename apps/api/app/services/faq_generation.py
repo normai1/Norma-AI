@@ -295,66 +295,74 @@ def window_chars_for_budget(budget: int) -> int:
     """
     How much text to put in one window, given a tokens-per-minute budget.
 
-    A window is indivisible: if two of them do not fit inside one minute the
-    second waits for the next, and whatever was left of the first minute is
-    lost. At the standing 12,000 characters a window costs about 4,700
-    tokens, so against an 8,000-per-minute allowance exactly one fits and
-    41% of every minute goes unused - measured as a twelve-window document
-    taking 620 seconds against an arithmetic floor of 423.
+    Every call carries the same fixed overhead whatever its size - the
+    system prompt, the list of questions already asked, and the allowance
+    for the reply. Measured against the real prompts that is about 2,300
+    tokens, most of it the avoid-list once a document is well under way. So
+    a document's total cost is its own text plus that overhead once per
+    window, and fewer, larger windows cost less.
 
-    So the window is sized to divide the minute rather than merely fit
-    inside it. Bounded at both ends: never larger than MAX_SOURCE_TEXT_CHARS,
-    because a huge window dilutes the questions the model writes, and never
-    smaller than _MIN_SOURCE_TEXT_CHARS, because past that the fixed cost
-    every call pays starts dominating the budget it is trying to spend well.
+    That is what decides the size, because the scarce thing is the daily
+    allowance rather than the minute: 50 pages is about 166,000 characters,
+    which is 14 windows and 80,000 tokens at 12,000 characters each, against
+    17 windows and 87,000 at 9,800. Both take about the same wall-clock time,
+    since only one window fits a minute either way.
+
+    An earlier version sized the window to pack two into a minute and
+    ignored the overhead entirely, so the windows it chose cost 5,115 tokens
+    against the 4,000 they were sized for - fitting one per minute after
+    all, and paying the overhead three extra times for the privilege.
+
+    So: the largest window that still fits inside one minute, capped at
+    MAX_SOURCE_TEXT_CHARS because past that a single window dilutes the
+    questions written from it, and floored at _MIN_SOURCE_TEXT_CHARS because
+    below that the overhead dominates what is actually being asked.
     """
 
-    best = MAX_SOURCE_TEXT_CHARS
-    best_waste: int | None = None
+    for_text = budget - _per_call_overhead_tokens()
 
-    for slots in range(1, 9):
-        prompt_tokens = budget // slots - _ASSUMED_COMPLETION_TOKENS
+    if for_text <= 0:
+        # The budget cannot cover even an empty call. Nothing here can fix
+        # that, so send the smallest useful window and let the rate limiter
+        # and the provider say what they say.
+        return _MIN_SOURCE_TEXT_CHARS
 
-        if prompt_tokens <= 0:
-            break
+    chars = min(MAX_SOURCE_TEXT_CHARS, int(for_text * _CHARS_PER_PROMPT_TOKEN))
 
-        chars = min(
-            MAX_SOURCE_TEXT_CHARS, int(prompt_tokens * _CHARS_PER_PROMPT_TOKEN)
-        )
+    # The estimate rounds up, so the inverse lands a token or two over.
+    while (
+        chars > _MIN_SOURCE_TEXT_CHARS
+        and estimate_tokens("x" * chars) > for_text
+    ):
+        chars -= int(_CHARS_PER_PROMPT_TOKEN) + 1
 
-        # Trim until the window genuinely fits its share of the minute.
-        # Multiplying tokens by characters-per-token is the inverse of an
-        # estimate that rounds up, so it lands a token or two over and the
-        # window misses its slot by nothing at all - which costs a whole
-        # extra minute per window, not a rounding error.
-        slot = budget // slots
+    return max(_MIN_SOURCE_TEXT_CHARS, chars)
 
-        while (
-            chars > _MIN_SOURCE_TEXT_CHARS
-            and estimate_tokens("x" * chars) + _ASSUMED_COMPLETION_TOKENS > slot
-        ):
-            chars -= int(_CHARS_PER_PROMPT_TOKEN) + 1
 
-        if chars < _MIN_SOURCE_TEXT_CHARS:
-            break
+def _per_call_overhead_tokens() -> int:
+    """
+    What one generation call costs before any of the document is added.
 
-        # What a window of this size really costs, and so how much of each
-        # minute is left over once as many as fit have been sent.
-        cost = estimate_tokens("x" * chars) + _ASSUMED_COMPLETION_TOKENS
-        fits = budget // cost
+    Measured rather than guessed: the system prompt is 367 tokens, a full
+    avoid-list of _RECENT_QUESTIONS_SHOWN questions about 749, and the
+    reply allowance 1,200. The avoid-list is sized at its largest on
+    purpose - it grows as a document is worked through, and a window sized
+    against the empty one would creep over budget exactly when a long
+    document is halfway done.
+    """
 
-        if fits < 1:
-            continue
+    longest_avoid_list = [
+        # Representative of what generation actually writes, and long
+        # enough that a real question list cannot exceed it by much.
+        "What is the policy for situation number 00 at the company?"
+    ] * _RECENT_QUESTIONS_SHOWN
 
-        waste = budget - fits * cost
+    return (
+        estimate_tokens(_SYSTEM_PROMPT)
+        + estimate_tokens(_avoid_clause(longest_avoid_list))
+        + _ASSUMED_COMPLETION_TOKENS
+    )
 
-        # Ties go to the larger window: fewer calls, fewer fixed costs, and
-        # more context behind each set of questions.
-        if best_waste is None or waste < best_waste:
-            best = chars
-            best_waste = waste
-
-    return best
 
 
 def _windows(text: str, *, max_chars: int = MAX_SOURCE_TEXT_CHARS) -> list[str]:
