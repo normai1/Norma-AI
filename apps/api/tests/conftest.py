@@ -1,5 +1,6 @@
 from collections.abc import AsyncGenerator
 
+import pytest
 import pytest_asyncio
 from httpx import ASGITransport, AsyncClient
 from redis.asyncio import Redis
@@ -294,3 +295,23 @@ async def _org_with_owner(
     created = await client.post(_ORGANIZATIONS, json={"name": name}, headers=headers)
 
     return headers, created.json()["id"]
+
+
+@pytest.fixture(autouse=True)
+def _faq_generation_never_waits_in_tests(monkeypatch: pytest.MonkeyPatch) -> None:
+    """
+    FAQ generation paces itself against a provider's tokens-per-minute
+    budget, waiting when a document needs more than a minute's worth. That
+    is right in production and disastrous here: the mock provider answers
+    instantly, so a test that crawls twelve pages of four hundred sentences
+    spends the budget in milliseconds and then sleeps, for real, for as many
+    minutes as the document is worth. Found when one test file went from
+    seconds to over ten minutes.
+
+    A budget this large never makes anyone wait, so every test exercises the
+    generation path at full speed. The pacing itself is covered properly in
+    test_token_rate_limiter.py, against a fake clock, which is the only way
+    it should ever be tested.
+    """
+
+    monkeypatch.setattr(settings, "faq_generation_tokens_per_minute", 100_000_000)

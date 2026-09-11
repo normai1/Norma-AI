@@ -21,15 +21,43 @@ import uuid
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.config import settings
 from app.models.knowledge_source import KnowledgeSource
 from app.providers.embedding import EmbeddingProvider
-from app.providers.llm import LLMProvider, LLMProviderError
+from app.providers.llm import LLMProvider, LLMProviderError, LLMRateLimited
 from app.repositories import knowledge_source as knowledge_source_repo
 from app.services import faq_entry as faq_entry_service
+from app.services.token_rate_limiter import (
+    CHARS_PER_TOKEN as _CHARS_PER_PROMPT_TOKEN,
+)
+from app.services.token_rate_limiter import (
+    TokenRateLimiter,
+    estimate_tokens,
+)
 
 logger = logging.getLogger(__name__)
 
 GENERATED_FAQ_SOURCE_NAME = "Generated FAQs"
+
+
+class LLMQuotaExhausted(Exception):
+    """
+    The provider's allowance is spent for long enough that waiting it out is
+    not worth doing. Stops the whole document, not one window: every
+    remaining window would only wait out the same allowance in turn.
+    """
+
+    def __init__(
+        self,
+        *,
+        exhausted_window: str | None,
+        retry_after_seconds: float | None,
+    ) -> None:
+        super().__init__(
+            f"provider allowance exhausted (per {exhausted_window or 'unknown'})"
+        )
+        self.exhausted_window = exhausted_window
+        self.retry_after_seconds = retry_after_seconds
 
 # How many Q&A pairs are asked for from ONE window of the source. The
 # document is covered window by window, so this is no longer the ceiling on
@@ -48,10 +76,16 @@ MAX_GENERATED_ENTRIES = 150
 MAX_SOURCE_TEXT_CHARS = 12_000
 
 # How many windows one source may consume, bounding cost and time for a very
-# large document rather than letting them scale without limit. At 12,000
-# characters each this covers roughly 240,000 - around 85 pages of ordinary
-# prose - after which the remainder is deliberately not read.
-MAX_SOURCE_WINDOWS = 20
+# large document rather than letting them scale without limit.
+#
+# Raised from 20 when the window stopped being a fixed 12,000 characters:
+# window_chars_for_budget sizes it to divide the provider's minute, and
+# against an 8,000-per-minute allowance that is about 9,800 characters, so
+# 20 windows would have stopped a 50-page PDF three-quarters of the way
+# through - the "only generates FAQs on the first few pages" complaint,
+# reintroduced by the fix for it. 40 covers roughly 390,000 characters at
+# that size, comfortably past any single upload the product accepts.
+MAX_SOURCE_WINDOWS = 40
 
 # How many already-written questions a later window is shown, so it can avoid
 # repeating them. Bounded so the reminder cannot crowd out the document text
@@ -84,7 +118,25 @@ _QUESTION_STOP_WORDS = frozenset(
 # A rate-limited window is retried rather than lost. The provider answers a
 # burst of windows with 429 and recovers a moment later, so the difference
 # between retrying and not is most of the document's questions.
+# Four attempts was chosen against provider *errors*, which are unlikely to
+# clear quickly. A rate limit is the opposite: it clears at a time the
+# provider names, so an attempt that waits for it is nearly certain to
+# succeed. Four quick tries against a minute-long window meant a window
+# was abandoned while the answer was simply "wait".
 _WINDOW_MAX_ATTEMPTS = 4
+_WINDOW_MAX_RATE_LIMITED_ATTEMPTS = 8
+
+# The longest this will wait out a rate limit before deciding the allowance
+# is not coming back soon enough to be worth holding a background task open
+# for. Two minutes covers any per-minute bucket with room to spare.
+#
+# Beyond it, waiting is not patience but denial. Seen live: a tokens-per-day
+# allowance of 200,000 with 199,529 used, and generation settling in to
+# "waiting 1169.0s as the provider asked" - per window, on a ten-window
+# document, for a quota that would not refill until the next day. The
+# operator saw an upload that completed and no FAQs, with nothing anywhere
+# saying why.
+_MAX_RATE_LIMIT_WAIT_SECONDS = 120.0
 _WINDOW_RETRY_BACKOFF_SECONDS = 2.0
 
 _SYSTEM_PROMPT = (
@@ -151,9 +203,24 @@ def _extract_pairs(raw_response: str) -> list[tuple[str, str]]:
     try:
         data = json.loads(_strip_code_fence(raw_response))
     except json.JSONDecodeError:
+        logger.warning(
+            "FAQ generation could not parse a model response as JSON "
+            "(%d characters) - that window contributes nothing",
+            len(raw_response),
+        )
+
         return []
 
     if not isinstance(data, list):
+        # A window that answers with the right content in the wrong shape -
+        # an object wrapping the list, say - is worth telling apart from one
+        # that genuinely had nothing to ask. Both used to look like zero.
+        logger.warning(
+            "FAQ generation got %s where a list of pairs was expected - "
+            "that window contributes nothing",
+            type(data).__name__,
+        )
+
         return []
 
     pairs: list[tuple[str, str]] = []
@@ -217,7 +284,80 @@ async def _get_or_create_generated_faq_source(
     return knowledge_source
 
 
-def _windows(text: str) -> list[str]:
+# The smallest window worth sending. Every call pays the system prompt, the
+# avoid-list and a completion allowance whatever its size, so slicing a
+# document finer buys nothing and spends more of the very budget being
+# rationed.
+_MIN_SOURCE_TEXT_CHARS = 5_000
+
+
+def window_chars_for_budget(budget: int) -> int:
+    """
+    How much text to put in one window, given a tokens-per-minute budget.
+
+    A window is indivisible: if two of them do not fit inside one minute the
+    second waits for the next, and whatever was left of the first minute is
+    lost. At the standing 12,000 characters a window costs about 4,700
+    tokens, so against an 8,000-per-minute allowance exactly one fits and
+    41% of every minute goes unused - measured as a twelve-window document
+    taking 620 seconds against an arithmetic floor of 423.
+
+    So the window is sized to divide the minute rather than merely fit
+    inside it. Bounded at both ends: never larger than MAX_SOURCE_TEXT_CHARS,
+    because a huge window dilutes the questions the model writes, and never
+    smaller than _MIN_SOURCE_TEXT_CHARS, because past that the fixed cost
+    every call pays starts dominating the budget it is trying to spend well.
+    """
+
+    best = MAX_SOURCE_TEXT_CHARS
+    best_waste: int | None = None
+
+    for slots in range(1, 9):
+        prompt_tokens = budget // slots - _ASSUMED_COMPLETION_TOKENS
+
+        if prompt_tokens <= 0:
+            break
+
+        chars = min(
+            MAX_SOURCE_TEXT_CHARS, int(prompt_tokens * _CHARS_PER_PROMPT_TOKEN)
+        )
+
+        # Trim until the window genuinely fits its share of the minute.
+        # Multiplying tokens by characters-per-token is the inverse of an
+        # estimate that rounds up, so it lands a token or two over and the
+        # window misses its slot by nothing at all - which costs a whole
+        # extra minute per window, not a rounding error.
+        slot = budget // slots
+
+        while (
+            chars > _MIN_SOURCE_TEXT_CHARS
+            and estimate_tokens("x" * chars) + _ASSUMED_COMPLETION_TOKENS > slot
+        ):
+            chars -= int(_CHARS_PER_PROMPT_TOKEN) + 1
+
+        if chars < _MIN_SOURCE_TEXT_CHARS:
+            break
+
+        # What a window of this size really costs, and so how much of each
+        # minute is left over once as many as fit have been sent.
+        cost = estimate_tokens("x" * chars) + _ASSUMED_COMPLETION_TOKENS
+        fits = budget // cost
+
+        if fits < 1:
+            continue
+
+        waste = budget - fits * cost
+
+        # Ties go to the larger window: fewer calls, fewer fixed costs, and
+        # more context behind each set of questions.
+        if best_waste is None or waste < best_waste:
+            best = chars
+            best_waste = waste
+
+    return best
+
+
+def _windows(text: str, *, max_chars: int = MAX_SOURCE_TEXT_CHARS) -> list[str]:
     """
     Split a source into generation-sized windows, on paragraph boundaries
     where possible so a window rarely starts or ends mid-sentence.
@@ -231,20 +371,20 @@ def _windows(text: str) -> list[str]:
     windows: list[str] = []
 
     while remaining and len(windows) < MAX_SOURCE_WINDOWS:
-        if len(remaining) <= MAX_SOURCE_TEXT_CHARS:
+        if len(remaining) <= max_chars:
             windows.append(remaining)
             break
 
-        head = remaining[:MAX_SOURCE_TEXT_CHARS]
+        head = remaining[:max_chars]
         # Prefer a paragraph break, then any line break, then wherever the
         # limit falls - the same priority order the chunker splits on.
         split_at = head.rfind("\n\n")
 
-        if split_at < MAX_SOURCE_TEXT_CHARS // 2:
+        if split_at < max_chars // 2:
             split_at = head.rfind("\n")
 
-        if split_at < MAX_SOURCE_TEXT_CHARS // 2:
-            split_at = MAX_SOURCE_TEXT_CHARS
+        if split_at < max_chars // 2:
+            split_at = max_chars
 
         windows.append(remaining[:split_at].strip())
         remaining = remaining[split_at:].strip()
@@ -349,12 +489,38 @@ def _avoid_clause(already_asked: list[str]) -> str:
     )
 
 
+# What one window's reply is assumed to cost, on top of what was sent. The
+# provider counts prompt and completion against the same per-minute budget,
+# and only says what the completion actually cost afterwards - by which time
+# the tokens are already spent. MAX_ENTRIES_PER_WINDOW question-and-answer
+# pairs of ordinary length land comfortably under this.
+_ASSUMED_COMPLETION_TOKENS = 1_200
+
+
+def _provider_budget(llm_provider: LLMProvider):
+    """
+    What the provider last said about the token allowance, or None.
+
+    Optional on the protocol, so a provider that has never heard of rate
+    limits - the mock, and any future adapter - simply reports nothing and
+    the configured budget stands.
+    """
+
+    reader = getattr(llm_provider, "last_token_budget", None)
+
+    if reader is None:
+        return None
+
+    return reader()
+
+
 async def _generate_for_window(
     llm_provider: LLMProvider,
     window: str,
     *,
     already_asked: list[str],
     knowledge_source_id: uuid.UUID,
+    rate_limiter: TokenRateLimiter | None = None,
 ) -> list[tuple[str, str]]:
     """
     One window's pairs, or none if the provider fails for it.
@@ -362,30 +528,95 @@ async def _generate_for_window(
     A window failing is not allowed to lose the rest: a large document is
     many calls, and one of them erroring should cost that window's questions,
     not the whole set.
+
+    When a rate_limiter is given, this waits for room in the provider's
+    per-minute token budget before each attempt rather than sending the call
+    and being refused. Waiting costs a document that finishes later; not
+    waiting cost most of a 50-page PDF being silently never read.
     """
 
     prompt = window + _avoid_clause(already_asked)
 
-    for attempt in range(1, _WINDOW_MAX_ATTEMPTS + 1):
+    cost = (
+        estimate_tokens(_SYSTEM_PROMPT)
+        + estimate_tokens(prompt)
+        + _ASSUMED_COMPLETION_TOKENS
+    )
+
+    errors = 0
+    rate_limited = 0
+
+    while True:
         try:
+            if rate_limiter is not None:
+                await rate_limiter.acquire(cost)
+
             raw_response = await llm_provider.generate(
                 system_prompt=_SYSTEM_PROMPT,
                 user_prompt=prompt,
             )
+        except LLMRateLimited as exc:
+            rate_limited += 1
+            # The provider both refused this call and said when to try
+            # again. Waiting that long is the fastest recovery and the only
+            # one guaranteed not to earn a second refusal - and the budget
+            # it reported alongside is worth more than whatever this was
+            # pacing against, since it evidently was not enough.
+            if rate_limiter is not None:
+                rate_limiter.adopt_provider_budget(_provider_budget(llm_provider))
+
+            if rate_limited >= _WINDOW_MAX_RATE_LIMITED_ATTEMPTS:
+                logger.warning(
+                    "FAQ generation gave up on one window of knowledge "
+                    "source %s after %d rate-limited attempts",
+                    knowledge_source_id,
+                    rate_limited,
+                )
+
+                return []
+
+            wait = exc.retry_after_seconds
+
+            if wait is None:
+                wait = _WINDOW_RETRY_BACKOFF_SECONDS * (2 ** (rate_limited - 1))
+
+            # A day's allowance does not come back by waiting, and neither
+            # does anything else this far out. Raising it tells the caller
+            # to stop the whole document rather than have every remaining
+            # window discover the same thing one long sleep at a time.
+            if exc.exhausted_window == "day" or wait > _MAX_RATE_LIMIT_WAIT_SECONDS:
+                raise LLMQuotaExhausted(
+                    exhausted_window=exc.exhausted_window,
+                    retry_after_seconds=exc.retry_after_seconds,
+                ) from exc
+
+            logger.info(
+                "FAQ generation rate limited on knowledge source %s - "
+                "waiting %.1fs as the provider asked",
+                knowledge_source_id,
+                wait,
+            )
+
+            await asyncio.sleep(wait)
         except LLMProviderError as exc:
-            if attempt == _WINDOW_MAX_ATTEMPTS:
+            errors += 1
+
+            if errors >= _WINDOW_MAX_ATTEMPTS:
                 logger.warning(
                     "FAQ generation gave up on one window of knowledge "
                     "source %s after %d attempts: %s",
                     knowledge_source_id,
-                    attempt,
+                    errors,
                     type(exc).__name__,
                 )
 
                 return []
 
-            await asyncio.sleep(_WINDOW_RETRY_BACKOFF_SECONDS * (2 ** (attempt - 1)))
+            await asyncio.sleep(_WINDOW_RETRY_BACKOFF_SECONDS * (2 ** (errors - 1)))
         else:
+            if rate_limiter is not None:
+                rate_limiter.adopt_provider_budget(_provider_budget(llm_provider))
+
             return _extract_pairs(raw_response)
 
     return []
@@ -415,23 +646,55 @@ async def generate_faq_entries_for_source(
     if not text.strip() or knowledge_source.assistant_id is None:
         return
 
-    windows = _windows(text)
+    budget = settings.faq_generation_tokens_per_minute
+    windows = _windows(text, max_chars=window_chars_for_budget(budget))
 
     # Sequential, not concurrent, for two reasons that happen to agree. A
     # window can only avoid repeating earlier questions if it is told what
     # they were, which requires the earlier ones to have finished. And
     # concurrency is what provoked the provider into rate-limiting most of a
     # document - measured at 3 of 13 windows answered.
+    #
+    # Sequential alone was not enough. The provider's limit is tokens per
+    # minute, not calls at once, so a document large enough to matter still
+    # spent the whole allowance partway through and had every remaining
+    # window refused. The limiter queues the windows behind that budget
+    # instead: send what fits, wait for the window to roll, send the next.
+    rate_limiter = TokenRateLimiter(budget=budget)
+
     pair_groups: list[list[tuple[str, str]]] = []
     already_asked: list[str] = []
 
+    exhausted: LLMQuotaExhausted | None = None
+
     for window in windows:
-        pairs_for_window = await _generate_for_window(
-            llm_provider,
-            window,
-            already_asked=already_asked,
-            knowledge_source_id=knowledge_source.id,
-        )
+        try:
+            pairs_for_window = await _generate_for_window(
+                llm_provider,
+                window,
+                already_asked=already_asked,
+                knowledge_source_id=knowledge_source.id,
+                rate_limiter=rate_limiter,
+            )
+        except LLMQuotaExhausted as exc:
+            # Keep what earlier windows produced: a partial FAQ list is
+            # worth having, and throwing it away would mean the allowance
+            # was spent for nothing.
+            exhausted = exc
+
+            logger.warning(
+                "FAQ generation stopped early for knowledge source %s after "
+                "%d of %d windows: the provider's %s allowance is exhausted. "
+                "Entries written so far are kept; the rest of the document "
+                "was not read.",
+                knowledge_source.id,
+                len(pair_groups),
+                len(windows),
+                exc.exhausted_window or "token",
+            )
+
+            break
+
         pair_groups.append(pairs_for_window)
         already_asked.extend(question for question, _answer in pairs_for_window)
 
@@ -439,7 +702,7 @@ async def generate_faq_entries_for_source(
 
     productive = sum(1 for group in pair_groups if group)
 
-    if productive < len(windows):
+    if exhausted is None and productive < len(windows):
         # Silent before: a window lost to rate limiting looked exactly like a
         # window with nothing worth asking about, and the only visible symptom
         # was a short FAQ list.

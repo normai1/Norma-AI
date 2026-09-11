@@ -123,12 +123,22 @@ async def upload_knowledge_source(
     storage: StorageProviderDep,
     embedding_provider: EmbeddingProviderDep,
     faq_llm_provider: FaqGenerationLlmProviderDep,
+    background_tasks: BackgroundTasks,
+    session_factory: Annotated[
+        async_sessionmaker[AsyncSession], Depends(get_session_factory)
+    ],
     file: Annotated[UploadFile, File()],
     assistant_id: Annotated[uuid.UUID, Form()],
 ) -> KnowledgeSourceResponse:
     """
     Upload a file as a new knowledge source, assigned to one assistant.
     Owners and admins only.
+
+    Parsing, chunking and embedding still happen here, so the response
+    already reports whether the document itself was usable. FAQ generation
+    is scheduled instead: it queues itself behind the provider's
+    tokens-per-minute budget and a long document takes minutes to work
+    through, which is a background job's business and not an upload's.
     """
 
     content = await file.read()
@@ -141,7 +151,7 @@ async def upload_knowledge_source(
             db,
             storage,
             embedding_provider,
-            faq_llm_provider,
+            None,
             organization_id=membership.organization_id,
             workspace_id=workspace_id,
             assistant_id=assistant_id,
@@ -160,7 +170,52 @@ async def upload_knowledge_source(
 
     await db.commit()
 
+    if document.processing_status == knowledge_source_service.COMPLETED_STATUS:
+        background_tasks.add_task(
+            _generate_faqs_in_background,
+            session_factory=session_factory,
+            storage=storage,
+            llm_provider=faq_llm_provider,
+            embedding_provider=embedding_provider,
+            knowledge_source_id=knowledge_source.id,
+        )
+
     return _to_response(knowledge_source, document)
+
+
+async def _generate_faqs_in_background(
+    *,
+    session_factory: async_sessionmaker[AsyncSession],
+    storage: StorageProviderDep,
+    llm_provider: FaqGenerationLlmProviderDep,
+    embedding_provider: EmbeddingProviderDep,
+    knowledge_source_id: uuid.UUID,
+) -> None:
+    """
+    Write a just-uploaded file source's FAQ entries after its request has
+    returned, on its own session - the request's is closed by the time this
+    runs, exactly as for the website crawl above.
+
+    Failure is logged and dropped. There is no caller left to receive it, and
+    the source itself already completed: the operator sees a document that
+    worked and a shorter FAQ list than they hoped for, not a broken upload.
+    """
+
+    async with session_factory() as session:
+        try:
+            await knowledge_source_service.generate_faqs_for_file_source(
+                session,
+                storage,
+                llm_provider,
+                embedding_provider,
+                knowledge_source_id=knowledge_source_id,
+            )
+            await session.commit()
+        except Exception:
+            await session.rollback()
+            logger.exception(
+                "FAQ generation failed for knowledge source %s", knowledge_source_id
+            )
 
 
 @router.post(
@@ -357,10 +412,22 @@ async def process_knowledge_source(
     db: DbSession,
     storage: StorageProviderDep,
     embedding_provider: EmbeddingProviderDep,
+    faq_llm_provider: FaqGenerationLlmProviderDep,
+    background_tasks: BackgroundTasks,
+    session_factory: Annotated[
+        async_sessionmaker[AsyncSession], Depends(get_session_factory)
+    ],
 ) -> KnowledgeSourceResponse:
     """
     Retry parsing+chunking+embedding a file-type source's already-stored
     document. Owners and admins only.
+
+    Also the way back to a source whose FAQ generation was cut short - by
+    the provider's daily token allowance running out mid-document, say,
+    which leaves an upload that completed with no entries and nothing the
+    operator can do about it. Generation is scheduled here too, and skips
+    any source that already has generated entries, so retrying a source that
+    worked does not file a second near-identical set.
     """
 
     try:
@@ -383,6 +450,16 @@ async def process_knowledge_source(
         raise _INVALID_SOURCE_TYPE from exc
 
     await db.commit()
+
+    if document.processing_status == knowledge_source_service.COMPLETED_STATUS:
+        background_tasks.add_task(
+            _generate_faqs_in_background,
+            session_factory=session_factory,
+            storage=storage,
+            llm_provider=faq_llm_provider,
+            embedding_provider=embedding_provider,
+            knowledge_source_id=knowledge_source.id,
+        )
 
     return _to_response(knowledge_source, document)
 

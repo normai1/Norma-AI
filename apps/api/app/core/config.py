@@ -201,6 +201,25 @@ class Settings(BaseSettings):
 
     faq_generation_model: str = "openai/gpt-oss-120b"
 
+    # Tokens per minute FAQ generation may spend with the provider. A large
+    # document is many calls and the provider counts them against one
+    # per-minute allowance, so without a budget here the second half of a
+    # 50-page PDF came back 429 and was silently never read - the reported
+    # "only generates 8 FAQs" for a document that should have yielded
+    # dozens.
+    #
+    # Only the starting value: Groq reports its own limit on every response
+    # and generation adopts that instead from the first call onwards. The
+    # default is the limit actually observed for this model
+    # (x-ratelimit-limit-tokens: 8000) rather than a larger guess, so the
+    # very first window of a document does not walk straight into a refusal
+    # before there is anything to adopt.
+    #
+    # Generation then queues itself behind the budget, waiting rather than
+    # failing - affordable because it runs in the background after an upload
+    # and nowhere near a live call.
+    faq_generation_tokens_per_minute: int = 8_000
+
     # ------------------------------------------------------------------
     # Storage
     # ------------------------------------------------------------------

@@ -1,3 +1,4 @@
+import logging
 import uuid
 
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -238,6 +239,82 @@ async def _parse_and_chunk_document(
         )
 
 
+async def generate_faqs_for_file_source(
+    db: AsyncSession,
+    storage: StorageProvider,
+    llm_provider: LLMProvider,
+    embedding_provider: EmbeddingProvider,
+    *,
+    knowledge_source_id: uuid.UUID,
+) -> None:
+    """
+    Write FAQ entries for a file source whose own processing has already
+    finished, re-reading and re-parsing its stored document.
+
+    Split out of the upload request because generation now queues itself
+    behind the provider's tokens-per-minute budget (see
+    services/token_rate_limiter.py). A 50-page PDF is a dozen calls against
+    that budget and takes minutes to work through - fine in the background,
+    where the crawl path has always run, and far too long to hold an HTTP
+    upload open for.
+
+    Re-parsing rather than carrying the text along is deliberate: it keeps
+    this callable from a background task that has only an id, the same shape
+    as the website crawl's, and parsing is seconds against the minutes the
+    budget costs.
+
+    Best-effort throughout. The source's own status is already completed and
+    is never touched here - a missing FAQ list is a missed enhancement, not
+    a broken upload.
+    """
+
+    knowledge_source = await knowledge_source_repo.get_by_id(db, knowledge_source_id)
+
+    if knowledge_source is None:
+        return
+
+    if knowledge_source.type != knowledge_source_repo.FILE_TYPE:
+        return
+
+    # Already done. Generation is not idempotent - it writes new entries
+    # rather than replacing them - so running it twice would file a second
+    # set of near-identical questions alongside the first.
+    #
+    # Checking instead of refusing outright is what makes a source whose
+    # generation was cut short recoverable: the provider's daily allowance
+    # running out mid-document leaves a source that completed with no
+    # entries at all, and before this there was no way back to it short of
+    # deleting the upload and starting again.
+    if await faq_entry_repo.list_generated_from_source(db, knowledge_source.id):
+        return
+
+    document = await knowledge_source_repo.get_document_for_source(
+        db, knowledge_source.id
+    )
+
+    if document is None:
+        return
+
+    try:
+        content = await storage.download(document.storage_key)
+        text = parse_document(content, _extension_of(document.filename))
+    except (DocumentParseError, StorageObjectNotFound):
+        logging.getLogger(__name__).warning(
+            "FAQ generation could not re-read knowledge source %s",
+            knowledge_source_id,
+        )
+
+        return
+
+    await faq_generation_service.generate_faq_entries_for_source(
+        db,
+        llm_provider,
+        embedding_provider,
+        knowledge_source=knowledge_source,
+        text=text,
+    )
+
+
 async def process_knowledge_source(
     db: AsyncSession,
     storage: StorageProvider,
@@ -280,7 +357,7 @@ async def upload_knowledge_source(
     db: AsyncSession,
     storage: StorageProvider,
     embedding_provider: EmbeddingProvider,
-    faq_llm_provider: LLMProvider,
+    faq_llm_provider: LLMProvider | None,
     *,
     organization_id: uuid.UUID,
     workspace_id: uuid.UUID,
