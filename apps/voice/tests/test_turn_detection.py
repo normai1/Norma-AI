@@ -433,3 +433,43 @@ def test_the_vad_thresholds_can_be_tuned_without_a_code_change(
     finally:
         monkeypatch.undo()
         importlib.reload(turn_detection)
+
+
+async def test_heard_speech_reports_whether_vad_has_heard_the_caller() -> None:
+    """
+    Half the answer to "why did this transcript not end the turn?", which
+    was invisible and got the failure misdiagnosed twice: a stream could be
+    delivering committed transcripts with no LLM call behind them and
+    nothing said which condition was unmet.
+    """
+
+    vad = _ScriptedVADAnalyzer([VADState.QUIET, VADState.SPEAKING])
+    detector = TurnDetector(sensitivity=0.5, sample_rate=16_000, vad_analyzer=vad)
+
+    assert detector.heard_speech is False
+
+    await detector.feed_audio(b"silence")
+    assert detector.heard_speech is False
+
+    await detector.feed_audio(b"speech")
+    assert detector.heard_speech is True
+
+
+async def test_heard_speech_clears_once_a_turn_has_ended() -> None:
+    """
+    It answers "since the last turn", not "ever" - otherwise it would read
+    True for the whole call and say nothing about the turn being diagnosed.
+    """
+
+    clock = _FakeClock()
+    vad = _ScriptedVADAnalyzer([VADState.SPEAKING, VADState.QUIET])
+    detector = TurnDetector(
+        sensitivity=0.5, sample_rate=16_000, vad_analyzer=vad, clock=clock
+    )
+
+    await detector.feed_audio(b"speech")
+    await detector.feed_audio(b"silence")
+    detector.feed_transcript("What are your hours?", is_final=True)
+
+    assert detector.turn_ended() is True
+    assert detector.heard_speech is False

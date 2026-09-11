@@ -220,6 +220,18 @@ class TurnDetector:
         return self._ended_turn_text
 
     @property
+    def heard_speech(self) -> bool:
+        """
+        Whether VAD has heard the caller speak since the last turn ended.
+
+        A turn cannot end without this, so when one does not, this is half
+        the answer to why - the other half being whether the transcript was
+        a finished sentence.
+        """
+
+        return self._ever_spoken
+
+    @property
     def is_speaking(self) -> bool:
         """
         Whether the most recently analyzed audio chunk was confirmed

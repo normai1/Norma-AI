@@ -54,7 +54,11 @@ from app.retrieval_client import fetch_retrieved_context
 from app.sentence_chunker import SentenceChunker
 from app.session_resilience import SessionResilienceTracker
 from app.spoken_text import to_spoken_text
-from app.turn_detection import TurnDetector, sensitivity_to_stop_secs
+from app.turn_detection import (
+    TurnDetector,
+    is_semantically_complete,
+    sensitivity_to_stop_secs,
+)
 from app.turn_metrics import TurnMetricsRecorder
 from app.turn_metrics_client import record_turn_metric
 
@@ -818,9 +822,33 @@ class TurnDetectionProcessor(FrameProcessor):
         elif isinstance(frame, OutputTransportMessageUrgentFrame) and _is_transcript_message(
             frame.message
         ):
-            self._turn_detector.feed_transcript(
-                frame.message["text"], is_final=frame.message["is_final"]
-            )
+            text = frame.message["text"]
+            is_final = bool(frame.message["is_final"])
+
+            self._turn_detector.feed_transcript(text, is_final=is_final)
+
+            if is_final:
+                # Why a committed transcript did or did not end the turn.
+                #
+                # This decision has been invisible, and "the assistant is
+                # not replying" has been misdiagnosed twice because of it -
+                # the logs could show a stream delivering committed
+                # transcripts and no LLM call, with nothing to say which of
+                # the three conditions was unmet. Both inputs matter: the
+                # provider commits empty transcripts on its own (see
+                # TurnDetector.feed_transcript), and a turn also needs VAD
+                # to have heard the caller.
+                #
+                # Word count and flags only, never the words (CLAUDE.md
+                # section 27), matching the barge-in logs' precedent.
+                logger.info(
+                    "final transcript: words=%d complete=%s vad_heard_speech=%s "
+                    "turn_ended=%s",
+                    len(text.split()),
+                    is_semantically_complete(text),
+                    self._turn_detector.heard_speech,
+                    self._turn_detector.turn_ended(),
+                )
 
         await self.push_frame(frame, direction)
         await self._maybe_emit_caller_speech_started()
