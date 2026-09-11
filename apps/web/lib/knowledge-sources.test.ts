@@ -10,6 +10,8 @@ import {
   knowledgeSourceTypeLabel,
   type FaqEntry,
   type KnowledgeSource,
+  faqCountLabel,
+  manualFaqSources,
 } from "./knowledge-sources";
 
 function makeSource(overrides: Partial<KnowledgeSource> = {}): KnowledgeSource {
@@ -255,5 +257,43 @@ describe("knowledgeSourceStatusLabel", () => {
     expect(knowledgeSourceStatusLabel(makeSource({ status: "failed" }))).toBe(
       "failed",
     );
+  });
+});
+
+describe("manualFaqSources", () => {
+  it("returns only the containers FAQ entries live in", () => {
+    const sources = [
+      makeSource({ id: "file-1", type: "file" }),
+      makeSource({ id: "faq-1", type: "manual_faq" }),
+      makeSource({ id: "site-1", type: "website" }),
+      makeSource({ id: "faq-2", type: "manual_faq" }),
+    ];
+
+    expect(manualFaqSources(sources).map((source) => source.id)).toEqual([
+      "faq-1",
+      "faq-2",
+    ]);
+  });
+
+  it("returns nothing when an assistant has no FAQs at all", () => {
+    expect(manualFaqSources([makeSource({ type: "file" })])).toEqual([]);
+  });
+});
+
+describe("faqCountLabel", () => {
+  it("shows the total alongside the label", () => {
+    expect(faqCountLabel("Knowledge", [makeFaqEntry(), makeFaqEntry()])).toBe(
+      "Knowledge (2)",
+    );
+  });
+
+  it("shows zero once the list is known to be empty", () => {
+    expect(faqCountLabel("Knowledge", [])).toBe("Knowledge (0)");
+  });
+
+  it("shows no count while the list is still loading", () => {
+    // "(0)" here would read as "this assistant has none" for the moment
+    // before the entries arrive, which is the opposite of the truth.
+    expect(faqCountLabel("Knowledge", null)).toBe("Knowledge");
   });
 });

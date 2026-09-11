@@ -301,3 +301,27 @@ export function knowledgeSourceStatusLabel(source: KnowledgeSource): string {
 
   return source.status;
 }
+
+/**
+ * The containers FAQ entries are stored in for one assistant.
+ *
+ * Entries are filed under a `manual_faq` source - one an operator made, or
+ * the one generation writes into - but nothing about that container is worth
+ * showing: someone either asked a question or a document was read, and
+ * either way what they want is the list. The Knowledge tab reads every
+ * container and merges the result, so this is what it reads from.
+ */
+export function manualFaqSources(sources: KnowledgeSource[]): KnowledgeSource[] {
+  return sources.filter((source) => source.type === "manual_faq");
+}
+
+/**
+ * A tab label carrying how many FAQs the assistant has, e.g. "Knowledge (70)".
+ *
+ * Returns the bare label while the count is still unknown, rather than "(0)",
+ * which would read as "this assistant has none" during the moment before the
+ * entries arrive.
+ */
+export function faqCountLabel(label: string, entries: FaqEntry[] | null): string {
+  return entries === null ? label : `${label} (${entries.length})`;
+}
