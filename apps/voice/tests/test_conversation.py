@@ -1,4 +1,9 @@
-from app.conversation import ConversationState, Message, assemble_system_prompt
+from app.conversation import (
+    MAX_HISTORY_MESSAGES,
+    ConversationState,
+    Message,
+    assemble_system_prompt,
+)
 from app.guardrails import BLOCK_END, BLOCK_START
 
 
@@ -118,3 +123,75 @@ def test_grounded_answer_rules_are_present_for_every_resolution() -> None:
         assert "only if it appears in the reference information" in result
         assert "Never say you have done something" in result
         assert result.startswith(base_prompt)
+
+
+def test_history_is_bounded_so_a_long_call_does_not_cost_more_each_turn() -> None:
+    """
+    Every turn resends the conversation, so unbounded history means the
+    tokens one turn costs climb with the length of the call.
+
+    Measured live against Groq's 8,000-per-minute allowance: three turns
+    succeeded in fifty-two seconds and the fourth came back 429, which the
+    caller hears as "Sorry, I'm having trouble responding right now" after
+    the assistant had been working perfectly.
+    """
+
+    state = ConversationState()
+
+    for i in range(50):
+        state.append_user_turn(f"caller turn {i}")
+        state.append_assistant_turn(f"assistant turn {i}")
+
+    assert len(state.messages) == MAX_HISTORY_MESSAGES
+
+
+def test_the_history_kept_is_the_most_recent() -> None:
+    """
+    Callers refer back a turn or two. Dropping the newest would be the one
+    way to make this worse than sending everything.
+    """
+
+    state = ConversationState(max_messages=4)
+
+    for i in range(5):
+        state.append_user_turn(f"turn {i}")
+
+    assert [message.content for message in state.messages] == [
+        "turn 1",
+        "turn 2",
+        "turn 3",
+        "turn 4",
+    ]
+
+
+def test_a_short_call_is_untouched() -> None:
+    """
+    The bound must be invisible for any ordinary exchange - it exists to stop
+    growth, not to shorten conversations.
+    """
+
+    state = ConversationState()
+
+    state.append_user_turn("What are your hours?")
+    state.append_assistant_turn("Nine to five.")
+    state.append_user_turn("And on Sunday?")
+
+    assert [message.content for message in state.messages] == [
+        "What are your hours?",
+        "Nine to five.",
+        "And on Sunday?",
+    ]
+
+
+def test_the_bound_applies_to_what_is_held_not_only_what_is_sent() -> None:
+    """
+    Trimming only on the way out would leave a long call holding every turn
+    it ever had in memory, for a process that carries many calls at once.
+    """
+
+    state = ConversationState(max_messages=2)
+
+    for i in range(20):
+        state.append_user_turn(f"turn {i}")
+
+    assert len(state._messages) == 2

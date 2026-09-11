@@ -85,20 +85,51 @@ _SPOKEN_STYLE_RULE = (
 _CONTEXT_LABEL = "KNOWLEDGE"
 
 
+# How many messages of history the model is shown - caller and assistant
+# turns counted separately, so this is six exchanges.
+#
+# It used to be all of them, and that is what made a call fail the longer it
+# went on: every turn resent the entire conversation, so the tokens one turn
+# costs grew with the call. Measured live against Groq's 8,000-per-minute
+# allowance, three turns succeeded in fifty-two seconds and the fourth came
+# back 429 - which the caller hears as "Sorry, I'm having trouble responding
+# right now" after the assistant had been working perfectly.
+#
+# Six exchanges is far more than a phone call needs to stay coherent -
+# callers refer back a turn or two, not ten - and it makes the cost of a
+# turn flat instead of climbing. It is also a latency win, since first-token
+# time follows prompt size (CLAUDE.md section 37: avoid unnecessarily large
+# prompts).
+MAX_HISTORY_MESSAGES = 12
+
+
 class ConversationState:
     """
     The caller/assistant turn history for one call, in memory only - no
     persistence (Call/CallLeg/TranscriptTurn rows are item 27, unbuilt).
+
+    Bounded to the most recent MAX_HISTORY_MESSAGES, oldest dropped first.
     """
 
-    def __init__(self) -> None:
+    def __init__(self, *, max_messages: int = MAX_HISTORY_MESSAGES) -> None:
         self._messages: list[Message] = []
+        self._max_messages = max_messages
+
+    def _append(self, message: Message) -> None:
+        self._messages.append(message)
+
+        # Trimmed on the way in rather than on the way out, so the memory a
+        # long call holds is bounded too, not just the prompt it sends.
+        excess = len(self._messages) - self._max_messages
+
+        if excess > 0:
+            del self._messages[:excess]
 
     def append_user_turn(self, text: str) -> None:
-        self._messages.append(Message(role="user", content=text))
+        self._append(Message(role="user", content=text))
 
     def append_assistant_turn(self, text: str) -> None:
-        self._messages.append(Message(role="assistant", content=text))
+        self._append(Message(role="assistant", content=text))
 
     @property
     def messages(self) -> list[Message]:
