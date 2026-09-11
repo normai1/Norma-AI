@@ -133,11 +133,26 @@ JWT_ALGORITHM = os.environ.get("JWT_ALGORITHM", "HS256")
 # was wrong - the log showed "stt stream starting" and then nothing until
 # the caller gave up and hung up.
 #
-# Twelve seconds is chosen to sit far above the worst honest transcription
-# latency measured here (2.7s from end of speech to a committed transcript)
-# and far below a caller's patience. It cannot fire on a quiet caller: the
-# check requires speech-level audio arriving *since* the last transcript.
-STT_DEAF_WATCHDOG_SECONDS = float(os.environ.get("STT_DEAF_WATCHDOG_SECONDS", "12.0"))
+# Five seconds, down from twelve. Twelve was picked for safety before there
+# was any evidence about how often this fires or what it costs; there is now
+# plenty of both.
+#
+# What it costs: the caller's utterance. A stream that has gone quiet never
+# transcribes the audio sent to it, so everything said between the stream
+# dying and the watchdog noticing is lost, and the caller has to say it
+# again. Every second of the threshold is a second of the caller talking to
+# nothing. Measured over three hours of real calls: twelve restarts, each
+# costing whatever was said in the window before it.
+#
+# What it risks: killing a healthy but slow stream. End of speech to
+# committed transcript measures 1.32s median and 1.38s worst over five
+# sequential turns at realtime pacing, so five seconds is nearly four times
+# the observed worst case, and a partial transcript counts as a response -
+# a stream that is working at all keeps resetting the clock.
+#
+# It still cannot fire on a quiet caller: the check requires speech-level
+# audio to have arrived *since* the last transcript.
+STT_DEAF_WATCHDOG_SECONDS = float(os.environ.get("STT_DEAF_WATCHDOG_SECONDS", "5.0"))
 
 # How often that watchdog looks. Cheap - it compares two timestamps.
 STT_DEAF_WATCHDOG_POLL_SECONDS = float(
