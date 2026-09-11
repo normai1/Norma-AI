@@ -1,3 +1,5 @@
+import uuid
+
 from httpx import AsyncClient
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -81,6 +83,22 @@ async def _generated_faq_entries(
     return list(result.all())
 
 
+async def _source_status(db: AsyncSession, assistant_id: str) -> str:
+    """
+    The file source's own status, which now reflects whether its FAQs are
+    written rather than only whether its text was embedded.
+    """
+
+    result = await db.scalars(
+        select(KnowledgeSource).where(
+            KnowledgeSource.assistant_id == uuid.UUID(assistant_id),
+            KnowledgeSource.type == "file",
+        )
+    )
+
+    return list(result)[0].status
+
+
 async def test_uploading_a_file_generates_faq_entries_from_its_content(
     client: AsyncClient,
     db: AsyncSession,
@@ -95,13 +113,21 @@ async def test_uploading_a_file_generates_faq_entries_from_its_content(
     body = await _upload(
         client, organization_id, workspace_id, owner_headers, assistant_id
     )
-    assert body["status"] == "completed"
+
+    # Not "completed": the document is parsed and embedded, but its FAQs are
+    # written by a background job that has not finished. Saying completed
+    # here is what made an operator see a finished 50-page PDF with no FAQs
+    # and no reason to expect any.
+    assert body["status"] == "processing"
 
     entries = await _generated_faq_entries(db, assistant_id)
     questions = {entry.question for entry in entries}
 
     assert questions == {"What are your hours?", "Are you open weekends?"}
     assert faq_llm_provider.calls  # generate() was actually invoked
+
+    # And once they are written, it really is finished.
+    assert await _source_status(db, assistant_id) == "completed"
 
 
 async def test_reprocessing_a_file_does_not_generate_duplicate_entries(
@@ -129,6 +155,10 @@ async def test_reprocessing_a_file_does_not_generate_duplicate_entries(
         f"{_knowledge_sources_url(organization_id, workspace_id)}/{source_id}/process",
         headers=owner_headers,
     )
+    # Completed, because this source had already finished its FAQs:
+    # reprocessing re-reads and re-embeds the document, which is what was
+    # asked for, without spending another document's worth of the provider's
+    # daily allowance rewriting questions that already exist.
     assert process.json()["status"] == "completed"
 
     entries_after_reprocess = await _generated_faq_entries(db, assistant_id)
@@ -152,8 +182,15 @@ async def test_generation_failure_does_not_fail_the_source(
         client, organization_id, workspace_id, owner_headers, assistant_id
     )
 
-    assert body["status"] == "completed"
+    # The upload itself still succeeded - the document is stored, parsed,
+    # chunked and embedded, and a provider outage does not undo any of that.
+    assert body["status"] == "processing"
     assert await _generated_faq_entries(db, assistant_id) == []
+
+    # But it is not finished, and does not claim to be. A window lost to a
+    # provider outage costs its questions, and the source stays completed
+    # because the document itself was read end to end.
+    assert await _source_status(db, assistant_id) == "completed"
 
 
 async def test_malformed_generation_output_produces_no_faq_entries(
@@ -171,7 +208,7 @@ async def test_malformed_generation_output_produces_no_faq_entries(
         client, organization_id, workspace_id, owner_headers, assistant_id
     )
 
-    assert body["status"] == "completed"
+    assert body["status"] == "processing"
     assert await _generated_faq_entries(db, assistant_id) == []
 
 

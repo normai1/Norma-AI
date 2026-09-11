@@ -125,7 +125,12 @@ const KNOWLEDGE_POLL_INTERVAL_MS = 3_000;
 
 // Give up after this long. A background task does not survive an API restart,
 // so a source can sit "pending" with nothing actually working on it.
-const KNOWLEDGE_POLL_TIMEOUT_MS = 5 * 60 * 1_000;
+// Long enough to cover FAQ generation, which is what a source now stays
+// "processing" for. Five minutes was sized against parsing and embedding
+// alone; generation queues behind the provider's per-minute token budget and
+// runs about fourteen minutes for a 50-page PDF, so the badge would have
+// frozen on "processing" two-thirds of the way through and never moved.
+const KNOWLEDGE_POLL_TIMEOUT_MS = 25 * 60 * 1_000;
 
 // Generated FAQs arrive long after the document they came from is finished.
 // Parsing and embedding complete inside the upload; writing the questions is a

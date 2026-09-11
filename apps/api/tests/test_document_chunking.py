@@ -183,7 +183,9 @@ async def test_uploading_a_valid_txt_produces_chunks_reachable_via_the_api(
 
     assert upload.status_code == 201
     body = upload.json()
-    assert body["status"] == "completed"
+    # Not "completed": parsing and embedding are done, but the source is
+    # only finished once its FAQs are written, which is a background job.
+    assert body["status"] == "processing"
     assert body["document"]["processing_status"] == "completed"
     assert body["document"]["processing_error"] is None
 
@@ -252,6 +254,10 @@ async def test_process_reprocesses_without_duplicating_chunks(
     )
 
     assert process.status_code == 200
+    # Completed, because this source had already finished its FAQs:
+    # reprocessing re-reads and re-embeds the document, which is what was
+    # asked for, without spending another document's worth of the provider's
+    # daily allowance rewriting questions that already exist.
     assert process.json()["status"] == "completed"
 
     chunks = await client.get(
@@ -542,7 +548,9 @@ async def test_uploading_a_valid_txt_embeds_every_chunk(
         assistant_id,
         content=b"hello there",
     )
-    assert upload.json()["status"] == "completed"
+    # Not "completed": parsing and embedding are done, but the source is
+    # only finished once its FAQs are written, which is a background job.
+    assert upload.json()["status"] == "processing"
 
     chunks = await _chunks_for_source(db, upload.json()["id"])
 

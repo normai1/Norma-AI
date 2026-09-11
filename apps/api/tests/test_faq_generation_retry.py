@@ -41,7 +41,7 @@ class _FailingStorage:
 
 
 async def _make_source(
-    db: AsyncSession, slug: str
+    db: AsyncSession, slug: str, *, status: str = "failed"
 ) -> tuple[KnowledgeSource, Assistant]:
     organization = Organization(name=slug, slug=slug)
     db.add(organization)
@@ -62,7 +62,10 @@ async def _make_source(
         workspace_id=workspace.id,
         assistant_id=assistant.id,
         type="file",
-        status="completed",
+        # A run cut short by the provider's daily limit leaves exactly this:
+        # a document that parsed and embedded perfectly, and a source that
+        # does not claim to be finished.
+        status=status,
     )
     db.add(source)
     await db.flush()
@@ -89,7 +92,7 @@ async def test_a_source_that_already_has_entries_is_left_alone(
     not file a second set of near-identical questions.
     """
 
-    source, assistant = await _make_source(db, "faq-retry-done")
+    source, assistant = await _make_source(db, "faq-retry-done", status="completed")
 
     container = KnowledgeSource(
         organization_id=source.organization_id,

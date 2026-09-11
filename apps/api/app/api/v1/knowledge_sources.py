@@ -158,6 +158,7 @@ async def upload_knowledge_source(
             owner_user_id=membership.user_id,
             filename=file.filename or "",
             content=content,
+            faq_generation_scheduled=True,
         )
     except WorkspaceNotFound as exc:
         raise _WORKSPACE_NOT_FOUND from exc
@@ -216,6 +217,74 @@ async def _generate_faqs_in_background(
             logger.exception(
                 "FAQ generation failed for knowledge source %s", knowledge_source_id
             )
+
+            # The source is left mid-flight otherwise: it was moved to
+            # "processing" before generation started, and nothing else
+            # will ever move it off. An operator would watch it spin for
+            # good.
+            await _mark_faq_generation_failed(session, knowledge_source_id)
+
+            # The source is left mid-flight otherwise: it was moved to
+            # "processing" before generation started, and nothing else will
+            # ever move it off. An operator would watch it spin for good.
+            await _mark_faq_generation_failed(session, knowledge_source_id)
+
+
+async def _mark_faq_generation_failed(
+    session: AsyncSession, knowledge_source_id: uuid.UUID
+) -> None:
+    """
+    Record that FAQ generation fell over, on its own transaction - the one
+    it happened in has already been rolled back.
+    """
+
+    try:
+        source = await knowledge_source_repo.get_by_id(session, knowledge_source_id)
+
+        if source is None:
+            return
+
+        source.status = knowledge_source_service.FAILED_STATUS
+        source.error_message = (
+            "Something went wrong while writing this document's FAQs. Retry "
+            "to try again."
+        )
+        await session.commit()
+    except Exception:
+        await session.rollback()
+        logger.exception(
+            "could not record the FAQ generation failure for knowledge "
+            "source %s",
+            knowledge_source_id,
+        )
+
+
+async def _mark_faq_generation_failed(
+    session: AsyncSession, knowledge_source_id: uuid.UUID
+) -> None:
+    """
+    Record that FAQ generation fell over, on its own transaction - the one it
+    happened in has already been rolled back.
+    """
+
+    try:
+        source = await knowledge_source_repo.get_by_id(session, knowledge_source_id)
+
+        if source is None:
+            return
+
+        source.status = knowledge_source_service.FAILED_STATUS
+        source.error_message = (
+            "Something went wrong while writing this document's FAQs. Retry "
+            "to try again."
+        )
+        await session.commit()
+    except Exception:
+        await session.rollback()
+        logger.exception(
+            "could not record the FAQ generation failure for knowledge source %s",
+            knowledge_source_id,
+        )
 
 
 @router.post(
@@ -424,11 +493,20 @@ async def process_knowledge_source(
 
     Also the way back to a source whose FAQ generation was cut short - by
     the provider's daily token allowance running out mid-document, say,
-    which leaves an upload that completed with no entries and nothing the
-    operator can do about it. Generation is scheduled here too, and skips
-    any source that already has generated entries, so retrying a source that
-    worked does not file a second near-identical set.
+    which leaves a source that is not finished and, before this, no way to
+    finish it.
+
+    Generation is scheduled only for a source that has not already finished
+    it. Reprocessing one that did re-reads and re-embeds the document, which
+    is what was asked for, without spending a second document's worth of the
+    provider's daily allowance rewriting questions that already exist.
     """
+
+    existing = await knowledge_source_repo.get_by_id(db, knowledge_source_id)
+    needs_faqs = (
+        existing is not None
+        and existing.status != knowledge_source_service.COMPLETED_STATUS
+    )
 
     try:
         (
@@ -441,6 +519,7 @@ async def process_knowledge_source(
             organization_id=membership.organization_id,
             workspace_id=workspace_id,
             knowledge_source_id=knowledge_source_id,
+            faq_generation_scheduled=needs_faqs,
         )
     except WorkspaceNotFound as exc:
         raise _WORKSPACE_NOT_FOUND from exc
@@ -451,7 +530,10 @@ async def process_knowledge_source(
 
     await db.commit()
 
-    if document.processing_status == knowledge_source_service.COMPLETED_STATUS:
+    if (
+        needs_faqs
+        and document.processing_status == knowledge_source_service.COMPLETED_STATUS
+    ):
         background_tasks.add_task(
             _generate_faqs_in_background,
             session_factory=session_factory,

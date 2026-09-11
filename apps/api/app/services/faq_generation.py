@@ -18,6 +18,7 @@ import json
 import logging
 import re
 import uuid
+from dataclasses import dataclass
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -38,6 +39,31 @@ from app.services.token_rate_limiter import (
 logger = logging.getLogger(__name__)
 
 GENERATED_FAQ_SOURCE_NAME = "Generated FAQs"
+
+
+@dataclass(frozen=True)
+class GenerationOutcome:
+    """
+    What one run of generation managed, so the caller can say whether the
+    source is really finished.
+
+    It used to return nothing, and the source was marked completed the
+    moment its text was embedded - before a single question had been
+    written. An operator uploading a 50-page PDF saw "completed" and no
+    FAQs for the fourteen minutes generation actually takes, with no way to
+    tell that from a document that produced none.
+    """
+
+    windows: int
+    windows_covered: int
+    entries: int
+    # Why it stopped short, or None if it read the whole document. Shown to
+    # the operator, so it says what they can do about it.
+    stopped_reason: str | None = None
+
+    @property
+    def covered_everything(self) -> bool:
+        return self.stopped_reason is None
 
 
 class LLMQuotaExhausted(Exception):
@@ -630,6 +656,32 @@ async def _generate_for_window(
     return []
 
 
+def _stopped_reason(exhausted: "LLMQuotaExhausted | None") -> str | None:
+    """
+    What to tell the operator, in their terms rather than the provider's.
+
+    They cannot act on "429" or on a token budget, but they can act on "this
+    will work again tomorrow, or on a larger plan" - and, either way, on
+    knowing that the document was only partly read.
+    """
+
+    if exhausted is None:
+        return None
+
+    if exhausted.exhausted_window == "day":
+        return (
+            "The AI provider's daily limit was reached partway through this "
+            "document, so only part of it has been turned into FAQs. Retry "
+            "once the limit resets."
+        )
+
+    return (
+        "The AI provider stopped accepting requests partway through this "
+        "document, so only part of it has been turned into FAQs. Retry to "
+        "finish it."
+    )
+
+
 async def generate_faq_entries_for_source(
     db: AsyncSession,
     llm_provider: LLMProvider,
@@ -637,22 +689,24 @@ async def generate_faq_entries_for_source(
     *,
     knowledge_source: KnowledgeSource,
     text: str,
-) -> None:
+) -> GenerationOutcome:
     """
-    Best-effort: generates candidate FAQ entries from a just-processed
-    file/website source's text and saves each as a real FaqEntry. Any
-    failure (provider error, malformed output, a single entry's embedding
-    call failing) is logged and swallowed - the calling source's own status
-    is never affected.
+    Generate candidate FAQ entries from a processed file/website source's
+    text and save each as a real FaqEntry, returning what the run managed.
+
+    Individual failures are still swallowed - a provider error on one
+    window, malformed output, a single entry's embedding call failing - so
+    that one bad window costs its own questions and not the rest. What is no
+    longer swallowed is the summary: the caller needs to know whether the
+    whole document was read, because that is the difference between a source
+    that is finished and one that is not.
 
     The source is covered window by window rather than by its opening alone,
     so the number of entries scales with how much the document actually says.
-    Windows run concurrently, bounded, because this still runs inside the
-    upload request.
     """
 
     if not text.strip() or knowledge_source.assistant_id is None:
-        return
+        return GenerationOutcome(windows=0, windows_covered=0, entries=0)
 
     budget = settings.faq_generation_tokens_per_minute
     windows = _windows(text, max_chars=window_chars_for_budget(budget))
@@ -730,7 +784,12 @@ async def generate_faq_entries_for_source(
     )
 
     if not pairs:
-        return
+        return GenerationOutcome(
+            windows=len(windows),
+            windows_covered=len(pair_groups),
+            entries=0,
+            stopped_reason=_stopped_reason(exhausted),
+        )
 
     faq_source = await _get_or_create_generated_faq_source(
         db,
@@ -739,6 +798,8 @@ async def generate_faq_entries_for_source(
         assistant_id=knowledge_source.assistant_id,
         owner_user_id=knowledge_source.owner_user_id,
     )
+
+    saved = 0
 
     for question, answer in pairs:
         try:
@@ -762,3 +823,12 @@ async def generate_faq_entries_for_source(
                 knowledge_source.id,
                 exc_info=True,
             )
+        else:
+            saved += 1
+
+    return GenerationOutcome(
+        windows=len(windows),
+        windows_covered=len(pair_groups),
+        entries=saved,
+        stopped_reason=_stopped_reason(exhausted),
+    )

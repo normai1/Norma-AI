@@ -170,9 +170,10 @@ async def test_upload_succeeds_for_an_owner(
     assert response.status_code == 201
     body = response.json()
     assert body["type"] == "file"
-    # Item 17 wires synchronous parsing/chunking into upload - a plain .txt
-    # upload completes immediately rather than staying 'pending'.
-    assert body["status"] == "completed"
+    # Item 17 wires synchronous parsing/chunking into upload, so this is
+    # past 'pending' immediately - but not 'completed': the source is only
+    # finished once its FAQs are written, which is a background job.
+    assert body["status"] == "processing"
     assert body["error_message"] is None
     assert body["organization_id"] == organization_id
     assert body["workspace_id"] == workspace_id

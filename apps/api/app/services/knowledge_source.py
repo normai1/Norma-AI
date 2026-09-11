@@ -150,6 +150,29 @@ async def create_manual_faq_knowledge_source(
     return knowledge_source
 
 
+def _apply_generation_outcome(
+    knowledge_source: KnowledgeSource,
+    outcome: faq_generation_service.GenerationOutcome,
+) -> None:
+    """
+    Turn a generation run into the status an operator sees.
+
+    Completed means the whole document was read. A run that stopped partway
+    is left failed with the reason on it, because the operator can act on
+    that - retry it - and because calling it completed would be the same lie
+    the old behaviour told, just later in the process.
+    """
+
+    if outcome.covered_everything:
+        knowledge_source.status = COMPLETED_STATUS
+        knowledge_source.error_message = None
+
+        return
+
+    knowledge_source.status = FAILED_STATUS
+    knowledge_source.error_message = outcome.stopped_reason
+
+
 async def _parse_and_chunk_document(
     db: AsyncSession,
     storage: StorageProvider,
@@ -157,6 +180,7 @@ async def _parse_and_chunk_document(
     knowledge_source: KnowledgeSource,
     document: Document,
     faq_llm_provider: LLMProvider | None = None,
+    faq_generation_scheduled: bool = False,
 ) -> None:
     """
     (Re)parse a file-type source's stored document, (re)chunk it, and embed
@@ -223,20 +247,41 @@ async def _parse_and_chunk_document(
         ],
     )
 
-    knowledge_source.status = COMPLETED_STATUS
+    # The document is done: parsed, chunked, embedded. The source is not,
+    # because writing its FAQs is a separate job that has not run yet - so
+    # the two statuses deliberately diverge here.
+    #
+    # They used not to, and a 50-page PDF reported "completed" the moment its
+    # text was embedded, with no FAQs and nothing to say more were coming for
+    # the next fourteen minutes. Indistinguishable, to the operator, from a
+    # document that produced none at all.
+    knowledge_source.status = PROCESSING_STATUS
     knowledge_source.error_message = None
     document.processing_status = COMPLETED_STATUS
     document.processing_error = None
     await db.flush()
 
-    if faq_llm_provider is not None:
-        await faq_generation_service.generate_faq_entries_for_source(
-            db,
-            faq_llm_provider,
-            embedding_provider,
-            knowledge_source=knowledge_source,
-            text=text,
-        )
+    if faq_llm_provider is None:
+        # Left mid-flight on purpose when a caller has arranged for
+        # generation to run after the request returns: marking it completed
+        # here would be wrong twice over - it is not, and the background job
+        # refuses to run on a source that already says it is.
+        if not faq_generation_scheduled:
+            knowledge_source.status = COMPLETED_STATUS
+            await db.flush()
+
+        return
+
+    outcome = await faq_generation_service.generate_faq_entries_for_source(
+        db,
+        faq_llm_provider,
+        embedding_provider,
+        knowledge_source=knowledge_source,
+        text=text,
+    )
+
+    _apply_generation_outcome(knowledge_source, outcome)
+    await db.flush()
 
 
 async def generate_faqs_for_file_source(
@@ -276,17 +321,28 @@ async def generate_faqs_for_file_source(
     if knowledge_source.type != knowledge_source_repo.FILE_TYPE:
         return
 
-    # Already done. Generation is not idempotent - it writes new entries
-    # rather than replacing them - so running it twice would file a second
-    # set of near-identical questions alongside the first.
+    # Already finished. Generation is not idempotent - it writes new entries
+    # rather than replacing them - so running it again on a source that is
+    # done would file a second set of near-identical questions beside the
+    # first.
     #
-    # Checking instead of refusing outright is what makes a source whose
-    # generation was cut short recoverable: the provider's daily allowance
-    # running out mid-document leaves a source that completed with no
-    # entries at all, and before this there was no way back to it short of
-    # deleting the upload and starting again.
-    if await faq_entry_repo.list_generated_from_source(db, knowledge_source.id):
+    # The source's own status is what says "done", not whether entries
+    # exist. A run stopped partway by the provider's daily limit leaves both
+    # a status of failed and a pile of real entries, and keying off the
+    # entries would have made exactly that case unrecoverable - the half a
+    # document nobody could ever finish.
+    if knowledge_source.status == COMPLETED_STATUS:
         return
+
+    # Whatever a previous partial run wrote is replaced, not added to.
+    # Resuming mid-document is not possible - nothing records which windows
+    # were covered - so the honest alternative to duplicates is to start the
+    # document again.
+    await _delete_generated_faq_entries(db, knowledge_source.id)
+
+    knowledge_source.status = PROCESSING_STATUS
+    knowledge_source.error_message = None
+    await db.flush()
 
     document = await knowledge_source_repo.get_document_for_source(
         db, knowledge_source.id
@@ -304,15 +360,24 @@ async def generate_faqs_for_file_source(
             knowledge_source_id,
         )
 
+        knowledge_source.status = FAILED_STATUS
+        knowledge_source.error_message = (
+            "This document could not be read back to write its FAQs."
+        )
+        await db.flush()
+
         return
 
-    await faq_generation_service.generate_faq_entries_for_source(
+    outcome = await faq_generation_service.generate_faq_entries_for_source(
         db,
         llm_provider,
         embedding_provider,
         knowledge_source=knowledge_source,
         text=text,
     )
+
+    _apply_generation_outcome(knowledge_source, outcome)
+    await db.flush()
 
 
 async def process_knowledge_source(
@@ -323,10 +388,15 @@ async def process_knowledge_source(
     organization_id: uuid.UUID,
     workspace_id: uuid.UUID,
     knowledge_source_id: uuid.UUID,
+    faq_generation_scheduled: bool = False,
 ) -> tuple[KnowledgeSource, Document]:
     """
     Retry parsing+chunking+embedding a file-type source's already-stored
     document.
+
+    faq_generation_scheduled says the caller will run FAQ generation after
+    this returns, which is the difference between a source that is finished
+    and one that is only part-way there.
     """
 
     knowledge_source = await resolve_knowledge_source(
@@ -347,7 +417,12 @@ async def process_knowledge_source(
         raise InvalidKnowledgeSourceType
 
     await _parse_and_chunk_document(
-        db, storage, embedding_provider, knowledge_source, document
+        db,
+        storage,
+        embedding_provider,
+        knowledge_source,
+        document,
+        faq_generation_scheduled=faq_generation_scheduled,
     )
 
     return knowledge_source, document
@@ -365,6 +440,7 @@ async def upload_knowledge_source(
     owner_user_id: uuid.UUID,
     filename: str,
     content: bytes,
+    faq_generation_scheduled: bool = False,
 ) -> tuple[KnowledgeSource, Document]:
     """
     Validate, store, and record a new file-type knowledge source. The upload
@@ -417,7 +493,13 @@ async def upload_knowledge_source(
         raise
 
     await _parse_and_chunk_document(
-        db, storage, embedding_provider, knowledge_source, document, faq_llm_provider
+        db,
+        storage,
+        embedding_provider,
+        knowledge_source,
+        document,
+        faq_llm_provider,
+        faq_generation_scheduled=faq_generation_scheduled,
     )
 
     return knowledge_source, document
