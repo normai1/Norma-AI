@@ -268,6 +268,11 @@ class SpeechToTextProcessor(FrameProcessor):
         self._language = language
         self._keywords = keywords
         self._silence_threshold_secs = silence_threshold_secs
+        # Bounded by _queue_audio, not by maxsize: the cap is a duration of
+        # audio rather than a count of frames, and a full queue must drop
+        # the oldest frame rather than block the transport thread feeding
+        # it. Unbounded here would violate CLAUDE.md 5.1 - it is enforced
+        # one call up.
         self._audio_queue: asyncio.Queue[bytes | None] = asyncio.Queue()
         self._stream_task: asyncio.Task | None = None
         # Rolling window for _observe_incoming_audio's level reporting.

@@ -118,15 +118,17 @@ Norma AI/
 ├── infra/                  # Infrastructure/configuration
 ├── scripts/                # Development/utility scripts
 ├── docs/                   # Project documentation
-├── project-plan.md         # Product-level project plan
-├── build-plan.md           # Feature roadmap/progress tracker
+├── blueprint/
+│   ├── project-plan.md     # Product-level project plan
+│   ├── build-plan.md       # Feature roadmap/progress tracker
+│   └── context/            # Overview, coding standards, findings
 ├── CLAUDE.md               # AI coding-agent instructions
 ├── docker-compose.yml
 ├── .env.example
 └── .env                    # Local-only configuration; never commit secrets
 ```
 
-`apps/voice` and `apps/worker` may not exist yet. They are created by build-plan items 20 and 17 respectively. Inspect the repository before changing structure.
+`apps/voice` and `apps/worker` both exist, created by build-plan item 5's Compose environment. `apps/voice` is the real media plane (item 20). `apps/worker` is a placeholder that runs no jobs yet: the background work that exists today - website crawling and FAQ generation - runs as FastAPI background tasks inside `apps/api`, which is why a crawl can saturate the API process and why neither survives an API restart. Moving them is unbuilt.
 
 Shared models, schemas, and provider abstractions used by both `apps/api` and `apps/voice` must live in a shared location, not be duplicated. The media plane and the API must agree on the schema.
 
@@ -216,8 +218,8 @@ Avoid complex business logic inside route functions.
 ## 5.5 Media plane
 
 - Python voice session workers
-- Real-time orchestration framework: **LiveKit Agents** is the primary candidate, **Pipecat** the evaluated alternative. The decision is made in build-plan item 20a and recorded in `build-plan.md`. Until then, do not write code that assumes either.
-- Whichever framework is chosen, every pipeline stage sits behind Norma's own interfaces so the framework remains replaceable.
+- Real-time orchestration framework: **Pipecat** (1.8.1). Decided in build-plan item 20a and in use throughout `apps/voice` - `FrameProcessor`, `PipelineWorker`, `FastAPIWebsocketTransport`, and its Silero VAD analyzer. LiveKit Agents was the evaluated alternative and is not used.
+- Every pipeline stage sits behind Norma's own interfaces so the framework remains replaceable.
 
 Media-plane rules:
 
@@ -345,7 +347,8 @@ Keep provider-specific code behind interfaces. The application must be able to s
 
 ```text
 LLMProvider              — realtime and post-call tiers
-EmbeddingProvider        — OpenAI text-embedding-3-small, Mock
+EmbeddingProvider        — HuggingFace BAAI/bge-base-en-v1.5 (768), OpenAI
+                           text-embedding-3-small (1536), Mock — see 6.4
 SpeechToTextProvider     — ElevenLabs, Mock
 TextToSpeechProvider     — ElevenLabs, Mock
 TelephonyProvider        — Twilio, Telnyx, SIP trunk, Mock
