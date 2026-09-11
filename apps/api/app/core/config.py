@@ -199,6 +199,21 @@ class Settings(BaseSettings):
     # without a real key rather than failing mid-generation.
     groq_api_key: str = ""
 
+    # A second Groq key, on a separate account, for FAQ generation only.
+    #
+    # Rate limits are per account, and this model's are 8,000 tokens a
+    # minute and 200,000 a day. Generation and the live call loop were
+    # sharing them: a document costs about 5,700 tokens a minute to process,
+    # which is most of what a call needs to answer at all, and a couple of
+    # 50-page PDFs spend the day's allowance outright. Callers heard "Sorry,
+    # I'm having trouble responding right now" because somebody had uploaded
+    # a file - which CLAUDE.md section 21 forbids outright: a caller must
+    # never experience a limit event.
+    #
+    # Falls back to groq_api_key when unset, so a single-account setup still
+    # works exactly as before.
+    groq_api_key_secret: str = ""
+
     faq_generation_model: str = "openai/gpt-oss-120b"
 
     # Tokens per minute FAQ generation may spend with the provider. A large

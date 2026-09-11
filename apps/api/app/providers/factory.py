@@ -273,14 +273,20 @@ def get_faq_generation_llm_provider(name: str | None = None) -> LLMProvider:
         return MockLLMProvider()
 
     if provider_name == "groq":
-        if not settings.groq_api_key:
+        # The separate-account key when there is one, so that processing a
+        # document cannot spend the allowance a live call is answering
+        # from - see Settings.groq_api_key_secret. One key still works; it
+        # just shares the limits, as it always did.
+        api_key = settings.groq_api_key_secret or settings.groq_api_key
+
+        if not api_key:
             raise MissingGroqApiKeyError(
-                "GROQ_API_KEY is not set. The 'groq' FAQ generation "
-                "provider requires it.",
+                "Neither GROQ_API_KEY_SECRET nor GROQ_API_KEY is set. The "
+                "'groq' FAQ generation provider requires one of them.",
             )
 
         return GroqLLMProvider(
-            api_key=settings.groq_api_key,
+            api_key=api_key,
             model=settings.faq_generation_model,
         )
 
