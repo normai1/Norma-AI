@@ -28,7 +28,7 @@ class AssistantUpdate(BaseModel):
     creativity: float | None = Field(default=None, ge=0.0, le=1.0)
     ambient_sound: str | None = Field(default=None, max_length=255)
     ambient_sound_volume: float | None = Field(default=None, ge=0.0, le=1.0)
-    # Configuration-only until real call handling (build-plan items 24-28)
+    # Configuration-only until real call handling (build-plan items 26-30)
     # exists to enforce them.
     max_call_duration_seconds: int | None = Field(default=None, ge=30, le=3600)
     max_silence_timeout_seconds: int | None = Field(default=None, ge=5, le=300)

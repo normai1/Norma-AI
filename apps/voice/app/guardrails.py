@@ -92,7 +92,7 @@ _MONEY = re.compile(
 _CLOCK = re.compile(r"\b\d{1,2}(?::\d{2})?\s?(?:am|pm)\b|\b\d{1,2}:\d{2}\b", re.IGNORECASE)
 
 # Claims that something has already happened. Always unsupported: no tool
-# exists for the assistant to have done any of it (items 35+), so the action
+# exists for the assistant to have done any of it (items 36+), so the action
 # cannot have taken place. Deliberately past tense and completed only -
 # "I can book that", "I'll have someone call you back" and "would you like me
 # to book it?" are all fine and must stay fine.

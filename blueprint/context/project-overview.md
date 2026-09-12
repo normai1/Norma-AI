@@ -120,7 +120,7 @@ this one.
     - 20a framework selection + media transport (LiveKit Agents vs Pipecat, decided here), 20b streaming STT w/ glossary biasing, 20c turn detection (VAD + semantic, operator-configurable sensitivity), 20d LLM turn loop, 20e streaming TTS + barge-in, 20f latency instrumentation (p95 budget enforced in CI), 20g session resilience (provider timeouts/retries/failover).
 21. **In-browser test call** - talk to an assistant with no phone number required, over WebRTC or WebSocket audio.
 22. **Voice pipeline test harness** - fixture-audio conversation replay against the full pipeline with mock providers, plus barge-in and turn-detection behavioral tests.
-23. **Assistant editor redesign: General/Knowledge/Custom Prompt/Technical tabs** - reorganizes the assistant editor into four tabs; Knowledge adds full knowledge-source management and closes the assistant-scoping gap retrieval (item 19) has deferred; Custom Prompt originally added full prompt-template management (picker, then relocated CRUD - list, create, edit, version history, publish/rollback, diff - replacing the standalone /prompt-templates page), since simplified by 12d to a single free-text prompt field, nothing else; Technical relocates speech rate/sensitivity/creativity and Glossary (renamed Technical Terms), and adds configuration-only call-duration/silence-timeout limits, a recording toggle, auto-delete-on-declined-consent, and ambient-sound presets with volume - pending enforcement until telephony (items 25-29) exists.
+23. **Assistant editor redesign: General/Knowledge/Custom Prompt/Technical tabs** - reorganizes the assistant editor into four tabs; Knowledge adds full knowledge-source management and closes the assistant-scoping gap retrieval (item 19) has deferred; Custom Prompt originally added full prompt-template management (picker, then relocated CRUD - list, create, edit, version history, publish/rollback, diff - replacing the standalone /prompt-templates page), since simplified by 12d to a single free-text prompt field, nothing else; Technical relocates speech rate/sensitivity/creativity and Glossary (renamed Technical Terms), and adds configuration-only call-duration/silence-timeout limits, a recording toggle, auto-delete-on-declined-consent, and ambient-sound presets with volume - pending enforcement until telephony (items 26-30) exists.
 24. **AI guardrails** - prompt-injection resistance for retrieved/caller-supplied text, topic and action allow-lists, refusal to state ungrounded prices/hours/policy, PII rules, output validation before spoken commitments.
 25. **Telephony provider abstraction** - `TelephonyProvider` interface, verified webhook signature handling, a mock provider simulating the full call lifecycle.
 26. **Phone number provisioning** - search/claim numbers by country and area, surface regulatory document requirements, assign numbers to assistants, release numbers.
@@ -298,18 +298,18 @@ else"). `status` stays a separate lifecycle marker from the configuration itself
   immediately, even before any configuration
 - `ambient_sound` (text, nullable), `ambient_sound_volume` (numeric, nullable)
 - `max_call_duration_seconds`, `max_silence_timeout_seconds` (int, nullable) - configuration-only
-  until real call handling (items 25-29) enforces them
+  until real call handling (items 26-30) enforces them
 - `record_calls`, `auto_delete_on_declined_consent` (bool, NOT NULL, default false)
 - `business_hours_behavior` (JSONB)
 - `fallback_behavior` (JSONB) - what to do when the assistant cannot resolve the request
 - `enabled_skills` (JSONB) - the tool-permission set feature 34 enforces
 
-> **No more immutable snapshot.** Once real call handling exists (items 25-29), `Call` must record
+> **No more immutable snapshot.** Once real call handling exists (items 26-30), `Call` must record
 > which assistant answered it, and the configuration values actually in effect at that moment
 > (e.g. by copying the fields it used onto the call record) - there is no longer an
 > `AssistantVersion` row to point at.
 
-### Telephony (items 25-26, 34)
+### Telephony (items 26-27, 35)
 
 #### PhoneNumber
 
@@ -454,7 +454,7 @@ else"). `status` stays a separate lifecycle marker from the configuration itself
 - `question_text` (text), `occurrence_count` (int)
 - `status` (text), `proposed_answer` (text, nullable), `approving_user_id` (UUID, nullable)
 
-### Contacts & appointments (items 39-41)
+### Contacts & appointments (items 40-42)
 
 #### Contact
 
@@ -480,7 +480,7 @@ else"). `status` stays a separate lifecycle marker from the configuration itself
 - `credentials_ref` (text), `calendar_id` (text)
 - `availability_rules` (JSONB)
 
-### Campaigns (items 46-48)
+### Campaigns (items 47-49)
 
 #### Campaign
 
@@ -502,7 +502,7 @@ else"). `status` stays a separate lifecycle marker from the configuration itself
 - `phone_number` (text), `reason` (text)
 - `added_by_user_id` (UUID, FK -> User)
 
-### Integrations & API (items 42-45)
+### Integrations & API (items 43-46)
 
 #### Integration
 
@@ -551,7 +551,7 @@ else"). `status` stays a separate lifecycle marker from the configuration itself
 - `organization_id`, `period`
 - `package` (text), `purchased_at` (timestamptz)
 
-### Audit & observability (items 50-52)
+### Audit & observability (items 25, 51-52)
 
 #### Activity
 
@@ -773,13 +773,13 @@ Navigation items appear only for features that are actually built.
 | `/assistants`, `/assistants/[id]` | Assistant list and the split-view editor (features 11-13) |
 | `/assistants/[id]/test-call` | In-browser test call (item 21) |
 | `/knowledge` | Sources, upload, crawl status, unanswered-questions inbox (items 14-19) |
-| `/contacts`, `/contacts/[id]` | Contact list and detail with call history (item 39) |
-| `/appointments` | Appointment list, calendar connections (items 40-41) |
-| `/campaigns`, `/campaigns/[id]` | Outbound campaign management (items 46-48) |
-| `/calls`, `/calls/[id]` | Call feed and the transcript/audio/tool-call detail view (items 28-30) |
-| `/numbers` | Provisioning flow, assignment to assistants (item 26) |
-| `/integrations` | Connected integrations, API keys (items 44-45) |
-| `/analytics` | Overview cards, trend charts, top intents (item 49) |
+| `/contacts`, `/contacts/[id]` | Contact list and detail with call history (item 40) |
+| `/appointments` | Appointment list, calendar connections (items 41-42) |
+| `/campaigns`, `/campaigns/[id]` | Outbound campaign management (items 47-49) |
+| `/calls`, `/calls/[id]` | Call feed and the transcript/audio/tool-call detail view (items 29-31) |
+| `/numbers` | Provisioning flow, assignment to assistants (item 27) |
+| `/integrations` | Connected integrations, API keys (items 45-46) |
+| `/analytics` | Overview cards, trend charts, top intents (item 50) |
 
 ### Onboarding
 

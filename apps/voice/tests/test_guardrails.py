@@ -119,7 +119,7 @@ def test_with_no_knowledge_at_all_any_amount_is_unsupported() -> None:
 
 def test_claiming_a_completed_action_is_always_flagged() -> None:
     """
-    No tool exists for the assistant to have done any of this (items 35+), so
+    No tool exists for the assistant to have done any of this (items 36+), so
     the claim cannot be true however the knowledge reads.
     """
 

@@ -6,7 +6,7 @@ are tuned for the stricter one:
 
 - **Logs**, right now, through `norma_shared.logging_setup` - here
   over-redaction costs nothing.
-- **Stored transcript text**, once item 28 creates somewhere to store it -
+- **Stored transcript text**, once item 29 creates somewhere to store it -
   here over-redaction is a defect. An operator reading a call back needs the
   price the assistant quoted, the time it booked, and the house number it
   confirmed. A rule that eats those has broken the call-detail screen that

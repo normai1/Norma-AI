@@ -2,7 +2,7 @@
 Item 24d step 1: the shared redaction rules.
 
 The negative cases carry as much weight as the positive ones. These rules will
-run over stored transcript text (item 28), where redacting a quoted price, a
+run over stored transcript text (item 29), where redacting a quoted price, a
 booked time, or a date silently destroys the record an operator relies on -
 a worse outcome than the leak the rules exist to prevent, because it is
 invisible.

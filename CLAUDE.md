@@ -496,7 +496,7 @@ embedding configuration
 
 # 12. Assistant configuration and prompts
 
-The **Assistant** is the central configurable object - a single mutable row. Editing an assistant updates it in place; there is no separate immutable-snapshot/version history. This is a deliberate product simplification (build-plan item 11f) that fully removed the earlier `AssistantVersion` system (11a-e's own versioning/diff/rollback machinery): "just edit the assistant, nothing else." A call records which assistant answered it, not which version - once real call handling exists (items 25-29), it must record the configuration values actually in effect at call time (e.g. by copying the fields it used onto the call record), since there is no longer an immutable snapshot to point at.
+The **Assistant** is the central configurable object - a single mutable row. Editing an assistant updates it in place; there is no separate immutable-snapshot/version history. This is a deliberate product simplification (build-plan item 11f) that fully removed the earlier `AssistantVersion` system (11a-e's own versioning/diff/rollback machinery): "just edit the assistant, nothing else." A call records which assistant answered it, not which version - once real call handling exists (items 26-30), it must record the configuration values actually in effect at call time (e.g. by copying the fields it used onto the call record), since there is no longer an immutable snapshot to point at.
 
 `status` (draft/published/archived) still exists as a separate lifecycle marker from the configuration itself: `POST .../publish` is a pure status flip ("this configuration is live"), not a pointer to a chosen snapshot, and archiving is still the reversible, non-destructive alternative to `DELETE`.
 
@@ -923,7 +923,7 @@ Two mechanisms enforce this rather than leaving it to review (build-plan item 24
 - `norma_shared.logging_setup` installs a redacting formatter on both planes, scrubbing credentials and PII patterns from every record - message, interpolated arguments, and traceback text - including lines this project does not write itself, such as uvicorn's access log. It is a **backstop**: it matches patterns and cannot recognise a plain sentence of speech, so turn-path code still logs word counts and identifiers, never utterances.
 - `apps/voice/tests/test_transcript_never_logged.py` runs a real turn and fails the build if any of the conversation reaches the logs.
 
-`norma_shared.pii.redact_pii` is the project's single redaction entry point. `TranscriptTurn` persistence (item 28) must write through it rather than inventing its own rules. Its patterns are tuned for stored transcripts, where over-redaction is a defect - a rule that eats a quoted price, a booked time, or a date breaks the call-detail screen.
+`norma_shared.pii.redact_pii` is the project's single redaction entry point. `TranscriptTurn` persistence (item 29) must write through it rather than inventing its own rules. Its patterns are tuned for stored transcripts, where over-redaction is a defect - a rule that eats a quoted price, a booked time, or a date breaks the call-detail screen.
 
 `LOG_LEVEL` raises application logging only. The media plane deliberately does not follow it below DEBUG: pipecat logs whole frames, callers' words included, at TRACE.
 

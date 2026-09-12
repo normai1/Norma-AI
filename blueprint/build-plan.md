@@ -4,6 +4,8 @@
 >
 > **Renumbering note.** This plan was rewritten when the product direction changed to an AI phone assistant platform. Completed items 1–3 carried over unchanged because authentication, organizations, and RBAC are identical requirements under the new direction. Everything from item 4 onward was re-planned and renumbered. Items 4–47 of the previous roadmap were never started and their numbers have been reused.
 >
+> **Third renumbering note.** Voice and retrieval observability moved from 50 to 25, and everything that was 25-49 shifted up by one (old 25→26, ..., old 49→50). Nothing from 51 onward moved, and no completed item changed number - the whole shifted range was unstarted. The reason: a crawled site produced answers that mixed unrelated chunks, invented details and contradicted the source, and none of it was diagnosable while retrieval was a black box, so seeing retrieval had to come before building telephony on top of it. Live cross-references in `CLAUDE.md`, `blueprint/context/`, and code comments were updated with it. Archives under `blueprint/history/` and Alembic migrations were not: both are point-in-time records of what was true when they were written. Two comments in `apps/voice` that cited post-call summaries as item 36 were pointing one item short of the post-call item even before this shift, and now name item 38 rather than carrying the mistake forward.
+
 > **Second renumbering note.** Item 23 (assistant editor redesign) was inserted after item 22 and every item from the old 23 onward shifted up by one (old 23→24, ..., old 84→85), none of which were started or archived at the time. Historical feature archives under `blueprint/history/` still reference the numbering as it stood when each was written and were deliberately left unchanged - they are point-in-time records, not living documents.
 
 ## MVP
@@ -87,9 +89,9 @@
   - [x] 21a. **Voice session authorization** - a short-lived, workspace-checked ticket the browser exchanges for `/media/session` access, closing the current gap where the WebSocket route trusts a bare client-supplied assistant_id with no authentication at all
   - [x] 21b. **Browser test-call UI** - microphone capture and playback wired to `/media/session` (mic permission, connection state, speaking/listening indicator, client-side barge-in), on the new `/assistants/[id]/test-call` page
 - [x] 22. **Voice pipeline test harness** - fixture-audio conversation replay against the full pipeline with mock providers, plus barge-in and turn-detection behavioural tests
-- [x] 23. **Assistant editor redesign: General/Knowledge/Custom Prompt/Technical tabs** - reorganizes the assistant editor into four tabs; Knowledge adds full knowledge-source management and closes the assistant-scoping gap retrieval (item 19) has deferred; Custom Prompt adds full prompt-template management (picker, then relocated CRUD); Technical relocates speech rate/sensitivity/creativity and Glossary (renamed Technical Terms), and adds configuration-only call-duration/silence-timeout limits, a recording toggle, auto-delete-on-declined-consent, and ambient-sound presets with volume - pending enforcement until telephony (items 25-29) exists
+- [x] 23. **Assistant editor redesign: General/Knowledge/Custom Prompt/Technical tabs** - reorganizes the assistant editor into four tabs; Knowledge adds full knowledge-source management and closes the assistant-scoping gap retrieval (item 19) has deferred; Custom Prompt adds full prompt-template management (picker, then relocated CRUD); Technical relocates speech rate/sensitivity/creativity and Glossary (renamed Technical Terms), and adds configuration-only call-duration/silence-timeout limits, a recording toggle, auto-delete-on-declined-consent, and ambient-sound presets with volume - pending enforcement until telephony (items 26-30) exists
   - [x] 23a. **Tab shell and field relocation** - convert the single-page editor into four tabs; General keeps name/voice/language/greeting/persona, Technical gets speech rate/sensitivity/creativity plus Glossary (renamed Technical Terms), Knowledge and Custom Prompt start as placeholder tabs
-  - [x] 23b. **Technical tab: call and recording settings** - max call duration, max silence timeout, a recording toggle, auto-delete-on-declined-consent, and ambient-sound presets (office/conference room) with volume - configuration-only until telephony (items 25-29) exists
+  - [x] 23b. **Technical tab: call and recording settings** - max call duration, max silence timeout, a recording toggle, auto-delete-on-declined-consent, and ambient-sound presets (office/conference room) with volume - configuration-only until telephony (items 26-30) exists
   - [x] 23c. **Custom Prompt tab** - prompt-template picker using the existing prompt_template_id/prompt_version fields
   - [x] 23d. **Knowledge tab backend** - assistant_id scoping on KnowledgeSource/Chunk and a retrieval filter update, closing the gap item 19 deferred
   - [x] 23e. **Knowledge tab UI** - file upload, website ingestion, manual FAQ, and processing status management inside the assistant editor
@@ -98,48 +100,51 @@
 - [x] 24. **AI guardrails** - prompt-injection resistance for retrieved and caller-supplied text, topic and action allow-lists, refusal to state ungrounded prices/hours/policy, PII rules in transcripts and logs, and output validation before spoken commitments
   - [x] 24a. **Untrusted-input framing** - contain retrieved knowledge and caller speech so neither can act as instructions: explicit delimiting, sanitisation, a standing rule the caller cannot override, and injection-resistance tests
   - [x] 24b. **Answer grounding and output validation** - refuse prices, hours, availability and policy that are not present in knowledge, and validate a reply before it is spoken so no invented commitment reaches the caller
-  - [x] 24c. **Topic and action allow-lists** - per-assistant allowed topics and actions, enforced independently of model output, with the configuration surface and editor UI (built as per-assistant *blocked* topics, checked on the caller's words before the model is called; the action half is deferred to item 35, which owns tool permissions - no tools exist yet for an action list to govern)
-  - [x] 24d. **PII in transcripts and logs** - redaction rules for stored transcript text, and enforcement that transcript content never reaches application logs (the log half is enforced now; `norma_shared.pii.redact_pii` is the shared rule set item 28 applies when it creates TranscriptTurn, since nothing stores transcript text yet)
+  - [x] 24c. **Topic and action allow-lists** - per-assistant allowed topics and actions, enforced independently of model output, with the configuration surface and editor UI (built as per-assistant *blocked* topics, checked on the caller's words before the model is called; the action half is deferred to item 36, which owns tool permissions - no tools exist yet for an action list to govern)
+  - [x] 24d. **PII in transcripts and logs** - redaction rules for stored transcript text, and enforcement that transcript content never reaches application logs (the log half is enforced now; `norma_shared.pii.redact_pii` is the shared rule set item 29 applies when it creates TranscriptTurn, since nothing stores transcript text yet)
+
+### Observability
+
+- [ ] 25. **Voice and retrieval observability** - structured logging with call and turn correlation IDs, per-provider latency and error telemetry, token and cost capture per call. **Renumbered from 50 to 25 and pulled ahead of the telephony block (now items 26-35)**: a crawled site produced answers that mixed unrelated chunks, invented details, and contradicted the source, and none of that is diagnosable while retrieval is a black box that returns a string.
+  - [x] 25a. **Retrieval observability** - make every turn's retrieval inspectable: which chunks came back, their similarity scores, which knowledge source each came from, and which of them actually reached the model after the context builder's character budget. Scores and identifiers only, never chunk text (CLAUDE.md section 27). This is the half needed now, because the open question is whether wrong answers come from wrong retrieval or from the model misusing correct retrieval, and today there is no way to tell them apart
+  - [ ] 25b. **Voice and provider telemetry** - call and turn correlation IDs on every log line, per-provider latency and error telemetry, token and cost capture per call
 
 ### Telephony
 
-- [ ] 25. **Telephony provider abstraction** - `TelephonyProvider` interface, verified webhook signature handling, and a mock provider that simulates the full call lifecycle without real audio
-- [ ] 26. **Phone number provisioning** - search and claim numbers by country and area, surface regulatory document requirements, assign numbers to assistants, and release numbers
-- [ ] 27. **Inbound call handling** - answer an inbound call on a provisioned number, route it to the correct assistant, and hold a complete conversation. There is no assistant version to route to since 11f collapsed them into one mutable row, so this must copy the configuration values actually in effect onto the call record instead (CLAUDE.md section 12)
-- [ ] 28. **Call records and transcripts** - Call, CallLeg, and TranscriptTurn persistence with direction, duration, billable seconds, outcome, and interruption marking
-- [ ] 29. **Call recording** - optional recording to S3, configurable retention, automatic deletion, and signed short-lived playback URLs
-- [ ] 30. **Call detail UI** - transcript synchronized to audio playback, tool-call log, knowledge sources used per answer, and latency detail behind a disclosure
-- [ ] 31. **Live call forwarding** - transfer to a human on request, on failure, or outside business hours, with prioritized targets and international forwarding
-- [ ] 32. **DTMF and IVR navigation** - send keypress tones so the assistant can traverse external phone menus
-- [ ] 33. **Concurrency and call admission control** - per-plan concurrent-call limits enforced at admission, with defined overflow behaviour rather than queueing indefinitely
-- [ ] 34. **Bring-your-own SIP trunk** - connect an existing PBX or carrier for inbound and outbound, with credential storage and allowed-IP configuration
+- [ ] 26. **Telephony provider abstraction** - `TelephonyProvider` interface, verified webhook signature handling, and a mock provider that simulates the full call lifecycle without real audio
+- [ ] 27. **Phone number provisioning** - search and claim numbers by country and area, surface regulatory document requirements, assign numbers to assistants, and release numbers
+- [ ] 28. **Inbound call handling** - answer an inbound call on a provisioned number, route it to the correct assistant, and hold a complete conversation. There is no assistant version to route to since 11f collapsed them into one mutable row, so this must copy the configuration values actually in effect onto the call record instead (CLAUDE.md section 12)
+- [ ] 29. **Call records and transcripts** - Call, CallLeg, and TranscriptTurn persistence with direction, duration, billable seconds, outcome, and interruption marking
+- [ ] 30. **Call recording** - optional recording to S3, configurable retention, automatic deletion, and signed short-lived playback URLs
+- [ ] 31. **Call detail UI** - transcript synchronized to audio playback, tool-call log, knowledge sources used per answer, and latency detail behind a disclosure
+- [ ] 32. **Live call forwarding** - transfer to a human on request, on failure, or outside business hours, with prioritized targets and international forwarding
+- [ ] 33. **DTMF and IVR navigation** - send keypress tones so the assistant can traverse external phone menus
+- [ ] 34. **Concurrency and call admission control** - per-plan concurrent-call limits enforced at admission, with defined overflow behaviour rather than queueing indefinitely
+- [ ] 35. **Bring-your-own SIP trunk** - connect an existing PBX or carrier for inbound and outbound, with credential storage and allowed-IP configuration
 
 ### In-call skills and post-call handling
 
-- [ ] 35. **Tool permission framework** - declarative per-assistant skill enablement, enforced independently of model output, with ToolInvocation logging
-- [ ] 36. **Variable extraction** - operator-defined field schema, structured extraction from the conversation, and confidence reporting
-- [ ] 37. **Post-call processing** - generated summary and disposition using the post-call model, assembled from the transcript and extracted fields
-- [ ] 38. **Post-call delivery** - email and SMS delivery of transcript, summary, and fields, behind swappable messaging providers
-- [ ] 39. **Contacts** - workspace-scoped contact records, automatic creation and phone-number matching from calls, per-contact call history, custom fields, import/export, and do-not-call flags
-- [ ] 40. **Calendar connections** - Google Calendar and Microsoft 365 OAuth connections, calendar selection, and availability rules
-- [ ] 41. **In-call scheduler** - live availability check, appointment booking, rescheduling and cancellation during the call, and confirmation by SMS or email
-- [ ] 42. **Webhooks** - outbound webhooks for call events with signing and retry, plus an inbound webhook for triggering calls and updating assistant data
-- [ ] 43. **Custom API actions** - operator-configured authenticated HTTP requests executed during or after a call, with request/response schemas and timeout handling
-- [ ] 44. **Integration framework** - credential storage, per-integration scopes, connection status, and the first native CRM integration
-- [ ] 45. **Public API and API keys** - versioned REST API surface with hashed, scoped, revocable organization API keys
+- [ ] 36. **Tool permission framework** - declarative per-assistant skill enablement, enforced independently of model output, with ToolInvocation logging
+- [ ] 37. **Variable extraction** - operator-defined field schema, structured extraction from the conversation, and confidence reporting
+- [ ] 38. **Post-call processing** - generated summary and disposition using the post-call model, assembled from the transcript and extracted fields
+- [ ] 39. **Post-call delivery** - email and SMS delivery of transcript, summary, and fields, behind swappable messaging providers
+- [ ] 40. **Contacts** - workspace-scoped contact records, automatic creation and phone-number matching from calls, per-contact call history, custom fields, import/export, and do-not-call flags
+- [ ] 41. **Calendar connections** - Google Calendar and Microsoft 365 OAuth connections, calendar selection, and availability rules
+- [ ] 42. **In-call scheduler** - live availability check, appointment booking, rescheduling and cancellation during the call, and confirmation by SMS or email
+- [ ] 43. **Webhooks** - outbound webhooks for call events with signing and retry, plus an inbound webhook for triggering calls and updating assistant data
+- [ ] 44. **Custom API actions** - operator-configured authenticated HTTP requests executed during or after a call, with request/response schemas and timeout handling
+- [ ] 45. **Integration framework** - credential storage, per-integration scopes, connection status, and the first native CRM integration
+- [ ] 46. **Public API and API keys** - versioned REST API surface with hashed, scoped, revocable organization API keys
 
 ### Outbound
 
-- [ ] 46. **Outbound calls** - place a single outbound call from an assistant, with caller-ID configuration and per-destination gating
-- [ ] 47. **Outbound campaigns** - contact lists, calling windows with timezone awareness, retry policy, per-contact outcome tracking, suppression lists, and per-organization dialling concurrency
-- [ ] 48. **Outbound abuse controls** - spend caps, destination allow-lists, consent gating, and rate limits on call-triggering endpoints
+- [ ] 47. **Outbound calls** - place a single outbound call from an assistant, with caller-ID configuration and per-destination gating
+- [ ] 48. **Outbound campaigns** - contact lists, calling windows with timezone awareness, retry policy, per-contact outcome tracking, suppression lists, and per-organization dialling concurrency
+- [ ] 49. **Outbound abuse controls** - spend caps, destination allow-lists, consent gating, and rate limits on call-triggering endpoints
 
 ### Trust, insight, and operations
 
-- [ ] 49. **Call analytics** - calls handled and missed, minutes against allowance, resolution and transfer rates, average handle time, appointment conversion, top intents, and latency percentiles
-- [ ] 50. **Voice and retrieval observability** - structured logging with call and turn correlation IDs, per-provider latency and error telemetry, token and cost capture per call. **Pulled forward ahead of the telephony block (items 25-34) and being built next**, keeping its number: a crawled site produced answers that mixed unrelated chunks, invented details, and contradicted the source, and none of that is diagnosable while retrieval is a black box that returns a string. Numbers are not reused or swapped (see "Continuing after the initial build"); the order of work changed, not the plan's numbering
-  - [ ] 50a. **Retrieval observability** - make every turn's retrieval inspectable: which chunks came back, their similarity scores, which knowledge source each came from, and which of them actually reached the model after the context builder's character budget. Scores and identifiers only, never chunk text (CLAUDE.md section 27). This is the half needed now, because the open question is whether wrong answers come from wrong retrieval or from the model misusing correct retrieval, and today there is no way to tell them apart
-  - [ ] 50b. **Voice and provider telemetry** - call and turn correlation IDs on every log line, per-provider latency and error telemetry, token and cost capture per call
+- [ ] 50. **Call analytics** - calls handled and missed, minutes against allowance, resolution and transfer rates, average handle time, appointment conversion, top intents, and latency percentiles
 - [ ] 51. **Activity timeline** - user-facing business history (call handled, appointment booked, contact created, assistant published)
 - [ ] 52. **Audit logging** - security and administrative events including logins, role changes, number provisioning, recording deletion, integration connection, and API key issuance
 - [ ] 53. **Global search** - tenant-scoped typed search across assistants, calls, transcripts, contacts, appointments, numbers, and knowledge sources

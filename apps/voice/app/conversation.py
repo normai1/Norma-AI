@@ -106,7 +106,7 @@ MAX_HISTORY_MESSAGES = 12
 class ConversationState:
     """
     The caller/assistant turn history for one call, in memory only - no
-    persistence (Call/CallLeg/TranscriptTurn rows are item 27, unbuilt).
+    persistence (Call/CallLeg/TranscriptTurn rows are item 28, unbuilt).
 
     Bounded to the most recent MAX_HISTORY_MESSAGES, oldest dropped first.
     """

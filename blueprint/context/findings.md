@@ -19,7 +19,7 @@ processing the cancel. No failure has been observed here - three consecutive
 concurrency runs and three full-suite runs were green, and running the concurrency
 tests ahead of the session tests changed nothing - so this is a lead rather than a
 defect. It is recorded because a slower or more contended CI runner (build-plan
-item 28) is exactly where it would first appear.
+item 29) is exactly where it would first appear.
 **Suggested fix:** If it ever flakes, give these two tests their own engine so a
 possibly-tainted connection is disposed with it rather than pooled. Do not change
 anything now; there is no failure to chase.

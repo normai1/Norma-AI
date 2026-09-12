@@ -131,7 +131,7 @@ async def media_session(
     await websocket.accept()
 
     # Session-scoped placeholder call identity for item 20f's TurnMetric
-    # rows - Call (build-plan item 27) doesn't exist yet.
+    # rows - Call (build-plan item 28) doesn't exist yet.
     call_id = uuid.uuid4()
 
     # Which build of the browser page this session is running (see
