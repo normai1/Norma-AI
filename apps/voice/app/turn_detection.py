@@ -38,10 +38,28 @@ _MAX_STOP_SECS = 1.5
 #
 # Raising them trades one failure for another, which is why both are
 # tunable: too low and the assistant answers the room, too high and it
-# ignores a softly-spoken caller. These are starting values for a normal
-# handset or headset, not tuned against real call recordings.
+# ignores a softly-spoken caller.
+#
+# **min_volume is not a fraction of full scale**, and reading it as one is
+# how the default came to be set too high. Pipecat measures BS.1770
+# integrated loudness normalized from -110..-10 LUFS, so the peak level each
+# value demands has to be measured rather than guessed. Through pipecat's own
+# calculate_audio_volume, with speech-shaped noise at 16kHz:
+#
+#     0.8 -> peak 4235/32768 (-17.8 dBFS), close-talking loud
+#     0.7 -> peak 1341       (-27.8 dBFS)
+#     0.6 -> peak  425       (-37.7 dBFS), pipecat's own default
+#
+# Normal conversational speech on a laptop microphone peaks around -30 to
+# -20 dBFS, so 0.7 sits right at the edge of ordinary speech and 0.8 is past
+# it. A real call was found delivering peaks of 98-582 (-50 to -35 dBFS)
+# against a configured 0.8: the speech-to-text provider still transcribed a
+# word from it, while the VAD never reported speech, so no turn ever ended
+# and the caller heard nothing at all for the whole call. Defaulting to
+# pipecat's 0.6 instead - the volume floor is still the lever that separates
+# the caller from the room, but it has to clear the caller first.
 _VAD_CONFIDENCE = float(os.environ.get("VAD_CONFIDENCE", "0.8"))
-_VAD_MIN_VOLUME = float(os.environ.get("VAD_MIN_VOLUME", "0.7"))
+_VAD_MIN_VOLUME = float(os.environ.get("VAD_MIN_VOLUME", "0.6"))
 
 # How long sustained silence may persist with a semantically-incomplete
 # transcript before the turn ends anyway. Roughly double the most patient

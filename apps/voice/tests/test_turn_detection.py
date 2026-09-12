@@ -389,25 +389,73 @@ async def test_reset_for_next_turn_still_detects_a_short_interruption() -> None:
     assert detector.last_final_transcript == "Second question."
 
 
-def test_the_vad_is_stricter_than_pipecats_defaults_about_what_counts_as_speech() -> None:
+def _speech_shaped_pcm(peak: int, *, sample_rate: int = 16000) -> bytes:
     """
-    Reported live: the assistant answered voices in the room behind the
-    caller. A turn can only fire once the VAD has reported speech - see
-    TurnDetector, where _silence_since is set only after _ever_spoken - so
-    whatever clears these two thresholds is what the assistant will answer,
-    and pipecat's defaults (0.7 / 0.6) are tuned for "is anyone speaking"
-    rather than "is the person on this call speaking".
+    One second of speech-shaped noise at a given int16 peak.
 
-    Pinned because the failure is silent in both directions: too low and the
-    room gets answered, too high and a softly-spoken caller is ignored.
+    Noise rather than a tone because the thing being measured is loudness,
+    and BS.1770 weights the voice band - a 1kHz sine and a voice at the same
+    peak do not measure the same. One second because calculate_audio_volume
+    needs at least a 400ms gating block.
     """
+
+    import numpy as np
+
+    rng = np.random.default_rng(7)
+    samples = sample_rate
+    spectrum = np.fft.rfft(rng.normal(size=samples))
+    frequencies = np.fft.rfftfreq(samples, 1 / sample_rate)
+    voice_band = np.where(
+        (frequencies > 80) & (frequencies < 4000),
+        1.0 / np.sqrt(np.maximum(frequencies, 80)),
+        0.0,
+    )
+    signal = np.fft.irfft(spectrum * voice_band, samples)
+
+    return (signal / np.max(np.abs(signal)) * peak).astype(np.int16).tobytes()
+
+
+def test_the_volume_floor_admits_ordinary_speech_and_rejects_the_quiet_room() -> None:
+    """
+    Both halves of a trade this project has now got wrong in both
+    directions, pinned against measured levels rather than against
+    pipecat's defaults.
+
+    First the assistant answered voices in the room behind the caller, and
+    the volume floor went up. Then a real call arrived with peaks of 98-582
+    (-50 to -35 dBFS) against a configured 0.8, which needs -17.8 dBFS: the
+    speech-to-text provider still transcribed a word from it, the VAD never
+    reported speech, so no turn ever ended and the caller heard nothing for
+    the entire call.
+
+    The floor is not a fraction of full scale - it is normalized BS.1770
+    loudness - so asserting on the number alone says nothing about which
+    callers it can hear. These two levels do: conversational speech on a
+    laptop microphone peaks around -30 to -20 dBFS, and a voice across the
+    room arrives far below that.
+    """
+
+    from pipecat.audio.utils import calculate_audio_volume
 
     from app.turn_detection import _build_default_vad_analyzer
 
     analyzer = _build_default_vad_analyzer(sensitivity=0.5, sample_rate=16000)
+    floor = analyzer._params.min_volume
 
+    # Silero also has to agree it is speech; this is only the volume gate.
+    ordinary_speech = calculate_audio_volume(_speech_shaped_pcm(1843), 16000)
+    distant_room = calculate_audio_volume(_speech_shaped_pcm(184), 16000)
+
+    assert ordinary_speech >= floor, (
+        f"a caller at -25 dBFS measures {ordinary_speech:.3f}, below the "
+        f"{floor} floor - they would be heard by the transcriber and ignored "
+        "by turn detection, which the caller experiences as silence"
+    )
+    assert distant_room < floor
+
+    # The certainty half is unchanged: pipecat's 0.7 is tuned for "is anyone
+    # speaking anywhere" rather than "is the person on this call speaking".
     assert analyzer._params.confidence > 0.7
-    assert analyzer._params.min_volume > 0.6
 
 
 def test_the_vad_thresholds_can_be_tuned_without_a_code_change(
