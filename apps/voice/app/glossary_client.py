@@ -10,6 +10,7 @@ import uuid
 import httpx
 
 from app import config
+from app.internal_api import internal_headers
 
 
 async def fetch_glossary_terms(
@@ -29,7 +30,7 @@ async def fetch_glossary_terms(
     try:
         response = await owned_client.get(
             f"{config.API_INTERNAL_URL}/internal/v1/assistants/{assistant_id}/glossary",
-            headers={"X-Internal-Secret": config.INTERNAL_API_SECRET},
+            headers=internal_headers(),
             timeout=5.0,
         )
 

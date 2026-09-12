@@ -899,6 +899,12 @@ Keep full technical details in logs. Never swallow exceptions silently.
 
 Every log line in a call context carries a **call ID and turn ID**. Without correlation IDs, a latency problem across the two planes is undebuggable.
 
+This is enforced by the shared log formatter, not by discipline at each call site (build-plan item 25b, `norma_shared.correlation`). `apps/voice` binds one `CallContext` per session before the pipeline's processor tasks exist - Pipecat gives each `FrameProcessor` its own task, and a plain `ContextVar` holding a *value* would be invisible across them, so what is bound is a shared mutable object the metrics recorder advances as turns change. The formatter appends `call=… turn=…` to whatever the handler produced, which is why it also reaches lines this project does not write (uvicorn's, pipecat's through loguru), and why it happens *after* redaction - `redact_pii` rewrites digit runs, and a UUID is mostly digit runs.
+
+The identifiers cross to the control plane on `X-Call-Id`/`X-Turn-Id` (`norma_shared.correlation_middleware`). They are correlation only and authorize nothing - the internal secret does that - and a value that is not a UUID is dropped rather than stamped.
+
+The turn ID is minted by `apps/voice` before the turn runs and written to that turn's `TurnMetric` row, so a log line can be joined to the timings that explain it. It is deliberately not the row's primary key: a line logged mid-turn cannot carry an id the database has not issued yet.
+
 Important signals:
 
 - Per-turn latency across every leg (STT finalization, retrieval, LLM first token, LLM complete, TTS first byte, audio out)
@@ -926,6 +932,12 @@ Two mechanisms enforce this rather than leaving it to review (build-plan item 24
 `norma_shared.pii.redact_pii` is the project's single redaction entry point. `TranscriptTurn` persistence (item 29) must write through it rather than inventing its own rules. Its patterns are tuned for stored transcripts, where over-redaction is a defect - a rule that eats a quoted price, a booked time, or a date breaks the call-detail screen.
 
 `LOG_LEVEL` raises application logging only. The media plane deliberately does not follow it below DEBUG: pipecat logs whole frames, callers' words included, at TRACE.
+
+**Provider telemetry.** `norma_shared.provider_telemetry.provider_call` wraps a call to an external provider and records which provider, which operation, how long it took, and - on failure - the exception's *type name only*, never its message: an httpx or SDK error routinely quotes the request that caused it, and that request body is the caller's own words. Success logs at DEBUG (a healthy turn makes several such calls); failure logs at WARNING. Abandonment is a third outcome and stays at DEBUG, because every barge-in closes an LLM stream mid-flight and counting that as a provider error would make the error telemetry useless. Wrap *inside* a provider's own error translation, so the recorded type is the SDK's rather than Norma's two-way collapse of it.
+
+Speech-to-text is the deliberate exception: a session-long WebSocket has no per-call latency to time, and `ElevenLabsSTT` already counts reconnects, error types and per-message-type events, which answers more than a generic wrapper would.
+
+**Token and cost capture.** Token counts come from what the provider itself reported - Groq on the final streamed chunk's `x_groq.usage`, Anthropic through `get_final_message()` - read after the stream ends, never estimated from characters. `apps/api`'s own `estimate_tokens` is for staying under a rate limit before a call, where guessing high is safe; cost is a number compared against an invoice and is not guessed. Money is integer **micro-dollars** (`norma_shared.token_cost`), never a float, because these are summed into invoices and binary floating point cannot hold a tenth of a cent. Prices are per-model configuration (`LLM_REALTIME_INPUT_USD_PER_MTOK`, `LLM_REALTIME_OUTPUT_USD_PER_MTOK`) with **no default**: a model nobody has priced records its tokens with a null cost and says so once in the log. Null means unknown; reporting an unpriced model as free would understate the margin invisibly.
 
 ---
 

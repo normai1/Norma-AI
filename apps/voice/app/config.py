@@ -39,6 +39,15 @@ LLM_PROVIDER = os.environ.get("LLM_PROVIDER", "mock")
 # rejection of a frontier model in the per-turn conversation loop.
 LLM_REALTIME_MODEL = os.environ.get("LLM_REALTIME_MODEL", "claude-haiku-4-5-20251001")
 
+# What LLM_REALTIME_MODEL charges, in USD per million tokens, as decimal
+# strings ("0.15") so no float ever represents money (item 25b, see
+# norma_shared.token_cost). Deliberately unset by default: a price is a fact
+# about a vendor on a date, and shipping a guess would report the margin as
+# better or worse than it is with nothing to indicate which. Unset means
+# turns record their token counts with no cost, and say so once in the log.
+LLM_REALTIME_INPUT_USD_PER_MTOK = os.environ.get("LLM_REALTIME_INPUT_USD_PER_MTOK", "")
+LLM_REALTIME_OUTPUT_USD_PER_MTOK = os.environ.get("LLM_REALTIME_OUTPUT_USD_PER_MTOK", "")
+
 ANTHROPIC_API_KEY = os.environ.get("ANTHROPIC_API_KEY", "")
 
 # Empty means "use the SDK default" - only set for a proxy or custom

@@ -21,6 +21,12 @@ No amount of care in Norma's own logging statements would have caught that.
 recognise a plain sentence of caller speech. Turn-path code still logs word
 counts and identifiers, never utterances, and `redact_pii` does not change
 that obligation.
+
+Item 25b adds a second reason for every line to pass through here: the call
+and turn it belongs to are stamped onto it on the way out. The same argument
+applies - "every log line carries a call ID and turn ID" (CLAUDE.md section
+27) has to include uvicorn's and pipecat's lines, which no amount of care in
+this project's own logging statements can reach. See `norma_shared.correlation`.
 """
 
 import logging
@@ -28,6 +34,7 @@ import re
 import sys
 from collections.abc import Iterable
 
+from norma_shared.correlation import stamp as correlation_stamp
 from norma_shared.pii import redact_pii
 
 REDACTED = "[redacted]"
@@ -65,9 +72,26 @@ def scrub(text: str) -> str:
     return redact_pii(scrubbed)
 
 
+def scrub_and_stamp(text: str) -> str:
+    """
+    One log line, made safe to keep and possible to trace: scrubbed, then
+    stamped with the call and turn in scope (item 25b).
+
+    Order matters and is the whole reason these are one function rather than
+    two independent wrappers. `redact_pii` rewrites digit runs, and a UUID is
+    mostly digit runs - stamping first would hand the scrubber a correlation
+    identifier to mangle, leaving a log line whose call ID no longer matches
+    the one in the database. Stamping last also means the identifiers cannot
+    themselves be mistaken for caller data by a future redaction rule.
+    """
+
+    return scrub(text) + correlation_stamp()
+
+
 class RedactingFormatter(logging.Formatter):
     """
-    Wraps another formatter and scrubs whatever it produces.
+    Wraps another formatter, scrubs whatever it produces, and stamps the
+    call and turn it belongs to.
 
     Wrapping rather than replacing is deliberate: uvicorn's access and default
     formatters carry their own format string and colouring, and swapping them
@@ -88,7 +112,7 @@ class RedactingFormatter(logging.Formatter):
         formatted = self._inner.format(record)
 
         try:
-            return scrub(formatted)
+            return scrub_and_stamp(formatted)
         except Exception:  # pragma: no cover - defensive
             # Losing a log line to a redaction bug would be worse than the bug.
             # An unscrubbed line is not an option either, so drop the content
@@ -143,7 +167,9 @@ def _install_loguru_redaction() -> None:
     except ImportError:  # apps that do not use pipecat
         return
 
-    loguru_logger.configure(patcher=lambda record: record.update(message=scrub(record["message"])))
+    loguru_logger.configure(
+        patcher=lambda record: record.update(message=scrub_and_stamp(record["message"]))
+    )
 
 
 def _pin_loguru_level(level: str) -> None:

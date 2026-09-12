@@ -393,10 +393,22 @@ else"). `status` stays a separate lifecycle marker from the configuration itself
 #### TurnMetric
 
 - `call_id` (UUID, FK -> Call)
+- `turn_id` (UUID, nullable, indexed) - item 25b
 - `stt_finalized_at`, `retrieval_done_at`, `llm_first_token_at`, `llm_complete_at`, `tts_first_byte_at`, `audio_out_at` (timestamptz)
+- `prompt_tokens`, `completion_tokens` (int, nullable), `cost_micro_usd` (bigint, nullable) - item 25b
 
 > One row per conversational turn, across every leg of the pipeline (item 20f). This is the table
 > the p95 latency CI gate reads from.
+
+> **`turn_id` is not this row's primary key, deliberately.** It is minted by `apps/voice` before the
+> turn runs, because it is also stamped on every log line that turn produces - a line logged mid-turn
+> cannot carry an id the database has not issued yet. Indexed, not unique: it is diagnostic, and a
+> duplicate must not be able to reject a turn's metrics.
+
+> **Null cost means unknown, never free.** A provider that reported no usage, a model with no
+> configured price, and a turn that never reached the LLM are all genuinely unknown; recording any of
+> them as zero would understate the gross margin invisibly (CLAUDE.md section 21). Money is an integer
+> count of micro-dollars because these sum into invoices and a float cannot hold a tenth of a cent.
 
 ### Knowledge (items 14-19)
 

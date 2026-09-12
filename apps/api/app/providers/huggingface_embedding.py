@@ -10,6 +10,7 @@ httpx-based, matching openai_embedding.py's shape exactly.
 """
 
 import httpx
+from norma_shared.provider_telemetry import provider_call
 
 from app.providers.embedding import (
     EmbeddingDimensionMismatch,
@@ -71,24 +72,31 @@ class HuggingFaceEmbeddingProvider:
         owns_client = self._client is None
 
         try:
-            try:
-                response = await client.post(
-                    f"{self._base_url}/hf-inference/models/{self._model}"
-                    "/pipeline/feature-extraction",
-                    json={"inputs": texts},
-                    headers={"Authorization": f"Bearer {self._api_key}"},
-                    timeout=self._timeout_seconds,
-                )
-            except httpx.TimeoutException as exc:
-                raise EmbeddingProviderTimeout(
-                    "HuggingFace embeddings request timed out",
-                ) from exc
-            except httpx.TransportError as exc:
-                raise EmbeddingProviderUnavailable(
-                    "HuggingFace embeddings connection failed",
-                ) from exc
+            # Item 25b. This provider is the measured cause of retrieval
+            # missing CLAUDE.md's 80ms budget - 0.28-0.43s warm, 4-12s cold,
+            # roughly one call in three - and until now that was only
+            # visible from the voice plane's own timeout warnings, which
+            # cannot say whether the call was slow or the network was. This
+            # times the provider itself.
+            with provider_call("huggingface", "embedding.embed"):
+                try:
+                    response = await client.post(
+                        f"{self._base_url}/hf-inference/models/{self._model}"
+                        "/pipeline/feature-extraction",
+                        json={"inputs": texts},
+                        headers={"Authorization": f"Bearer {self._api_key}"},
+                        timeout=self._timeout_seconds,
+                    )
+                except httpx.TimeoutException as exc:
+                    raise EmbeddingProviderTimeout(
+                        "HuggingFace embeddings request timed out",
+                    ) from exc
+                except httpx.TransportError as exc:
+                    raise EmbeddingProviderUnavailable(
+                        "HuggingFace embeddings connection failed",
+                    ) from exc
 
-            _raise_for_http_status(response.status_code)
+                _raise_for_http_status(response.status_code)
 
             vectors = response.json()
 

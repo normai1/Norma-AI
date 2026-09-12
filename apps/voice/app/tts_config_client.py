@@ -10,6 +10,7 @@ from dataclasses import dataclass
 import httpx
 
 from app import config
+from app.internal_api import internal_headers
 
 # Mirrors apps/api/app/services/tts_config.py's own fixed defaults exactly.
 DEFAULT_VOICE_ID = "default"
@@ -39,7 +40,7 @@ async def fetch_tts_config(
     try:
         response = await owned_client.get(
             f"{config.API_INTERNAL_URL}/internal/v1/assistants/{assistant_id}/tts-config",
-            headers={"X-Internal-Secret": config.INTERNAL_API_SECRET},
+            headers=internal_headers(),
             timeout=5.0,
         )
 

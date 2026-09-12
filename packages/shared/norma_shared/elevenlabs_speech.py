@@ -18,6 +18,7 @@ import httpx
 import websockets
 import websockets.exceptions
 
+from norma_shared.provider_telemetry import provider_call
 from norma_shared.speech import (
     SpeechProviderError,
     SpeechProviderTimeout,
@@ -195,18 +196,25 @@ class ElevenLabsTTS:
             body["previous_text"] = previous_text
 
         try:
-            async with client.stream(
-                "POST",
-                f"{self._base_url}/v1/text-to-speech/{voice_id}/stream",
-                params={"output_format": "pcm_16000"},
-                json=body,
-                headers={"xi-api-key": self._api_key},
-                timeout=self._timeout_seconds,
-            ) as response:
-                _raise_for_http_status(response.status_code)
+            # Item 25b. Inside the translation below, so the recorded type is
+            # httpx's or the status-code mapping's own rather than Norma's
+            # two-way collapse of them - "which provider failed, and how" is
+            # the question this answers. Spans the whole stream, so a
+            # barge-in shows up as an abandoned call rather than a failed
+            # one (see provider_call).
+            with provider_call("elevenlabs", "tts.synthesize"):
+                async with client.stream(
+                    "POST",
+                    f"{self._base_url}/v1/text-to-speech/{voice_id}/stream",
+                    params={"output_format": "pcm_16000"},
+                    json=body,
+                    headers={"xi-api-key": self._api_key},
+                    timeout=self._timeout_seconds,
+                ) as response:
+                    _raise_for_http_status(response.status_code)
 
-                async for chunk in response.aiter_bytes():
-                    yield chunk
+                    async for chunk in response.aiter_bytes():
+                        yield chunk
         except httpx.TimeoutException as exc:
             raise SpeechProviderTimeout(
                 "ElevenLabs text-to-speech request timed out",

@@ -2,6 +2,13 @@ import uuid
 
 import httpx
 import pytest
+from norma_shared.correlation import (
+    CALL_ID_HEADER,
+    TURN_ID_HEADER,
+    CallContext,
+    bind_call_context,
+    unbind_call_context,
+)
 
 from app import config
 from app.retrieval_client import fetch_retrieved_context, warm_retrieval_cache
@@ -309,3 +316,63 @@ async def test_warming_logs_a_count_but_never_a_question(
 
     assert "24" in logged
     assert str(_ASSISTANT_ID) in logged
+
+
+async def test_the_turns_retrieval_request_names_the_call_and_turn(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """
+    Item 25b. This is the request that most needs correlating: retrieval
+    happens on every turn, and CLAUDE.md section 27's stated reason for
+    correlation IDs is that a latency problem across the two planes is
+    otherwise undebuggable. The API's own line about this retrieval has to
+    carry the same call and turn the media plane's does.
+    """
+
+    monkeypatch.setattr(config, "INTERNAL_API_SECRET", "the-real-secret")
+
+    call_id = uuid.uuid4()
+    turn_id = uuid.uuid4()
+    token = bind_call_context(CallContext(call_id=call_id, turn_id=turn_id))
+    sent_headers = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        sent_headers.update(request.headers)
+
+        return httpx.Response(200, json={"context": ""})
+
+    try:
+        await fetch_retrieved_context(
+            _ASSISTANT_ID, "What are your hours?", client=_client_returning(handler)
+        )
+    finally:
+        unbind_call_context(token)
+
+    assert sent_headers[CALL_ID_HEADER.lower()] == str(call_id)
+    assert sent_headers[TURN_ID_HEADER.lower()] == str(turn_id)
+    # Still authenticated - correlation is added alongside the secret, not
+    # instead of it.
+    assert sent_headers["x-internal-secret"] == "the-real-secret"
+
+
+async def test_a_request_made_outside_a_call_carries_no_correlation(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """
+    Cache warming runs before any turn exists, and a background job runs
+    outside a call entirely. Neither should invent identifiers.
+    """
+
+    monkeypatch.setattr(config, "INTERNAL_API_SECRET", "the-real-secret")
+
+    sent_headers = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        sent_headers.update(request.headers)
+
+        return httpx.Response(200, json={"warmed": 0})
+
+    await warm_retrieval_cache(_ASSISTANT_ID, client=_client_returning(handler))
+
+    assert CALL_ID_HEADER.lower() not in sent_headers
+    assert TURN_ID_HEADER.lower() not in sent_headers

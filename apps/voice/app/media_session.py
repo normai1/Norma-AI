@@ -15,6 +15,7 @@ import uuid
 from collections.abc import AsyncIterator, Sequence
 
 from fastapi import WebSocket
+from norma_shared.correlation import CallContext
 from norma_shared.speech import (
     SpeechProviderError,
     SpeechToTextProvider,
@@ -50,6 +51,7 @@ from app.guardrails import (
     find_unsupported_claim,
 )
 from app.llm import LLMProvider, LLMProviderError
+from app.llm_pricing import realtime_turn_cost_micro_usd
 from app.retrieval_client import fetch_retrieved_context
 from app.sentence_chunker import SentenceChunker
 from app.session_resilience import SessionResilienceTracker
@@ -1184,6 +1186,7 @@ class LLMTurnProcessor(FrameProcessor):
             full_reply = " ".join(reply_parts)
             self._conversation.append_assistant_turn(full_reply)
             self._turn_metrics.mark_llm_complete(generation)
+            self._record_token_cost(generation)
             await self.push_frame(
                 OutputTransportMessageUrgentFrame(
                     message={"type": "llm_complete", "text": full_reply}
@@ -1192,6 +1195,49 @@ class LLMTurnProcessor(FrameProcessor):
             self._session_resilience.record_turn_succeeded()
         except LLMProviderError:
             await self._give_up_on_turn()
+
+    def _record_token_cost(self, generation: int) -> None:
+        """
+        Attach what this turn's LLM call actually cost, as the provider
+        reported it (item 25b).
+
+        Read here, at the end of the turn, because that is the only point at
+        which the answer exists: both SDKs deliver usage as trailing stream
+        metadata (see `LLMProvider.last_usage`). A provider that reports
+        nothing, or a model with no configured price, leaves the fields null
+        rather than zero - "free" and "unknown" must not look the same in
+        the billing data.
+
+        Never allowed to break a turn. The caller has already heard the
+        reply by this point; a bug in an accounting field must not turn a
+        successful answer into a failed one, and `last_usage` is an optional
+        part of the provider protocol that a third-party or older
+        implementation may simply not have.
+        """
+
+        try:
+            last_usage = getattr(self._llm_provider, "last_usage", None)
+            usage = last_usage() if callable(last_usage) else None
+            cost = realtime_turn_cost_micro_usd(usage)
+
+            self._turn_metrics.record_token_cost(
+                generation,
+                prompt_tokens=usage.prompt_tokens if usage else None,
+                completion_tokens=usage.completion_tokens if usage else None,
+                cost_micro_usd=cost,
+            )
+
+            if usage is not None:
+                logger.info(
+                    "turn cost: assistant=%s prompt_tokens=%d completion_tokens=%d "
+                    "cost_micro_usd=%s",
+                    self._assistant_id,
+                    usage.prompt_tokens,
+                    usage.completion_tokens,
+                    "unpriced" if cost is None else cost,
+                )
+        except Exception:
+            logger.exception("could not record this turn's token cost")
 
     def _unsupported_claim_in(self, sentence: str, grounded_text: str) -> str | None:
         """
@@ -2073,6 +2119,7 @@ def build_voice_session_pipeline_worker(
     voice_id: str = "default",
     speech_rate: float = 1.0,
     vad_analyzer: VADAnalyzer | None = None,
+    call_context: CallContext | None = None,
 ) -> PipelineWorker:
     """
     Wire one WebSocket connection into a Pipecat pipeline that transcribes
@@ -2090,6 +2137,13 @@ def build_voice_session_pipeline_worker(
     call_id (item 20f) is generated once per session by the caller (see
     app/main.py) - a session-scoped placeholder identity for TurnMetric
     rows, since Call (build-plan item 28) doesn't exist yet.
+
+    call_context (item 25b) is that same call's logging identity, already
+    bound by the caller before this function runs - which is the part that
+    matters, because Pipecat's processors capture the ambient context when
+    their tasks are created here, and a binding made afterwards would reach
+    none of them. Passing it in as well lets the metrics recorder advance
+    the turn on it, so every log line carries the turn it belongs to.
     """
 
     transport = FastAPIWebsocketTransport(
@@ -2109,7 +2163,7 @@ def build_voice_session_pipeline_worker(
         vad_analyzer=vad_analyzer,
     )
 
-    turn_metrics = TurnMetricsRecorder(call_id=call_id)
+    turn_metrics = TurnMetricsRecorder(call_id=call_id, call_context=call_context)
     turn_detection_processor = TurnDetectionProcessor(turn_detector, turn_metrics)
     session_resilience = SessionResilienceTracker(
         max_consecutive_failures=config.MAX_CONSECUTIVE_LLM_FAILURES

@@ -2,6 +2,7 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from norma_shared.correlation_middleware import CallCorrelationMiddleware
 from norma_shared.logging_setup import configure_logging, install_redaction
 
 from app.api.internal.glossary import router as internal_glossary_router
@@ -64,6 +65,11 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# Item 25b. Added last, so it is outermost: a request's call and turn have to
+# be bound before anything downstream logs, including the log line another
+# middleware writes about the request itself.
+app.add_middleware(CallCorrelationMiddleware)
 
 
 app.include_router(

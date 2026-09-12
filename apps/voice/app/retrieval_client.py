@@ -23,6 +23,7 @@ import uuid
 import httpx
 
 from app import config
+from app.internal_api import internal_headers
 
 logger = logging.getLogger(__name__)
 
@@ -59,7 +60,7 @@ async def fetch_retrieved_context(
             response = await owned_client.post(
                 f"{config.API_INTERNAL_URL}/internal/v1/assistants/{assistant_id}/retrieve",
                 json={"query": query},
-                headers={"X-Internal-Secret": config.INTERNAL_API_SECRET},
+                headers=internal_headers(),
                 timeout=_TIMEOUT_SECONDS,
             )
         except httpx.TimeoutException:
@@ -146,7 +147,7 @@ async def warm_retrieval_cache(
         response = await owned_client.post(
             f"{config.API_INTERNAL_URL}/internal/v1/assistants/{assistant_id}"
             "/retrieve/warm",
-            headers={"X-Internal-Secret": config.INTERNAL_API_SECRET},
+            headers=internal_headers(),
             timeout=_WARM_TIMEOUT_SECONDS,
         )
 

@@ -11,6 +11,8 @@ families.
 from collections.abc import AsyncIterator, Sequence
 from typing import Protocol
 
+from norma_shared.token_cost import TokenUsage
+
 from app.conversation import Message
 
 __all__ = [
@@ -19,6 +21,7 @@ __all__ = [
     "LLMProviderTimeout",
     "LLMProviderUnavailable",
     "Message",
+    "TokenUsage",
 ]
 
 
@@ -62,5 +65,26 @@ class LLMProvider(Protocol):
         Stream a reply to messages (user/assistant turns only - system is
         passed separately, matching Anthropic's Messages API shape),
         yielding text deltas in order as they become available.
+        """
+        ...
+
+    def last_usage(self) -> TokenUsage | None:
+        """
+        Token counts for the most recently completed stream(), or None if
+        the provider did not report them (item 25b).
+
+        Read *after* the stream is exhausted, not alongside it: both SDKs in
+        use deliver usage only at the end - Groq on the final chunk, in
+        `x_groq.usage`, and Anthropic through `get_final_message()`. A
+        method rather than a per-delta yield because the stream's element
+        type is the caller's text and must stay that way; this mirrors
+        apps/api's `LLMProvider.last_token_budget()`, which reads a rate
+        limit off the same kind of trailing metadata.
+
+        Deliberately last-call state on a per-session provider instance,
+        which is safe only because one session's turns are strictly
+        sequential - a turn's stream is fully consumed, or abandoned, before
+        the next one starts. A provider instance shared across concurrent
+        calls would need this keyed per call instead.
         """
         ...

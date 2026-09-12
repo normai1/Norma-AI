@@ -25,12 +25,16 @@ async def record_turn_metric(
     *,
     assistant_id: uuid.UUID,
     call_id: uuid.UUID,
+    turn_id: uuid.UUID | None = None,
     stt_finalized_at: datetime | None = None,
     retrieval_done_at: datetime | None = None,
     llm_first_token_at: datetime | None = None,
     llm_complete_at: datetime | None = None,
     tts_first_byte_at: datetime | None = None,
     audio_out_at: datetime | None = None,
+    prompt_tokens: int | None = None,
+    completion_tokens: int | None = None,
+    cost_micro_usd: int | None = None,
 ) -> TurnMetric:
     assistant = await assistant_repo.get_by_id(db, assistant_id)
 
@@ -43,12 +47,16 @@ async def record_turn_metric(
         workspace_id=assistant.workspace_id,
         assistant_id=assistant_id,
         call_id=call_id,
+        turn_id=turn_id,
         stt_finalized_at=stt_finalized_at,
         retrieval_done_at=retrieval_done_at,
         llm_first_token_at=llm_first_token_at,
         llm_complete_at=llm_complete_at,
         tts_first_byte_at=tts_first_byte_at,
         audio_out_at=audio_out_at,
+        prompt_tokens=prompt_tokens,
+        completion_tokens=completion_tokens,
+        cost_micro_usd=cost_micro_usd,
     )
 
 

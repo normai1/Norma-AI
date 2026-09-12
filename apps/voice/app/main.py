@@ -6,6 +6,7 @@ from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, WebSocket
+from norma_shared.correlation import CallContext, bind_call_context, unbind_call_context
 from norma_shared.logging_setup import configure_logging, install_redaction
 from norma_shared.voice_session_ticket import (
     InvalidVoiceSessionTicket,
@@ -134,66 +135,87 @@ async def media_session(
     # rows - Call (build-plan item 28) doesn't exist yet.
     call_id = uuid.uuid4()
 
-    # Which build of the browser page this session is running (see
-    # CLIENT_BUILD there). "unknown" means a client old enough not to send
-    # it at all - which is itself the answer whenever a frontend fix appears
-    # to have had no effect.
-    logging.getLogger(__name__).info(
-        "session started: call=%s assistant=%s client_build=%s", call_id, assistant_id, client
-    )
+    # Item 25b: bound here, before anything else in this session runs, and
+    # specifically before the pipeline below creates its processor tasks -
+    # each of those takes a snapshot of the ambient context when it is
+    # created, so a binding made later would reach none of them. From this
+    # line on, every log line this session produces carries the call, and
+    # once the first turn starts, the turn as well. Several sessions share
+    # one process and one log; without this their lines are interleaved with
+    # nothing to tell them apart.
+    context = CallContext(call_id=call_id)
+    context_token = bind_call_context(context)
 
-    # Fire-and-forget: this pre-embeds the assistant's FAQ questions so the
-    # first turns are not the ones paying the hosted embedding provider's
-    # slow tail. Deliberately not awaited - the session must start at the
-    # same speed whether or not warming succeeds, or is even finished.
-    _start_background(warm_retrieval_cache(assistant_id))
+    try:
+        # Which build of the browser page this session is running (see
+        # CLIENT_BUILD there). "unknown" means a client old enough not to send
+        # it at all - which is itself the answer whenever a frontend fix appears
+        # to have had no effect. The call id is stamped on the line now, so it
+        # is no longer repeated in the message itself.
+        logging.getLogger(__name__).info(
+            "session started: assistant=%s client_build=%s", assistant_id, client
+        )
 
-    keywords = await fetch_glossary_terms(assistant_id)
-    sensitivity = await fetch_turn_sensitivity(assistant_id)
-    llm_config = await fetch_llm_config(assistant_id)
-    tts_config = await fetch_tts_config(assistant_id)
-    provider = get_stt_provider()
-    llm_provider = get_llm_provider()
-    tts_provider = get_tts_provider()
-    worker = build_voice_session_pipeline_worker(
-        websocket,
-        provider,
-        llm_provider,
-        tts_provider,
-        assistant_id=assistant_id,
-        call_id=call_id,
-        language=language,
-        keywords=keywords,
-        sensitivity=sensitivity,
-        system_prompt=llm_config.system_prompt,
-        creativity=llm_config.creativity,
-        blocked_topics=llm_config.blocked_topics,
-        voice_id=tts_config.voice_id,
-        speech_rate=tts_config.speech_rate,
-    )
-    runner = WorkerRunner(handle_sigint=False)
-    await runner.add_workers(worker)
+        # Fire-and-forget: this pre-embeds the assistant's FAQ questions so the
+        # first turns are not the ones paying the hosted embedding provider's
+        # slow tail. Deliberately not awaited - the session must start at the
+        # same speed whether or not warming succeeds, or is even finished.
+        _start_background(warm_retrieval_cache(assistant_id))
 
-    @worker.event_handler("on_pipeline_finished")
-    async def _on_pipeline_finished(_worker: object, frame: object) -> None:
-        # Item 20g: an EndFrame pushed from *inside* the pipeline (a
-        # session-failover apology finishing) reaches the sink and ends the
-        # pipeline's own internal processing, but the WorkerRunner itself
-        # only stops on an *external* signal - runner.run() below would
-        # otherwise never return, and the WebSocket would never close.
-        # Verified empirically: without this handler, the connection hangs
-        # indefinitely once EndFrame reaches the end of the pipeline,
-        # confirmed via a direct receive-loop script against a real
-        # session. runner.end() (graceful), not runner.cancel() (abrupt) -
-        # cancel() was tried first and, while it does close the connection,
-        # it does so by cancelling the runner's own task, which surfaced as
-        # a raw CancelledError out of TestClient's __exit__ in the test
-        # suite; end() is the semantically-correct call for a pipeline that
-        # is ending on its own terms, and does not have that problem.
-        # StopFrame/CancelFrame terminal states already have their own
-        # external trigger (a caller disconnecting), so only EndFrame needs
-        # this.
-        if isinstance(frame, EndFrame):
-            await runner.end(reason="session ended")
+        keywords = await fetch_glossary_terms(assistant_id)
+        sensitivity = await fetch_turn_sensitivity(assistant_id)
+        llm_config = await fetch_llm_config(assistant_id)
+        tts_config = await fetch_tts_config(assistant_id)
+        provider = get_stt_provider()
+        llm_provider = get_llm_provider()
+        tts_provider = get_tts_provider()
+        worker = build_voice_session_pipeline_worker(
+            websocket,
+            provider,
+            llm_provider,
+            tts_provider,
+            assistant_id=assistant_id,
+            call_id=call_id,
+            language=language,
+            keywords=keywords,
+            sensitivity=sensitivity,
+            system_prompt=llm_config.system_prompt,
+            creativity=llm_config.creativity,
+            blocked_topics=llm_config.blocked_topics,
+            voice_id=tts_config.voice_id,
+            speech_rate=tts_config.speech_rate,
+            call_context=context,
+        )
+        runner = WorkerRunner(handle_sigint=False)
+        await runner.add_workers(worker)
 
-    await runner.run()
+        @worker.event_handler("on_pipeline_finished")
+        async def _on_pipeline_finished(_worker: object, frame: object) -> None:
+            # Item 20g: an EndFrame pushed from *inside* the pipeline (a
+            # session-failover apology finishing) reaches the sink and ends the
+            # pipeline's own internal processing, but the WorkerRunner itself
+            # only stops on an *external* signal - runner.run() below would
+            # otherwise never return, and the WebSocket would never close.
+            # Verified empirically: without this handler, the connection hangs
+            # indefinitely once EndFrame reaches the end of the pipeline,
+            # confirmed via a direct receive-loop script against a real
+            # session. runner.end() (graceful), not runner.cancel() (abrupt) -
+            # cancel() was tried first and, while it does close the connection,
+            # it does so by cancelling the runner's own task, which surfaced as
+            # a raw CancelledError out of TestClient's __exit__ in the test
+            # suite; end() is the semantically-correct call for a pipeline that
+            # is ending on its own terms, and does not have that problem.
+            # StopFrame/CancelFrame terminal states already have their own
+            # external trigger (a caller disconnecting), so only EndFrame needs
+            # this.
+            if isinstance(frame, EndFrame):
+                await runner.end(reason="session ended")
+
+        await runner.run()
+    finally:
+        # Each WebSocket connection runs in its own task, so this
+        # binding would die with it regardless - but a session that
+        # ends must not leave its identifiers stamped on whatever
+        # logs next in a caller that does reuse the task, which a
+        # test harness does.
+        unbind_call_context(context_token)

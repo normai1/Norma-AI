@@ -131,3 +131,92 @@ async def test_the_route_commits_so_the_metric_outlives_the_request(
 
     assert response.status_code == 200
     assert commits, "the metric was never committed and would be rolled back"
+
+
+async def test_persists_the_turn_identifier_tokens_and_cost(
+    client: AsyncClient, db: AsyncSession
+) -> None:
+    """
+    Item 25b. The turn id is what that turn's log lines were stamped with,
+    so it has to survive the round trip for a line to be joinable to the
+    timings that explain it; the tokens and cost are what CLAUDE.md section
+    21 asks be captured from day one.
+    """
+
+    assistant = await _make_assistant(db, "internal-turn-metrics-25b")
+    turn_id = uuid.uuid4()
+
+    response = await client.post(
+        _TURN_METRICS_URL.format(assistant_id=assistant.id),
+        json={
+            "call_id": str(uuid.uuid4()),
+            "turn_id": str(turn_id),
+            "prompt_tokens": 412,
+            "completion_tokens": 37,
+            "cost_micro_usd": 90,
+        },
+        headers={"X-Internal-Secret": settings.internal_api_secret},
+    )
+
+    assert response.status_code == 200
+
+    row = await db.scalar(
+        select(TurnMetric).where(TurnMetric.id == uuid.UUID(response.json()["id"]))
+    )
+
+    assert row is not None
+    assert row.turn_id == turn_id
+    assert row.prompt_tokens == 412
+    assert row.completion_tokens == 37
+    assert row.cost_micro_usd == 90
+
+
+async def test_accepts_a_post_from_a_voice_worker_that_sends_none_of_them(
+    client: AsyncClient, db: AsyncSession
+) -> None:
+    """
+    The two planes deploy separately and briefly run different code against
+    the same schema (CLAUDE.md section 6.2). A voice worker older than these
+    columns must still record the latency row it always did, with the new
+    fields null - null meaning unknown, which is what they genuinely are.
+    """
+
+    assistant = await _make_assistant(db, "internal-turn-metrics-older-voice")
+
+    response = await client.post(
+        _TURN_METRICS_URL.format(assistant_id=assistant.id),
+        json={"call_id": str(uuid.uuid4())},
+        headers={"X-Internal-Secret": settings.internal_api_secret},
+    )
+
+    assert response.status_code == 200
+
+    row = await db.scalar(
+        select(TurnMetric).where(TurnMetric.id == uuid.UUID(response.json()["id"]))
+    )
+
+    assert row is not None
+    assert row.turn_id is None
+    assert row.prompt_tokens is None
+    assert row.cost_micro_usd is None
+
+
+async def test_rejects_a_negative_token_count(
+    client: AsyncClient, db: AsyncSession
+) -> None:
+    """
+    Not a security boundary - this channel is authenticated - but a negative
+    token count is a bug upstream, and the useful moment to notice it is
+    before it reaches the billing data rather than in a margin report months
+    later.
+    """
+
+    assistant = await _make_assistant(db, "internal-turn-metrics-negative")
+
+    response = await client.post(
+        _TURN_METRICS_URL.format(assistant_id=assistant.id),
+        json={"call_id": str(uuid.uuid4()), "completion_tokens": -1},
+        headers={"X-Internal-Secret": settings.internal_api_secret},
+    )
+
+    assert response.status_code == 422

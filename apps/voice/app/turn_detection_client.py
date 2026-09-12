@@ -11,6 +11,7 @@ import uuid
 import httpx
 
 from app import config
+from app.internal_api import internal_headers
 
 # app/schemas/assistant_version.py's own turn_sensitivity default - what an
 # assistant would have if it had never been published, which is also the
@@ -35,7 +36,7 @@ async def fetch_turn_sensitivity(
     try:
         response = await owned_client.get(
             f"{config.API_INTERNAL_URL}/internal/v1/assistants/{assistant_id}/turn-detection-config",
-            headers={"X-Internal-Secret": config.INTERNAL_API_SECRET},
+            headers=internal_headers(),
             timeout=5.0,
         )
 

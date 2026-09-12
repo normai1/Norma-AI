@@ -13,6 +13,7 @@ import uuid
 import httpx
 
 from app import config
+from app.internal_api import internal_headers
 from app.turn_metrics import TurnMetricRecord
 
 logger = logging.getLogger(__name__)
@@ -31,14 +32,18 @@ async def record_turn_metric(
             f"{config.API_INTERNAL_URL}/internal/v1/assistants/{assistant_id}/turn-metrics",
             json={
                 "call_id": str(record.call_id),
+                "turn_id": str(record.turn_id),
                 "stt_finalized_at": _isoformat(record.stt_finalized_at),
                 "retrieval_done_at": _isoformat(record.retrieval_done_at),
                 "llm_first_token_at": _isoformat(record.llm_first_token_at),
                 "llm_complete_at": _isoformat(record.llm_complete_at),
                 "tts_first_byte_at": _isoformat(record.tts_first_byte_at),
                 "audio_out_at": _isoformat(record.audio_out_at),
+                "prompt_tokens": record.prompt_tokens,
+                "completion_tokens": record.completion_tokens,
+                "cost_micro_usd": record.cost_micro_usd,
             },
-            headers={"X-Internal-Secret": config.INTERNAL_API_SECRET},
+            headers=internal_headers(call_id=record.call_id, turn_id=record.turn_id),
             timeout=5.0,
         )
 
