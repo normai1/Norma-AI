@@ -1,5 +1,24 @@
-fastapi
-uvicorn[standard]
+# Every version here is pinned exactly, and that is deliberate.
+#
+# These files used to name packages without versions, so `docker compose
+# build` installed whatever was current that day. That is not a build, it is
+# a lottery: an unrelated rebuild silently moved the media plane's real-time
+# framework from pipecat 1.8.1 to 1.10.0 mid-session, under a live call path,
+# with nobody having read a changelog. Two images built from the same commit
+# a week apart were not the same image.
+#
+# So: no `>=`, no bare names. To move a version, change it here, rebuild,
+# run that app's suite, and - for anything the audio path touches - make a
+# real test call. An upgrade is a commit with evidence behind it, never a
+# side effect of rebuilding for something else.
+#
+# These are the *declared* dependencies. Their own transitive dependencies
+# are still resolved at build time; a full lock file is the next step if
+# that turns out to matter.
+
+
+fastapi==0.141.1
+uvicorn[standard]==0.52.4
 
 # Local, editable install of the package shared with apps/api (item 20b) -
 # copied into the image at /packages/shared via docker-compose.yml's
@@ -16,11 +35,17 @@ uvicorn[standard]
 # changelog. Upgrade deliberately, with the voice suite and a real test
 # call, not as a side effect of `docker compose build`.
 pipecat-ai[websocket]==1.8.1
-anthropic
-groq
+anthropic==1.5.0
+groq==1.7.0
 
-pytest
-pytest-asyncio
-httpx
+pytest==9.1.1
+pytest-asyncio==1.4.0
+httpx==0.28.1
+# Arrives transitively with the anthropic SDK, but tests/test_anthropic_llm.py
+# imports it directly to build the Request object its error fixtures need.
+# Declared for the same reason langsmith is on the API side: a transitive
+# dependency the code imports by name can be dropped upstream without notice,
+# and the build that discovers it is the one that fails.
+httpx2==2.12.0
 
-ruff
+ruff==0.16.7

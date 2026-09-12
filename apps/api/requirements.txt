@@ -1,47 +1,66 @@
-fastapi
-uvicorn[standard]
+# Every version here is pinned exactly, and that is deliberate.
+#
+# These files used to name packages without versions, so `docker compose
+# build` installed whatever was current that day. That is not a build, it is
+# a lottery: an unrelated rebuild silently moved the media plane's real-time
+# framework from pipecat 1.8.1 to 1.10.0 mid-session, under a live call path,
+# with nobody having read a changelog. Two images built from the same commit
+# a week apart were not the same image.
+#
+# So: no `>=`, no bare names. To move a version, change it here, rebuild,
+# run that app's suite, and - for anything the audio path touches - make a
+# real test call. An upgrade is a commit with evidence behind it, never a
+# side effect of rebuilding for something else.
+#
+# These are the *declared* dependencies. Their own transitive dependencies
+# are still resolved at build time; a full lock file is the next step if
+# that turns out to matter.
+
+
+fastapi==0.141.1
+uvicorn[standard]==0.52.4
 
 # Local, editable install of the package shared with apps/voice (item 20b) -
 # copied into the image at /packages/shared via docker-compose.yml's
 # additional build context for this service.
 -e /packages/shared
 
-sqlalchemy[asyncio]
-asyncpg
-alembic
-psycopg[binary]
+sqlalchemy[asyncio]==2.0.52
+asyncpg==0.31.0
+alembic==1.20.0
+psycopg[binary]==3.3.5
 
-redis[hiredis]
+redis[hiredis]==8.1.0
 
-pydantic
-pydantic-settings
+pydantic==2.13.5
+pydantic-settings==2.15.0
 
-python-dotenv
+python-dotenv==1.2.3
 
-httpx
-websockets
+httpx==0.28.1
+websockets==17.1
 
-pytest
-pytest-asyncio
+pytest==9.1.1
+pytest-asyncio==1.4.0
 
-ruff
+ruff==0.16.7
 
-PyJWT>=2.10
-pwdlib[argon2]>=0.2
-email-validator>=2.2
-python-multipart>=0.0.20
-boto3>=1.35
-beautifulsoup4>=4.12
-pgvector>=0.3
-pypdf>=6.1
-python-docx>=1.1
-langchain-text-splitters>=1.1
+PyJWT==2.14.0
+pwdlib[argon2]==0.3.1
+email-validator==2.3.0
+python-multipart==0.0.32
+boto3==1.43.93
+beautifulsoup4==4.15.0
+pgvector==0.5.0
+pypdf==6.18.1
+python-docx==1.2.0
+langchain-text-splitters==1.1.2
 
 # Retrieval tracing (item 25a). Already present transitively via
 # langchain-text-splitters; declared here because app code imports it
 # directly now and a transitive dependency can be dropped without notice.
-langsmith>=0.12
+langsmith==0.12.4
 # The chunker measures its budget with the embedding model's own
 # tokenizer, so chunks are sized against the limit that actually
 # truncates them. Tokenizer only - no model weights are ever loaded.
-transformers>=4.44
+transformers==5.17.0
