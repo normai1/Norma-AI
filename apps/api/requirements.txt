@@ -36,6 +36,11 @@ pgvector>=0.3
 pypdf>=6.1
 python-docx>=1.1
 langchain-text-splitters>=1.1
+
+# Retrieval tracing (item 25a). Already present transitively via
+# langchain-text-splitters; declared here because app code imports it
+# directly now and a transitive dependency can be dropped without notice.
+langsmith>=0.12
 # The chunker measures its budget with the embedding model's own
 # tokenizer, so chunks are sized against the limit that actually
 # truncates them. Tokenizer only - no model weights are ever loaded.

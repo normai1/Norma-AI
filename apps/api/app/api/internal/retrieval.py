@@ -20,7 +20,8 @@ from app.repositories import assistant as assistant_repo
 from app.repositories import faq_entry as faq_entry_repo
 from app.services.context_builder import build_context, chunks_that_fit
 from app.services.query_embedding_cache import warm_query_embeddings
-from app.services.retrieval import retrieve
+from app.services.retrieval import DEFAULT_TOP_K, retrieve
+from app.services.retrieval_tracing import trace_retrieval
 
 logger = logging.getLogger(__name__)
 
@@ -49,17 +50,31 @@ async def retrieve_context(
     if assistant is None:
         raise _ASSISTANT_NOT_FOUND
 
-    chunks = await retrieve(
-        db,
-        embedding_provider,
+    # The trace wraps the whole decision, not just the search, so the child
+    # spans inside retrieve() nest under it and the context builder's own
+    # verdict - which chunks actually fit - is part of the same run. It is a
+    # no-op unless LANGSMITH_API_KEY is set, and can never raise.
+    with trace_retrieval(
+        assistant_id=assistant_id,
         organization_id=assistant.organization_id,
         workspace_id=assistant.workspace_id,
-        assistant_id=assistant_id,
         query=body.query,
-    )
+        top_k=DEFAULT_TOP_K,
+        min_score=settings.retrieval_min_score,
+    ) as traced:
+        chunks = await retrieve(
+            db,
+            embedding_provider,
+            organization_id=assistant.organization_id,
+            workspace_id=assistant.workspace_id,
+            assistant_id=assistant_id,
+            query=body.query,
+        )
 
-    kept = chunks_that_fit(chunks)
-    kept_ids = {chunk.chunk_id for chunk in kept}
+        kept = chunks_that_fit(chunks)
+        kept_ids = {chunk.chunk_id for chunk in kept}
+
+        traced.record(chunks, kept_ids)
 
     # What retrieval actually decided, so a wrong answer can be told apart
     # from wrong retrieval. Reported as scores and identifiers - never chunk

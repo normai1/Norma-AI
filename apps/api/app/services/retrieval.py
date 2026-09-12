@@ -17,7 +17,8 @@ from app.core.exceptions import AssistantNotFound
 from app.providers.embedding import EmbeddingProvider
 from app.repositories import assistant as assistant_repo
 from app.repositories import chunk as chunk_repo
-from app.services.query_embedding_cache import embed_query
+from app.services.query_embedding_cache import embed_query, is_query_cached
+from app.services.retrieval_tracing import trace_step
 
 DEFAULT_TOP_K = 5
 
@@ -83,18 +84,43 @@ async def retrieve(
     # Cached, because this embed call is the slowest thing in the turn's
     # retrieval and callers repeat each other constantly. See
     # services/query_embedding_cache.py.
-    query_vector = await embed_query(
-        embedding_provider, settings.embedding_model, query
-    )
+    #
+    # Traced separately from the search below because the two are orders of
+    # magnitude apart - a hosted embedding call against a single-digit
+    # millisecond index scan - and "which one was slow" is the first thing
+    # anyone asks about a turn that blew its budget. The span records
+    # whether the cache had it, since that is the difference between the two
+    # timings meaning anything at all.
+    with trace_step(
+        "embed_query",
+        # "embedding", not "embedder". LangSmith validates run_type against a
+        # fixed set server-side and rejects the *whole batch* a bad one
+        # arrives in, so a wrong name here silently loses the sibling runs
+        # too - which is how this was found: the root retrieval run vanished
+        # and only an unrelated child survived.
+        "embedding",
+        model=settings.embedding_model,
+        provider=settings.embedding_provider,
+        cache_hit=is_query_cached(settings.embedding_model, query),
+    ):
+        query_vector = await embed_query(
+            embedding_provider, settings.embedding_model, query
+        )
 
-    rows = await chunk_repo.search_by_similarity(
-        db,
-        organization_id=organization_id,
-        workspace_id=workspace_id,
-        assistant_id=assistant_id,
-        query_vector=query_vector,
+    with trace_step(
+        "vector_search",
+        "retriever",
         top_k=top_k,
-    )
+        dimension=len(query_vector),
+    ):
+        rows = await chunk_repo.search_by_similarity(
+            db,
+            organization_id=organization_id,
+            workspace_id=workspace_id,
+            assistant_id=assistant_id,
+            query_vector=query_vector,
+            top_k=top_k,
+        )
 
     retrieved = [
         RetrievedChunk(

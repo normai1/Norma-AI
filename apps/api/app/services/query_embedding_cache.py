@@ -40,6 +40,20 @@ def _key(model: str, query: str) -> tuple[str, str]:
     return (model, unicodedata.normalize("NFC", query.strip().casefold()))
 
 
+def is_query_cached(model: str, query: str) -> bool:
+    """
+    Whether the next embed_query for this query would be answered from
+    cache.
+
+    Read-only, and deliberately does not touch the LRU order: this exists so
+    a trace can say whether a turn paid the hosted provider or not (item
+    25a), and an observability probe that promoted an entry would be
+    changing what it measures.
+    """
+
+    return _key(model, query) in _cache
+
+
 async def embed_query(
     provider: EmbeddingProvider, model: str, query: str
 ) -> list[float]:

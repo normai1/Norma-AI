@@ -259,6 +259,30 @@ class Settings(BaseSettings):
     retrieval_min_score: float = 0.62
 
     # ------------------------------------------------------------------
+    # LangSmith (retrieval tracing, item 25a)
+    # ------------------------------------------------------------------
+
+    # The switch. Tracing is on exactly when this is set, so pasting a key
+    # into .env is all it takes and an environment without one pays nothing.
+    langsmith_api_key: str = ""
+
+    langsmith_project: str = "norma-retrieval"
+
+    # Empty means the SDK's own default (US). Set it for the EU endpoint.
+    langsmith_endpoint: str = ""
+
+    # Whether the caller's question and the retrieved chunk text are sent to
+    # LangSmith alongside the scores and identifiers.
+    #
+    # Off, and the default has to stay off. CLAUDE.md section 27 forbids
+    # logging transcript text and full document contents, and shipping them
+    # to a third-party service is a stronger form of the same thing: the
+    # question is whatever the caller just said, and the chunks are the
+    # operator's own documents. Turn it on to debug a corpus you own with
+    # callers who are you, not on an environment taking real calls.
+    langsmith_trace_text: bool = False
+
+    # ------------------------------------------------------------------
     # Storage
     # ------------------------------------------------------------------
 

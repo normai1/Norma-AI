@@ -24,6 +24,7 @@ from app.api.v1.workspaces import router as workspaces_router
 from app.core.config import settings
 from app.core.redis import redis
 from app.providers.embedding_http_client import close_embedding_http_client
+from app.services.retrieval_tracing import flush as flush_retrieval_traces
 
 # Item 24d: installs the redacting formatter, so nothing this process logs -
 # including tracebacks from httpx or asyncpg, which can carry a request body
@@ -49,6 +50,11 @@ async def lifespan(app: FastAPI):
     # Shutdown
     await redis.aclose()
     await close_embedding_http_client()
+    # LangSmith batches runs out of the request path on a background
+    # thread, so whatever is still queued is lost without this - which in
+    # development is most of what just happened, since a restart is
+    # usually what precedes going to look at a trace.
+    flush_retrieval_traces()
 
 
 app = FastAPI(
