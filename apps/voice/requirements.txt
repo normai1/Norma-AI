@@ -6,7 +6,16 @@ uvicorn[standard]
 # additional build context for this service.
 -e /packages/shared
 
-pipecat-ai[websocket]
+# Pinned, not floating. This is the media plane's real-time framework:
+# CLAUDE.md section 5.5 records 1.8.1 as the decided version, and every
+# empirical note in app/media_session.py - RTVI interception, the idle
+# watchdog cancelling live calls at five minutes, per-processor frame queues
+# reordering marks - was established against it. Unpinned, an unrelated
+# rebuild silently moved the container to 1.10.0 mid-session, which is a
+# framework upgrade under a running call path with nobody having read the
+# changelog. Upgrade deliberately, with the voice suite and a real test
+# call, not as a side effect of `docker compose build`.
+pipecat-ai[websocket]==1.8.1
 anthropic
 groq
 
