@@ -5,9 +5,12 @@ caller (app/services/knowledge_source.py) decides what to do with the
 results.
 """
 
+import asyncio
 import hashlib
+import logging
 import re
 from collections import deque
+from collections.abc import Iterator, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from urllib.parse import urljoin, urlparse
@@ -17,7 +20,26 @@ from bs4 import BeautifulSoup
 
 from app.providers.web_crawler import PageFetcher, PageFetchError
 
+logger = logging.getLogger(__name__)
+
 MAX_PAGES_PER_CRAWL = 20
+
+# How many pages are fetched at once.
+#
+# Eight is a compromise between the two ways of getting this wrong. One at a
+# time makes a 300-page crawl 300 sequential round trips, which is how a
+# large one came to hold a background task for half an hour. All at once
+# points three hundred simultaneous requests at a site that did not ask for
+# them, which is indistinguishable from an attack and would get Norma
+# blocked by exactly the customers it is crawling for.
+_FETCH_BATCH_SIZE = 8
+
+
+def _batched(items: Sequence[str], size: int) -> Iterator[list[str]]:
+    """Split `items` into consecutive lists of at most `size`."""
+
+    for start in range(0, len(items), size):
+        yield list(items[start : start + size])
 MAX_CRAWL_DEPTH = 2
 
 # Where a site is expected to publish its sitemap. Only the conventional
@@ -415,18 +437,60 @@ async def crawl_website(
         if depth >= max_depth:
             continue
 
+        # Take the whole page's links, bounded by what is left of the
+        # budget, and fetch them a batch at a time.
+        #
+        # This used to fetch them one after another, awaiting each before
+        # starting the next. At the configured 300-page ceiling that is 300
+        # sequential round trips - minutes of a background task doing
+        # nothing but waiting, which is how a large crawl came to saturate
+        # the API process for half an hour and then time out with nothing
+        # written.
+        #
+        # A batch rather than all of them at once: a site being crawled did
+        # not ask for this traffic, and firing three hundred simultaneous
+        # requests at it is indistinguishable from an attack. It also keeps
+        # the number of sockets and the memory holding their responses
+        # bounded, which is the same reason the embedding step batches.
+        pending: list[str] = []
+
         for link in _extract_same_host_links(html, base_url=_url, hostname=hostname):
-            if link in visited or len(results) >= max_pages:
+            if link in visited or len(results) + len(pending) >= max_pages:
                 continue
 
             visited.add(link)
+            pending.append(link)
 
-            try:
-                link_html = await fetcher.fetch(link)
-            except PageFetchError:
-                continue
+        for batch in _batched(pending, _FETCH_BATCH_SIZE):
+            if len(results) >= max_pages:
+                break
 
-            results.append(_to_result(link, link_html))
-            queue.append((link, link_html, depth + 1))
+            fetched = await asyncio.gather(
+                *(fetcher.fetch(link) for link in batch),
+                return_exceptions=True,
+            )
+
+            # Zipped back onto the links that produced them, in the order
+            # they were requested, so a crawl of the same site produces the
+            # same pages in the same order however they raced.
+            for link, outcome in zip(batch, fetched, strict=True):
+                if len(results) >= max_pages:
+                    break
+
+                if isinstance(outcome, PageFetchError):
+                    continue
+
+                if isinstance(outcome, BaseException):
+                    # Anything the fetcher contract did not promise. One bad
+                    # page has never been allowed to end a crawl.
+                    logger.warning(
+                        "crawl: unexpected error fetching a page: %s",
+                        type(outcome).__name__,
+                    )
+
+                    continue
+
+                results.append(_to_result(link, outcome))
+                queue.append((link, outcome, depth + 1))
 
     return results
