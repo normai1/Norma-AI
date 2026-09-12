@@ -235,6 +235,29 @@ class Settings(BaseSettings):
     # and nowhere near a live call.
     faq_generation_tokens_per_minute: int = 8_000
 
+    # The similarity a chunk must reach to be shown to the model at all.
+    #
+    # Without a floor, retrieval returns its top_k nearest chunks whatever
+    # their distance, so a question the knowledge cannot answer still hands
+    # the model a full set of the least-bad ones - and the model sounds
+    # equally confident whether they scored 0.9 or 0.5. Reported live as
+    # answers that mixed unrelated chunks, invented details, and
+    # contradicted the source.
+    #
+    # 0.62 is the midpoint of the gap measured against a real 4,035-chunk
+    # crawl of cursor.com: eight questions the site answers scored 0.670 to
+    # 0.837 on their best chunk, and five it cannot answer scored 0.414 to
+    # 0.579. Anywhere in that gap keeps all eight and rejects all five; the
+    # midpoint leaves the most room on both sides for a site whose
+    # separation is narrower.
+    #
+    # Configurable because the right value depends on the embedding model
+    # and the corpus, and because the two ways of being wrong are not
+    # symmetric: too high and the assistant says it does not know something
+    # it does know, which is safe and annoying; too low and it invents an
+    # answer, which is the failure this exists to prevent.
+    retrieval_min_score: float = 0.62
+
     # ------------------------------------------------------------------
     # Storage
     # ------------------------------------------------------------------

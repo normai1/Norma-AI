@@ -12,7 +12,7 @@ from app.models.organization import Organization
 from app.models.workspace import Workspace
 from app.providers.mock_embedding import MockEmbeddingProvider
 from app.services.context_builder import build_context
-from app.services.retrieval import retrieve
+from app.services.retrieval import NO_MIN_SCORE, retrieve
 
 
 async def _make_org_workspace_assistant(
@@ -153,6 +153,11 @@ async def test_retrieve_ranks_the_exact_text_match_first(db: AsyncSession) -> No
         workspace_id=workspace.id,
         assistant_id=assistant.id,
         query=query,
+        # Not a relevance test - these cover top_k, source
+        # attribution and tenant isolation. The score floor would
+        # filter the mock embedder's arbitrary vectors and leave
+        # nothing to assert on.
+        min_score=NO_MIN_SCORE,
     )
 
     assert results[0].chunk_id == exact_chunk.id
@@ -202,6 +207,11 @@ async def test_retrieve_excludes_a_sibling_organizations_chunks(
         workspace_id=workspace.id,
         assistant_id=assistant.id,
         query="anything",
+        # Not a relevance test - these cover top_k, source
+        # attribution and tenant isolation. The score floor would
+        # filter the mock embedder's arbitrary vectors and leave
+        # nothing to assert on.
+        min_score=NO_MIN_SCORE,
     )
 
     assert all(r.text != "Someone else's chunk." for r in results)
@@ -241,6 +251,11 @@ async def test_retrieve_excludes_chunks_with_no_embedding(db: AsyncSession) -> N
         workspace_id=workspace.id,
         assistant_id=assistant.id,
         query="anything",
+        # Not a relevance test - these cover top_k, source
+        # attribution and tenant isolation. The score floor would
+        # filter the mock embedder's arbitrary vectors and leave
+        # nothing to assert on.
+        min_score=NO_MIN_SCORE,
     )
 
     assert len(results) == 1
@@ -274,6 +289,11 @@ async def test_retrieve_respects_top_k(db: AsyncSession) -> None:
         assistant_id=assistant.id,
         query="anything",
         top_k=2,
+        # Not a relevance test - these cover top_k, source
+        # attribution and tenant isolation. The score floor would
+        # filter the mock embedder's arbitrary vectors and leave
+        # nothing to assert on.
+        min_score=NO_MIN_SCORE,
     )
 
     assert len(results) == 2
@@ -297,6 +317,11 @@ async def test_retrieve_raises_for_an_assistant_in_a_different_workspace(
             workspace_id=other_workspace.id,
             assistant_id=assistant.id,
             query="anything",
+            # Not a relevance test - these cover top_k, source
+            # attribution and tenant isolation. The score floor would
+            # filter the mock embedder's arbitrary vectors and leave
+            # nothing to assert on.
+            min_score=NO_MIN_SCORE,
         )
 
 
@@ -313,6 +338,11 @@ async def test_retrieve_raises_for_an_unknown_assistant(db: AsyncSession) -> Non
             workspace_id=workspace.id,
             assistant_id=uuid.uuid4(),
             query="anything",
+            # Not a relevance test - these cover top_k, source
+            # attribution and tenant isolation. The score floor would
+            # filter the mock embedder's arbitrary vectors and leave
+            # nothing to assert on.
+            min_score=NO_MIN_SCORE,
         )
 
 
@@ -342,6 +372,11 @@ async def test_retrieve_reports_each_chunks_source_type(db: AsyncSession) -> Non
         workspace_id=workspace.id,
         assistant_id=assistant.id,
         query="anything",
+        # Not a relevance test - these cover top_k, source
+        # attribution and tenant isolation. The score floor would
+        # filter the mock embedder's arbitrary vectors and leave
+        # nothing to assert on.
+        min_score=NO_MIN_SCORE,
     )
 
     assert results[0].source_type == "website"
@@ -387,6 +422,11 @@ async def test_retrieve_excludes_a_sibling_assistants_chunks_in_the_same_workspa
         workspace_id=workspace.id,
         assistant_id=assistant_a.id,
         query="anything",
+        # Not a relevance test - these cover top_k, source
+        # attribution and tenant isolation. The score floor would
+        # filter the mock embedder's arbitrary vectors and leave
+        # nothing to assert on.
+        min_score=NO_MIN_SCORE,
     )
 
     assert len(results) == 1
@@ -429,6 +469,11 @@ async def test_retrieve_and_build_context_latency_regression(
         workspace_id=workspace.id,
         assistant_id=assistant.id,
         query="anything",
+        # Not a relevance test - these cover top_k, source
+        # attribution and tenant isolation. The score floor would
+        # filter the mock embedder's arbitrary vectors and leave
+        # nothing to assert on.
+        min_score=NO_MIN_SCORE,
     )
     build_context(results)
     elapsed_ms = (time.perf_counter() - started_at) * 1000

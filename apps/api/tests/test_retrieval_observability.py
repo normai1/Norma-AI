@@ -186,3 +186,114 @@ async def test_the_decision_is_logged_without_the_words(
     # Neither the caller's question nor the knowledge.
     assert "Quaxton" not in logged
     assert "Wilhelmina" not in logged
+
+
+def test_no_min_score_is_below_the_lowest_possible_score() -> None:
+    """
+    score is 1 - cosine distance, and cosine distance runs 0 to 2, so a
+    chunk pointing away from the query scores below zero. A "no floor" value
+    of 0.0 would quietly drop those - a filter rather than the absence of
+    one, which cost three tests an afternoon of looking like the floor was
+    broken.
+    """
+
+    from app.services.retrieval import NO_MIN_SCORE
+
+    assert NO_MIN_SCORE <= -1.0
+
+
+async def test_a_question_the_knowledge_cannot_answer_retrieves_nothing(
+    db: AsyncSession, embedding_provider: MockEmbeddingProvider
+) -> None:
+    """
+    The reported bug. Without a floor, retrieval returns its top matches
+    whatever their distance, so an unanswerable question still hands the
+    model a full set of least-bad chunks and it answers confidently from
+    them - mixing unrelated material, inventing details, contradicting the
+    source.
+
+    Measured against a real 4,035-chunk crawl of cursor.com: eight questions
+    the site answers scored 0.670-0.837 on their best chunk, five it cannot
+    answer scored 0.414-0.579. The default floor sits in that gap.
+    """
+
+    from app.services.retrieval import retrieve
+
+    assistant = await _assistant_with_one_chunk(
+        db,
+        embedding_provider,
+        "floor-unanswerable",
+        "Cursor is an AI code editor built on VS Code.",
+    )
+
+    results = await retrieve(
+        db,
+        embedding_provider,
+        organization_id=assistant.organization_id,
+        workspace_id=assistant.workspace_id,
+        assistant_id=assistant.id,
+        query="How do I book a dental appointment on a Sunday?",
+    )
+
+    assert results == []
+
+
+async def test_a_question_the_knowledge_does_answer_still_retrieves(
+    db: AsyncSession, embedding_provider: MockEmbeddingProvider
+) -> None:
+    """
+    The other half, and the one that matters more: a floor that rejects real
+    questions turns a working assistant into one that never knows anything.
+    """
+
+    from app.services.retrieval import retrieve
+
+    text = "Cursor is an AI code editor built on VS Code."
+    assistant = await _assistant_with_one_chunk(
+        db, embedding_provider, "floor-answerable", text
+    )
+
+    results = await retrieve(
+        db,
+        embedding_provider,
+        organization_id=assistant.organization_id,
+        workspace_id=assistant.workspace_id,
+        assistant_id=assistant.id,
+        query=text,
+    )
+
+    assert [chunk.text for chunk in results] == [text]
+
+
+async def test_the_floor_is_configurable(
+    db: AsyncSession,
+    embedding_provider: MockEmbeddingProvider,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """
+    The right value depends on the embedding model and the corpus, and the
+    two ways of being wrong are not symmetric - too high is safe and
+    annoying, too low invents answers.
+    """
+
+    from app.services.retrieval import retrieve
+
+    text = "Cursor is an AI code editor built on VS Code."
+    assistant = await _assistant_with_one_chunk(
+        db, embedding_provider, "floor-config", text
+    )
+
+    # Above 1.0, which nothing can reach: score is 1 - cosine distance and
+    # the query here is the chunk verbatim, so it scores exactly 1.0.
+    monkeypatch.setattr(settings, "retrieval_min_score", 1.01)
+
+    results = await retrieve(
+        db,
+        embedding_provider,
+        organization_id=assistant.organization_id,
+        workspace_id=assistant.workspace_id,
+        assistant_id=assistant.id,
+        query=text,
+    )
+
+    assert results == []

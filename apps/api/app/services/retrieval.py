@@ -21,6 +21,13 @@ from app.services.query_embedding_cache import embed_query
 
 DEFAULT_TOP_K = 5
 
+# A floor that cannot exclude anything, for callers that want the raw ranking.
+#
+# Not 0.0: score is 1 - cosine distance, and cosine distance runs 0 to 2, so a
+# chunk pointing away from the query scores below zero. A floor of 0.0 quietly
+# drops those, which is a filter rather than the absence of one.
+NO_MIN_SCORE = -1.0
+
 
 @dataclass(frozen=True)
 class RetrievedChunk:
@@ -50,10 +57,18 @@ async def retrieve(
     assistant_id: uuid.UUID,
     query: str,
     top_k: int = DEFAULT_TOP_K,
+    min_score: float | None = None,
 ) -> list[RetrievedChunk]:
     """
-    Embed query and return the top_k most similar chunks in this
-    organization/workspace/assistant, most similar first. assistant_id is
+    Embed query and return the most similar chunks in this
+    organization/workspace/assistant, most similar first - at most top_k of
+    them, and only those scoring at least min_score (defaulting to
+    settings.retrieval_min_score).
+
+    Returning fewer than top_k, or none at all, is a normal outcome: it is
+    what "the knowledge does not cover this" looks like, and it is the
+    difference between the assistant saying so and inventing an answer from
+    whatever happened to be nearest. assistant_id is
     validated (must belong to workspace_id) and narrows the search to only
     that assistant's own knowledge sources (feature 23d).
     """
@@ -61,6 +76,9 @@ async def retrieve(
     await _assert_assistant_in_workspace(
         db, workspace_id=workspace_id, assistant_id=assistant_id
     )
+
+    if min_score is None:
+        min_score = settings.retrieval_min_score
 
     # Cached, because this embed call is the slowest thing in the turn's
     # retrieval and callers repeat each other constantly. See
@@ -78,7 +96,7 @@ async def retrieve(
         top_k=top_k,
     )
 
-    return [
+    retrieved = [
         RetrievedChunk(
             chunk_id=chunk.id,
             knowledge_source_id=chunk.knowledge_source_id,
@@ -89,3 +107,14 @@ async def retrieve(
         )
         for chunk, source_type, distance in rows
     ]
+
+    # Anything too far away is dropped rather than handed over as the
+    # least-bad match. A question the knowledge does not answer should
+    # produce no context, so the model answers from the standing guardrail
+    # rule - "I do not have that detail" - instead of from five chunks that
+    # happen to be nearest in a corpus that never mentioned the subject.
+    #
+    # Applied here rather than in the context builder so every caller gets
+    # it, and so the observability that reports scores reports the same set
+    # the model was given.
+    return [chunk for chunk in retrieved if chunk.score >= min_score]
