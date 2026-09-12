@@ -92,7 +92,14 @@ async def test_returns_empty_context_when_nothing_matches(
     )
 
     assert response.status_code == 200
-    assert response.json() == {"context": ""}
+
+    body = response.json()
+
+    assert body["context"] == ""
+    # Nothing retrieved, said explicitly rather than by an empty string -
+    # "the knowledge does not cover this" and "retrieval returned chunks the
+    # context builder then dropped" are different problems.
+    assert body["retrieved"] == []
 
 
 async def test_404s_for_an_unknown_assistant(client: AsyncClient) -> None:

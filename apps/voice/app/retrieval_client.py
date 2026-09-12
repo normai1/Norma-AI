@@ -90,7 +90,8 @@ async def fetch_retrieved_context(
             return ""
 
         try:
-            context = response.json().get("context")
+            body = response.json()
+            context = body.get("context")
         except ValueError:
             # json.JSONDecodeError is a ValueError - not an httpx.HTTPError,
             # so it needs its own catch to keep this function's "never
@@ -106,6 +107,8 @@ async def fetch_retrieved_context(
                 assistant_id,
             )
             return ""
+
+        _log_what_was_retrieved(assistant_id, body)
 
         return context
     finally:
@@ -169,3 +172,42 @@ async def warm_retrieval_cache(
     finally:
         if client is None:
             await owned_client.aclose()
+
+
+def _log_what_was_retrieved(assistant_id: uuid.UUID, body: object) -> None:
+    """
+    Record what knowledge this turn was actually given.
+
+    Scores and source identifiers only - never chunk text, never the
+    caller's words (CLAUDE.md section 27). The API logs the same decision on
+    its own side; this is the copy that sits in the call's own log next to
+    the turn it belongs to, which is where anyone asking "why did it answer
+    that?" is already looking.
+
+    Retrieval returns its top matches whatever their distance, so a question
+    the knowledge does not cover still comes back with a full set of
+    least-bad ones. The scores are what make that visible: a turn answered
+    from chunks scoring 0.2 reads exactly like one answered from 0.9 until
+    somebody prints the numbers.
+    """
+
+    if not isinstance(body, dict):
+        return
+
+    retrieved = body.get("retrieved")
+
+    if not isinstance(retrieved, list) or not retrieved:
+        logger.info("retrieved nothing: assistant=%s", assistant_id)
+
+        return
+
+    scores = [item.get("score") for item in retrieved if isinstance(item, dict)]
+    used = sum(1 for item in retrieved if isinstance(item, dict) and item.get("used"))
+
+    logger.info(
+        "retrieved %d chunks (%d reached the model): assistant=%s scores=%s",
+        len(retrieved),
+        used,
+        assistant_id,
+        scores,
+    )

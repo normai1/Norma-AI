@@ -7,6 +7,7 @@ organization_id/workspace_id first, exactly like the existing internal
 glossary and turn-detection-config endpoints already do.
 """
 
+import logging
 import uuid
 
 from fastapi import APIRouter, HTTPException, status
@@ -17,9 +18,11 @@ from app.api.internal_deps import RequireInternalSecret
 from app.core.config import settings
 from app.repositories import assistant as assistant_repo
 from app.repositories import faq_entry as faq_entry_repo
-from app.services.context_builder import build_context
+from app.services.context_builder import build_context, chunks_that_fit
 from app.services.query_embedding_cache import warm_query_embeddings
 from app.services.retrieval import retrieve
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(tags=["internal"])
 
@@ -40,7 +43,7 @@ async def retrieve_context(
     db: DbSession,
     embedding_provider: EmbeddingProviderDep,
     _: RequireInternalSecret,
-) -> dict[str, str]:
+) -> dict[str, object]:
     assistant = await assistant_repo.get_by_id(db, assistant_id)
 
     if assistant is None:
@@ -55,7 +58,43 @@ async def retrieve_context(
         query=body.query,
     )
 
-    return {"context": build_context(chunks)}
+    kept = chunks_that_fit(chunks)
+    kept_ids = {chunk.chunk_id for chunk in kept}
+
+    # What retrieval actually decided, so a wrong answer can be told apart
+    # from wrong retrieval. Reported as scores and identifiers - never chunk
+    # text, and never the caller's question (CLAUDE.md section 27).
+    #
+    # Retrieval returns the top_k nearest chunks whatever their distance, so
+    # a question the knowledge does not answer still comes back with a full
+    # set of the least-bad matches. Without the scores there is no way to
+    # see that happening: the model is handed five chunks and sounds equally
+    # confident whether they scored 0.9 or 0.2.
+    logger.info(
+        "retrieval: assistant=%s chunks=%d used=%d scores=%s sources=%s",
+        assistant_id,
+        len(chunks),
+        len(kept),
+        [round(chunk.score, 3) for chunk in chunks],
+        [str(chunk.knowledge_source_id)[:8] for chunk in chunks],
+    )
+
+    return {
+        "context": build_context(chunks),
+        # Per-chunk diagnostics for whoever is holding the call open and
+        # wondering where an answer came from.
+        "retrieved": [
+            {
+                "chunk_id": str(chunk.chunk_id),
+                "knowledge_source_id": str(chunk.knowledge_source_id),
+                "source_type": chunk.source_type,
+                "score": round(chunk.score, 4),
+                "chars": len(chunk.text),
+                "used": chunk.chunk_id in kept_ids,
+            }
+            for chunk in chunks
+        ],
+    }
 
 
 @router.post("/internal/v1/assistants/{assistant_id}/retrieve/warm")
