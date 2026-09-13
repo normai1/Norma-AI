@@ -13,6 +13,7 @@ import os
 import time
 from collections.abc import Callable
 
+from app.adaptive_vad import AdaptiveNoiseFloor, AdaptiveVolumeVADAnalyzer
 from pipecat.audio.vad.silero import SileroVADAnalyzer
 from pipecat.audio.vad.vad_analyzer import VADAnalyzer, VADParams, VADState
 
@@ -79,6 +80,24 @@ _MAX_STOP_SECS = 1.5
 _VAD_CONFIDENCE = float(os.environ.get("VAD_CONFIDENCE", "0.8"))
 _VAD_MIN_VOLUME = float(os.environ.get("VAD_MIN_VOLUME", "0.8"))
 
+# Whether the volume floor follows this call's own background instead of
+# sitting at a fixed absolute level (app/adaptive_vad.py). On, because a
+# fixed number has now failed in both directions here - too high and a
+# quiet caller went unheard for a whole call, too low and the room got
+# answered - and neither failure is a tuning mistake so much as a question
+# an absolute threshold cannot answer. Set false to fall back to
+# VAD_MIN_VOLUME alone.
+_VAD_ADAPTIVE_FLOOR = os.environ.get("VAD_ADAPTIVE_FLOOR", "true").lower() == "true"
+
+# How far above the measured room speech has to sit. See adaptive_vad.py.
+_VAD_NOISE_MARGIN = float(os.environ.get("VAD_NOISE_MARGIN", "0.10"))
+
+# What Silero's own volume gate is set to while the adaptive floor is doing
+# the real work - low enough to defer to it, not zero, so a pathological
+# noise floor still cannot make the analyzer accept pure silence.
+_ADAPTIVE_DELEGATE_MIN_VOLUME = 0.3
+
+
 # How long sustained silence may persist with a semantically-incomplete
 # transcript before the turn ends anyway. Roughly double the most patient
 # stop_secs above - real extra grace, without ever approaching a duration a
@@ -126,13 +145,29 @@ def is_semantically_complete(text: str) -> bool:
 
 
 def _build_default_vad_analyzer(*, sensitivity: float, sample_rate: int) -> VADAnalyzer:
-    analyzer = SileroVADAnalyzer(
+    # With the adaptive floor on, Silero's own volume gate is deliberately
+    # slack: the point is that this call's background decides the line, and
+    # an absolute floor left at its usual value would keep overriding that -
+    # rejecting a quiet caller in a quiet room before the adaptive gate is
+    # ever consulted. Silero's *confidence* threshold does not move; it is
+    # answering "is this speech at all", which does not depend on the room.
+    min_volume = (
+        _ADAPTIVE_DELEGATE_MIN_VOLUME if _VAD_ADAPTIVE_FLOOR else _VAD_MIN_VOLUME
+    )
+
+    analyzer: VADAnalyzer = SileroVADAnalyzer(
         params=VADParams(
             stop_secs=sensitivity_to_stop_secs(sensitivity),
             confidence=_VAD_CONFIDENCE,
-            min_volume=_VAD_MIN_VOLUME,
+            min_volume=min_volume,
         )
     )
+
+    if _VAD_ADAPTIVE_FLOOR:
+        analyzer = AdaptiveVolumeVADAnalyzer(
+            analyzer,
+            noise_floor=AdaptiveNoiseFloor(margin=_VAD_NOISE_MARGIN),
+        )
 
     # The constructor's sample_rate kwarg alone does not take effect - the
     # analyzer's active sample rate stays 0, and stop_secs/start_secs never

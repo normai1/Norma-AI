@@ -415,53 +415,54 @@ def _speech_shaped_pcm(peak: int, *, sample_rate: int = 16000) -> bytes:
     return (signal / np.max(np.abs(signal)) * peak).astype(np.int16).tobytes()
 
 
-def test_the_volume_floor_sits_between_this_deployments_speech_and_its_room() -> None:
+def test_the_fixed_floor_still_separates_speech_from_the_room_when_adaptation_is_off(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     """
-    Both halves of a trade this project has now got wrong in both
-    directions, pinned against levels measured from real calls rather than
-    against a general claim about microphones.
+    VAD_ADAPTIVE_FLOOR=false falls back to one absolute threshold, so that
+    path keeps the safety net it had - pinned against levels measured from
+    real calls rather than a general claim about microphones.
 
-    First the assistant answered voices in the room behind the caller, and
-    the floor went up. Then a machine whose microphone delivered -46 dBFS
-    heard nothing at all - the transcriber produced words from it, the VAD
-    never reported speech, and the caller sat in silence for a whole call -
-    so the floor came down to pipecat's 0.6. The microphone was then fixed,
-    and 0.6 started admitting the room again: it counted 53% of all audio as
-    the caller talking, which is not what one participant in a conversation
-    does.
+    The distribution here is bimodal: background around a median peak of 448
+    (-37 dBFS) reaching 1501 (-27 dBFS) at its loudest, speech at p90 of
+    11466 (-9 dBFS). The loudest background must be rejected and real speech
+    admitted.
 
-    619 two-second windows of real calls say where the line goes. The
-    distribution is bimodal - a background floor around a median peak of 448
-    (-37 dBFS) and speech at p90 of 11466 (-9 dBFS) - and these two levels
-    are taken from it: p75, the loudest the background gets, must be
-    rejected, and p90, real speech, must be admitted.
+    The adaptive floor, which is what actually runs, is covered in
+    tests/test_adaptive_vad.py against the same three levels.
     """
+
+    import importlib
+
+    monkeypatch.setenv("VAD_ADAPTIVE_FLOOR", "false")
 
     from pipecat.audio.utils import calculate_audio_volume
 
-    from app.turn_detection import _build_default_vad_analyzer
+    from app import turn_detection
 
-    analyzer = _build_default_vad_analyzer(sensitivity=0.5, sample_rate=16000)
-    floor = analyzer._params.min_volume
+    reloaded = importlib.reload(turn_detection)
 
-    # Silero also has to agree it is speech; this is only the volume gate.
-    speech = calculate_audio_volume(_speech_shaped_pcm(11466), 16000)
-    loudest_background = calculate_audio_volume(_speech_shaped_pcm(1501), 16000)
+    try:
+        analyzer = reloaded._build_default_vad_analyzer(sensitivity=0.5, sample_rate=16000)
+        floor = analyzer.params.min_volume
 
-    assert speech >= floor, (
-        f"measured speech at -9 dBFS gives {speech:.3f}, below the {floor} "
-        "floor - the caller would be transcribed and then ignored by turn "
-        "detection, which they experience as silence"
-    )
-    assert loudest_background < floor, (
-        f"measured background at -27 dBFS gives {loudest_background:.3f}, "
-        f"at or above the {floor} floor - the room would be answered as if "
-        "it were the caller"
-    )
+        speech = calculate_audio_volume(_speech_shaped_pcm(11466), 16000)
+        loudest_background = calculate_audio_volume(_speech_shaped_pcm(1501), 16000)
 
-    # The certainty half is unchanged: pipecat's 0.7 is tuned for "is anyone
-    # speaking anywhere" rather than "is the person on this call speaking".
-    assert analyzer._params.confidence > 0.7
+        assert speech >= floor, (
+            f"measured speech at -9 dBFS gives {speech:.3f}, below the {floor} "
+            "floor - the caller would be transcribed and then ignored by turn "
+            "detection, which they experience as silence"
+        )
+        assert loudest_background < floor, (
+            f"measured background at -27 dBFS gives {loudest_background:.3f}, "
+            f"at or above the {floor} floor - the room would be answered as "
+            "if it were the caller"
+        )
+        assert analyzer.params.confidence > 0.7
+    finally:
+        monkeypatch.undo()
+        importlib.reload(turn_detection)
 
 
 def test_the_vad_thresholds_can_be_tuned_without_a_code_change(
@@ -476,14 +477,18 @@ def test_the_vad_thresholds_can_be_tuned_without_a_code_change(
 
     monkeypatch.setenv("VAD_CONFIDENCE", "0.95")
     monkeypatch.setenv("VAD_MIN_VOLUME", "0.85")
+    # The absolute floor is only the decision-maker with adaptation off; on,
+    # it is deliberately slackened so this call's own background decides
+    # (see app/adaptive_vad.py).
+    monkeypatch.setenv("VAD_ADAPTIVE_FLOOR", "false")
 
     from app import turn_detection
 
     reloaded = importlib.reload(turn_detection)
     try:
         analyzer = reloaded._build_default_vad_analyzer(sensitivity=0.5, sample_rate=16000)
-        assert analyzer._params.confidence == 0.95
-        assert analyzer._params.min_volume == 0.85
+        assert analyzer.params.confidence == 0.95
+        assert analyzer.params.min_volume == 0.85
     finally:
         monkeypatch.undo()
         importlib.reload(turn_detection)
