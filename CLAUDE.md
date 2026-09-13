@@ -1134,6 +1134,18 @@ Read TurnMetric rows for the affected call before changing code. "It feels slow"
 
 For "the assistant said something wrong", read the call detail: which assistant version, which prompt version, which retrieved chunks, which tool calls. The answer is almost always in one of those four.
 
+Until the call-detail screen exists (item 31), `scripts/inspect_retrieval.py` answers the retrieval part directly:
+
+```bash
+python scripts/inspect_retrieval.py                  # the last few turns
+python scripts/inspect_retrieval.py --call <call-id> # one call, in order
+python scripts/inspect_retrieval.py --turn <turn-id> # the one turn
+```
+
+It prints the question, then every chunk with its score and whether it actually reached the model or was dropped by the context builder's character budget. **Anything in the answer that is not in a chunk marked `-> model` was invented** — that is the whole test. The call and turn ids come from the log lines, which carry them on every line (section 27).
+
+Scores just above `RETRIEVAL_MIN_SCORE` are the ones to look at: a chunk clearing the floor without being about the question is what "it mixed in unrelated facts" looks like from the inside. The question and chunk text are only in the trace if `LANGSMITH_TRACE_TEXT` was on when the turn ran.
+
 ---
 
 # 34. Current known infrastructure behavior
