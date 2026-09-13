@@ -50,7 +50,7 @@ from app.guardrails import (
     blocked_topic_in,
     find_unsupported_claim,
 )
-from app.llm import LLMProvider, LLMProviderError
+from app.llm import LLMProvider, LLMProviderError, LLMRateLimited
 from app.llm_pricing import realtime_turn_cost_micro_usd
 from app.retrieval_client import fetch_retrieved_context
 from app.sentence_chunker import SentenceChunker
@@ -1069,12 +1069,20 @@ class LLMTurnProcessor(FrameProcessor):
         # failure is safe. A single stream() call itself may re-fetch
         # retrieval each attempt; cheap and already independently resilient
         # (fetch_retrieved_context fails open on its own).
+        # Set once a rate limit has been hit on this turn, which changes what
+        # a retry means: see the LLMRateLimited branch below.
+        drop_context_to_fit = False
+
         for attempt in range(config.MAX_PROVIDER_RETRIES + 1):
             try:
                 retrieved_context = await fetch_retrieved_context(
                     self._assistant_id, caller_text
                 )
                 self._turn_metrics.mark_retrieval_done(generation)
+
+                if drop_context_to_fit:
+                    retrieved_context = ""
+
                 system = assemble_system_prompt(
                     base_prompt=self._system_prompt, retrieved_context=retrieved_context
                 )
@@ -1090,6 +1098,49 @@ class LLMTurnProcessor(FrameProcessor):
                     first_delta = None
 
                 break
+            except LLMRateLimited as exc:
+                # A per-minute token quota is the one failure retrying the
+                # same request cannot fix - it is the request itself that is
+                # over budget, and each attempt spends more of the window it
+                # is waiting on. Measured on a real call: seven turns, then
+                # three identical attempts inside eight seconds, all refused,
+                # and the caller heard nothing.
+                #
+                # So the retry sheds the largest droppable part of the prompt
+                # instead of repeating it. Retrieved context is roughly 40%
+                # of a turn here (about 1,150 tokens of a 2,800-token
+                # prompt), it is the only part that is optional, and dropping
+                # it degrades the answer rather than removing it: the
+                # guardrail then holds the model to what it can support, so
+                # the caller hears "I don't have that detail" instead of
+                # silence. Waiting out the window instead would be tens of
+                # seconds of dead air, which CLAUDE.md calls the worst
+                # possible failure.
+                can_shed = (
+                    attempt < config.MAX_PROVIDER_RETRIES and not drop_context_to_fit
+                )
+                # Says what actually happens next. The first version of this
+                # line claimed a retry on both paths, including the one that
+                # gives up - a misleading log in precisely the situation
+                # someone is reading the log to understand.
+                logger.warning(
+                    "llm rate limited: assistant=%s attempt=%d retry_after=%s - %s",
+                    self._assistant_id,
+                    attempt,
+                    exc.retry_after_seconds,
+                    "retrying without retrieved context"
+                    if can_shed
+                    else "giving up on this turn",
+                )
+
+                if can_shed:
+                    drop_context_to_fit = True
+
+                    continue
+
+                await self._give_up_on_turn()
+
+                return
             except (LLMProviderError, TimeoutError):
                 if attempt < config.MAX_PROVIDER_RETRIES:
                     continue

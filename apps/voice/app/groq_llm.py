@@ -26,7 +26,7 @@ from norma_shared.provider_telemetry import provider_call
 from norma_shared.token_cost import TokenUsage
 
 from app.conversation import Message
-from app.llm import LLMProviderTimeout, LLMProviderUnavailable
+from app.llm import LLMProviderTimeout, LLMProviderUnavailable, LLMRateLimited
 
 # Matches app/anthropic_llm.py's own precedent exactly - a starting value
 # for a conversational spoken reply, not a tuned product decision.
@@ -106,8 +106,37 @@ class GroqLLM:
                         yield content
         except groq.APITimeoutError as exc:
             raise LLMProviderTimeout("Groq request timed out") from exc
+        except groq.RateLimitError as exc:
+            # Before the general GroqError clause, which it is a subclass of.
+            # A quota refusal is not an outage and must not be retried the
+            # same way - see LLMRateLimited.
+            raise LLMRateLimited(
+                "Groq refused the request: over the rate limit",
+                retry_after_seconds=_retry_after_seconds(exc),
+            ) from exc
         except groq.GroqError as exc:
             raise LLMProviderUnavailable("Groq request failed") from exc
+
+
+def _retry_after_seconds(error: object) -> float | None:
+    """
+    How long Groq asked the caller to wait, or None if it did not say.
+
+    Read defensively through getattr: the SDK exposes response headers on
+    APIStatusError, but this is an accounting detail on an error path in the
+    audio path, and a missing attribute must not turn a rate limit into a
+    crash.
+    """
+
+    headers = getattr(getattr(error, "response", None), "headers", None)
+
+    if headers is None:
+        return None
+
+    try:
+        return float(headers.get("retry-after"))
+    except (TypeError, ValueError):
+        return None
 
 
 def _usage_of(chunk: object) -> TokenUsage | None:

@@ -20,6 +20,7 @@ __all__ = [
     "LLMProviderError",
     "LLMProviderTimeout",
     "LLMProviderUnavailable",
+    "LLMRateLimited",
     "Message",
     "TokenUsage",
 ]
@@ -41,8 +42,28 @@ class LLMProviderTimeout(LLMProviderError):
 class LLMProviderUnavailable(LLMProviderError):
     """
     The provider rejected the request, or the connection could not be
-    established - auth failure, outage, or rate limit.
+    established - auth failure or outage.
     """
+
+
+class LLMRateLimited(LLMProviderError):
+    """
+    The provider refused this request because the caller is over its rate
+    limit, not because anything is wrong.
+
+    Separated from LLMProviderUnavailable because the two need opposite
+    responses and the difference was invisible while both were "unavailable":
+    an outage is worth retrying immediately, a per-minute token quota is the
+    one thing retrying immediately cannot fix. Observed on a real call -
+    three attempts inside eight seconds against a quota that resets after
+    sixty, each one adding to the very budget it was waiting on.
+
+    retry_after_seconds is what the provider said, when it said anything.
+    """
+
+    def __init__(self, message: str, *, retry_after_seconds: float | None = None) -> None:
+        super().__init__(message)
+        self.retry_after_seconds = retry_after_seconds
 
 
 class LLMProvider(Protocol):

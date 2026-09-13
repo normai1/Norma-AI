@@ -5,6 +5,8 @@ adapter split. app/media_session.py's LLMTurnProcessor is the adapter that
 wires this into the live pipeline.
 """
 
+import os
+
 from dataclasses import dataclass
 from typing import Literal
 
@@ -100,7 +102,23 @@ _CONTEXT_LABEL = "KNOWLEDGE"
 # turn flat instead of climbing. It is also a latency win, since first-token
 # time follows prompt size (CLAUDE.md section 37: avoid unnecessarily large
 # prompts).
-MAX_HISTORY_MESSAGES = 12
+# How many caller/assistant messages the prompt carries. Every one of them
+# is re-sent on every turn, so this is a per-turn token cost, not a one-off.
+#
+# Measured on a real call against Groq's 8,000 tokens/minute quota for
+# openai/gpt-oss-120b: a turn's prompt grew from 1,589 tokens to 2,763 as
+# history filled, of which roughly 450 was the system prompt, 1,150 the
+# retrieved context, and 1,170 this. Seven turns in, the rolling minute hit
+# 8,670 tokens and the provider started refusing - which the caller
+# experienced as the assistant going silent after six or seven exchanges.
+#
+# Lowered from 12 to 10 and made configurable. History is the cheapest of
+# the three to give up: the retrieved context is what grounds the answer and
+# the system prompt is the operator's own instructions, while the oldest
+# exchange in a ten-message window is rarely what the current question
+# depends on. Raise it if the assistant starts losing the thread; lower it
+# if turns are being refused.
+MAX_HISTORY_MESSAGES = int(os.environ.get("MAX_HISTORY_MESSAGES", "10"))
 
 
 class ConversationState:

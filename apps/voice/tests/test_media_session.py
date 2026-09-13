@@ -15,7 +15,7 @@ from starlette.websockets import WebSocketDisconnect
 import app.main as main_module
 import app.media_session as media_session_module
 from app import config
-from app.llm import LLMProviderUnavailable
+from app.llm import LLMProviderUnavailable, LLMRateLimited
 from app.main import app
 from app.media_session import (
     SpeechToTextProcessor,
@@ -2107,3 +2107,103 @@ async def test_cleanup_stops_the_speech_to_text_reconnect_loop() -> None:
     assert processor._input_ended is True, "the loop would keep reconnecting"
     # The sentinel that unblocks the audio iterator so the stream can finish.
     assert await processor._audio_queue.get() is None
+
+
+def test_a_rate_limited_turn_retries_without_retrieval_instead_of_giving_up(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """
+    Regression for "the assistant stops responding after 6-7 messages".
+
+    Groq allows 8,000 tokens a minute for openai/gpt-oss-120b. A turn's
+    prompt measured 1,589 tokens rising to 2,763 as history filled, so the
+    rolling minute crossed the quota on the seventh turn of a real call and
+    the provider began refusing. The retry loop then sent the same
+    oversized request twice more inside eight seconds - against a quota that
+    resets after sixty - and gave up, leaving the caller with silence.
+
+    A rate limit is the one failure that retrying the identical request
+    cannot fix. The retry has to be smaller, so it drops the retrieved
+    context: the largest optional part of the prompt, and the only one that
+    degrades the answer rather than removing it.
+    """
+
+    final = TranscriptEvent(text="What are your hours?", is_final=True)
+    mock_stt = MockSTT(script=[final], chunks_before_event=[1])
+
+    class _RateLimitedUntilPromptShrinks:
+        """
+        Refuses any request carrying retrieved context, exactly as the
+        provider does once the window is full, and accepts the smaller one.
+        """
+
+        def __init__(self) -> None:
+            self.systems: list[str] = []
+
+        def last_usage(self):
+            return None
+
+        async def stream(self, messages, *, system: str, temperature: float):
+            self.systems.append(system)
+
+            if "OPENING HOURS" in system:
+                raise LLMRateLimited("over the limit", retry_after_seconds=42.0)
+
+            for word in ("We", "open", "at", "nine."):
+                yield word + " "
+
+    mock_llm = _RateLimitedUntilPromptShrinks()
+
+    async def _context_with_marker(assistant_id, query, *, client=None) -> str:
+        return "OPENING HOURS: nine to five."
+
+    monkeypatch.setattr(main_module, "get_stt_provider", lambda: mock_stt)
+    monkeypatch.setattr(main_module, "get_llm_provider", lambda: mock_llm)
+    monkeypatch.setattr(main_module, "fetch_glossary_terms", _fake_fetch_glossary_terms)
+    monkeypatch.setattr(
+        main_module, "fetch_turn_sensitivity", _fake_fetch_turn_sensitivity
+    )
+    _patch_session_setup(monkeypatch)
+    monkeypatch.setattr(main_module, "get_tts_provider", lambda: MockTTS(bytes_per_character=0))
+    monkeypatch.setattr(
+        media_session_module, "fetch_retrieved_context", _context_with_marker
+    )
+    _patch_turn_detector_vad(
+        monkeypatch,
+        _ScriptedVADAnalyzer([VADState.SPEAKING, VADState.QUIET, VADState.QUIET]),
+    )
+    _capturing_record_turn_metric(monkeypatch)
+
+    assistant_id = "00000000-0000-0000-0000-0000000004a9"
+    chunk = bytes(range(256)) * 5
+    spoken: list[str] = []
+
+    with (
+        TestClient(app) as client,
+        client.websocket_connect(_media_session_url(assistant_id)) as ws,
+    ):
+        for _ in range(3):
+            ws.send_bytes(chunk)
+
+        while True:
+            entry = _receive_one(ws)
+
+            if entry[0] != "text":
+                continue
+
+            if entry[1]["type"] == "llm_complete":
+                spoken.append(entry[1]["text"])
+                break
+
+            if entry[1]["type"] == "llm_error":
+                spoken.append("ERROR")
+                break
+
+    # Two attempts: the first carrying retrieval and refused, the second
+    # without it and accepted.
+    assert len(mock_llm.systems) == 2
+    assert "OPENING HOURS" in mock_llm.systems[0]
+    assert "OPENING HOURS" not in mock_llm.systems[1]
+
+    # And the caller got an answer rather than the error message.
+    assert spoken and spoken[0] != "ERROR"
