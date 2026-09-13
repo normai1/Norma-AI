@@ -87,7 +87,21 @@ _VAD_MIN_VOLUME = float(os.environ.get("VAD_MIN_VOLUME", "0.8"))
 # answered - and neither failure is a tuning mistake so much as a question
 # an absolute threshold cannot answer. Set false to fall back to
 # VAD_MIN_VOLUME alone.
-_VAD_ADAPTIVE_FLOOR = os.environ.get("VAD_ADAPTIVE_FLOOR", "true").lower() == "true"
+# Off. It has been on once and it deafened a live call: the learned floor
+# climbed into the caller's own voice and suppressed them for eight minutes.
+# The estimator has since been rebuilt so that cannot happen (see
+# adaptive_vad.py), but the margin it needs is calibrated against a
+# deployment's own numbers, and shipping it on before those exist is the
+# mistake that caused the outage. Turn it on after shadow mode says it would
+# decide correctly.
+_VAD_ADAPTIVE_FLOOR = os.environ.get("VAD_ADAPTIVE_FLOOR", "false").lower() == "true"
+
+# Measure and log what the adaptive floor would decide, without letting it
+# decide anything. The way to collect a real distribution from a real call at
+# no risk to that call.
+_VAD_ADAPTIVE_FLOOR_SHADOW = (
+    os.environ.get("VAD_ADAPTIVE_FLOOR_SHADOW", "false").lower() == "true"
+)
 
 # How far above the measured room speech has to sit. See adaptive_vad.py.
 _VAD_NOISE_MARGIN = float(os.environ.get("VAD_NOISE_MARGIN", "0.10"))
@@ -151,6 +165,9 @@ def _build_default_vad_analyzer(*, sensitivity: float, sample_rate: int) -> VADA
     # rejecting a quiet caller in a quiet room before the adaptive gate is
     # ever consulted. Silero's *confidence* threshold does not move; it is
     # answering "is this speech at all", which does not depend on the room.
+    # Shadow mode must not change what the caller experiences, so the
+    # absolute floor stays exactly where it is; only the acting mode
+    # slackens it so the measured background can decide.
     min_volume = (
         _ADAPTIVE_DELEGATE_MIN_VOLUME if _VAD_ADAPTIVE_FLOOR else _VAD_MIN_VOLUME
     )
@@ -163,10 +180,11 @@ def _build_default_vad_analyzer(*, sensitivity: float, sample_rate: int) -> VADA
         )
     )
 
-    if _VAD_ADAPTIVE_FLOOR:
+    if _VAD_ADAPTIVE_FLOOR or _VAD_ADAPTIVE_FLOOR_SHADOW:
         analyzer = AdaptiveVolumeVADAnalyzer(
             analyzer,
             noise_floor=AdaptiveNoiseFloor(margin=_VAD_NOISE_MARGIN),
+            shadow=not _VAD_ADAPTIVE_FLOOR,
         )
 
     # The constructor's sample_rate kwarg alone does not take effect - the

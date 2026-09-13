@@ -1,17 +1,24 @@
 """
 The volume floor that follows each call's own background.
 
-These are written against the levels actually measured on this deployment,
-because the whole reason this exists is that the numbers cannot be reasoned
-about in the abstract - a fixed threshold was set from a general claim about
-microphones and was wrong in both directions. Normalized BS.1770 loudness,
-as pipecat computes it:
+These are written against levels measured on this deployment, because the
+whole reason this exists is that the numbers cannot be reasoned about in the
+abstract. Normalized BS.1770 loudness, as pipecat computes it:
 
-    0.51  the background's median, a quiet room
+    0.51  a quiet room
     0.71  the background at its loudest here
-    0.89  the caller speaking
+    0.81  the caller, as their onsets actually measured on a live call
 
-A call is working when 0.89 is admitted and 0.71 is not.
+That last figure is a correction worth keeping. An earlier version of this
+file used 0.89 for speech, taken from synthesising speech-shaped noise at the
+p90 *peak* of the caller's audio. Real onsets on a real call measured 0.78 to
+0.845 - a peak and a gating block's integrated loudness are not the same
+quantity, and the difference is the entire margin between working and deaf.
+
+Which is why the margin is not calibrated here and the gate ships off: with
+the room at 0.71 and speech at 0.81 the usable margin is under 0.10, and
+guessing it is what broke a live call. VAD_ADAPTIVE_FLOOR_SHADOW collects the
+real distribution without acting on it.
 """
 
 import pytest
@@ -20,18 +27,29 @@ from pipecat.audio.vad.vad_analyzer import VADState
 from app.adaptive_vad import (
     DEFAULT_MAX_THRESHOLD,
     DEFAULT_MIN_THRESHOLD,
+    WINDOW_BLOCKS,
     AdaptiveNoiseFloor,
     AdaptiveVolumeVADAnalyzer,
 )
 
 QUIET_ROOM = 0.51
 LOUD_ROOM = 0.71
-SPEECH = 0.89
+SPEECH = 0.81  # measured on a live call, not synthesised
 
 
-def settled(floor: AdaptiveNoiseFloor, loudness: float, *, blocks: int = 40) -> None:
+# How many blocks the underlying analyzer reports QUIET for after speech has
+# actually started. Silero's start_secs is 0.2s and a block is 0.4s, so it is
+# at least one - and one was enough to deafen a live call.
+ONSET_LAG_BLOCKS = 1
+
+
+def settled(
+    floor: AdaptiveNoiseFloor, loudness: float, *, blocks: int = WINDOW_BLOCKS
+) -> None:
+    """Feed one level until it fills the window, so the floor is that level."""
+
     for _ in range(blocks):
-        floor.observe_background(loudness)
+        floor.observe(loudness)
 
 
 def test_a_noisy_room_raises_the_bar_above_its_own_noise() -> None:
@@ -42,61 +60,73 @@ def test_a_noisy_room_raises_the_bar_above_its_own_noise() -> None:
     assert floor.admits(SPEECH), "the caller would not be heard over their own room"
 
 
-def test_a_quiet_room_lowers_the_bar_to_match() -> None:
+def test_the_same_voice_is_heard_in_a_quiet_room_and_ignored_in_a_loud_one() -> None:
     """
-    The case a fixed threshold cannot serve. In a silent room a softly
-    spoken caller is still obviously speech - they stand out - and a
-    threshold set for a noisy room would throw them away.
+    The whole point, and the thing one absolute threshold cannot express.
+
+    Deliberately not asserting that some particular level is "speech": the
+    margin is not yet calibrated against real numbers, so a test naming a
+    level would be pinning a guess. What must hold at any margin is that the
+    verdict depends on the room, not on the level alone.
+    """
+
+    quiet = AdaptiveNoiseFloor()
+    settled(quiet, QUIET_ROOM)
+
+    loud = AdaptiveNoiseFloor()
+    settled(loud, LOUD_ROOM)
+
+    assert quiet.threshold < loud.threshold
+
+    # A voice just loud enough to stand out in the quiet room.
+    stands_out_when_quiet = quiet.threshold + 0.01
+
+    assert quiet.admits(stands_out_when_quiet)
+    assert not loud.admits(stands_out_when_quiet)
+
+
+def test_the_callers_voice_cannot_raise_the_bar_against_them() -> None:
+    """
+    The regression that matters, and the one the first implementation failed
+    in production.
+
+    That version asked the analyzer which blocks were speech and folded the
+    rest into the floor. The analyzer reports QUIET for the first fifth of a
+    second of every utterance, so the caller's opening syllables - at full
+    volume - were folded in as background. On a live call the floor climbed
+    from 0.63 to 0.81 against a room measuring 0.71, hit its cap, and
+    suppressed the caller for eight minutes.
+
+    A minimum over a window cannot fail that way: however much the caller
+    talks, they are never the quietest block in twelve seconds.
     """
 
     floor = AdaptiveNoiseFloor()
-    settled(floor, QUIET_ROOM)
 
-    softly_spoken = 0.70
+    # A caller who talks most of the time, over a steady room.
+    for cycle in range(40):
+        floor.observe(QUIET_ROOM if cycle % 4 == 0 else SPEECH)
 
-    assert floor.admits(softly_spoken)
-    # And the same level in the noisy room is correctly treated as the room.
-    noisy = AdaptiveNoiseFloor()
-    settled(noisy, LOUD_ROOM)
-
-    assert not noisy.admits(softly_spoken)
-
-
-def test_the_floor_tracks_the_rooms_loud_moments_not_its_average() -> None:
-    """
-    A floor sitting at the average is cleared by the room's own peaks, which
-    is exactly what has to be rejected. Rising fast and falling slowly is
-    what keeps it above them.
-    """
-
-    floor = AdaptiveNoiseFloor()
-
-    # A room that is mostly quiet but intermittently loud.
-    for _ in range(20):
-        for _ in range(9):
-            floor.observe_background(QUIET_ROOM)
-
-        floor.observe_background(LOUD_ROOM)
-
-    assert not floor.admits(LOUD_ROOM), (
-        f"floor settled at {floor.floor:.3f}, so the room's louder moments "
-        "clear the threshold and get answered"
+    assert floor.floor == pytest.approx(QUIET_ROOM, abs=0.001), (
+        f"the floor drifted to {floor.floor:.3f} - the caller is training "
+        "the gate to ignore themselves"
     )
+    assert floor.admits(SPEECH)
 
 
-def test_a_new_noise_source_is_accommodated_within_seconds() -> None:
+def test_a_room_that_genuinely_gets_louder_raises_the_floor() -> None:
     """
-    Someone turns a television on mid-call. If the floor took a minute to
-    follow, that minute is spent answering it.
+    The other half: the floor has to follow a real change, or a television
+    switched on mid-call is answered for the rest of it.
     """
 
     floor = AdaptiveNoiseFloor()
     settled(floor, QUIET_ROOM)
 
-    # 400ms per block, so ten blocks is four seconds.
-    for _ in range(10):
-        floor.observe_background(LOUD_ROOM)
+    # The room's new level, for one window's worth of blocks.
+    settled(floor, LOUD_ROOM)
 
+    assert floor.floor == pytest.approx(LOUD_ROOM, abs=0.001)
     assert not floor.admits(LOUD_ROOM)
 
 
@@ -202,10 +232,11 @@ async def test_a_speech_onset_that_does_not_stand_out_is_suppressed() -> None:
     analyzer calls the room speech, and the wrapper declines to pass it on.
     """
 
-    # Four quiet blocks to learn the room, then the analyzer reports speech
-    # at that same level - which is the room, not the caller.
-    states = [VADState.QUIET] * 4 + [VADState.SPEAKING] * 3
-    levels = [LOUD_ROOM] * 4 + [LOUD_ROOM] * 3
+    # Enough quiet blocks for the window to mean something, then the
+    # analyzer reports speech at that same level - which is the room.
+    learn = WINDOW_BLOCKS
+    states = [VADState.QUIET] * learn + [VADState.SPEAKING] * 3
+    levels = [LOUD_ROOM] * learn + [LOUD_ROOM] * 3
 
     analyzer = _analyzer(states, levels)
     verdicts = await _feed(analyzer, levels)
@@ -215,8 +246,9 @@ async def test_a_speech_onset_that_does_not_stand_out_is_suppressed() -> None:
 
 
 async def test_the_caller_speaking_over_the_same_room_is_passed_through() -> None:
-    states = [VADState.QUIET] * 4 + [VADState.SPEAKING] * 3
-    levels = [LOUD_ROOM] * 4 + [SPEECH] * 3
+    learn = WINDOW_BLOCKS
+    states = [VADState.QUIET] * learn + [VADState.SPEAKING] * 3
+    levels = [LOUD_ROOM] * learn + [SPEECH] * 3
 
     analyzer = _analyzer(states, levels)
     verdicts = await _feed(analyzer, levels)
@@ -232,10 +264,11 @@ async def test_the_verdict_is_taken_once_at_the_onset_and_then_held() -> None:
     is a worse version of the bug being fixed.
     """
 
-    states = [VADState.QUIET] * 4 + [VADState.SPEAKING] * 4
+    learn = WINDOW_BLOCKS
+    states = [VADState.QUIET] * learn + [VADState.SPEAKING] * 4
     # The caller starts clearly, then trails off to a level that on its own
     # would not have opened the gate.
-    levels = [LOUD_ROOM] * 4 + [SPEECH, SPEECH, LOUD_ROOM, LOUD_ROOM]
+    levels = [LOUD_ROOM] * learn + [SPEECH, SPEECH, LOUD_ROOM, LOUD_ROOM]
 
     analyzer = _analyzer(states, levels)
     verdicts = await _feed(analyzer, levels)
@@ -243,21 +276,26 @@ async def test_the_verdict_is_taken_once_at_the_onset_and_then_held() -> None:
     assert verdicts[-4:] == [VADState.SPEAKING] * 4
 
 
-async def test_the_callers_own_voice_never_trains_the_gate_against_them() -> None:
+async def test_a_caller_who_never_pauses_is_still_heard() -> None:
     """
-    The failure mode of a naive implementation that folds everything into
-    the floor: a talkative caller raises the bar until they can no longer
-    clear it, and the assistant goes deaf to the person using it.
+    The minimum estimator's own worst case, pinned so the safety net is
+    explicit rather than incidental.
+
+    A caller who talks for a whole window without one quiet block drags the
+    floor up towards their own voice. The maximum-threshold clamp is what
+    stops that deafening them, and it only works because the clamp sits
+    below the level real speech reaches - the mistake caught the first time
+    round, when it was set above.
     """
 
-    states = [VADState.QUIET] * 2 + [VADState.SPEAKING] * 30
-    levels = [QUIET_ROOM] * 2 + [SPEECH] * 30
+    floor = AdaptiveNoiseFloor()
+    settled(floor, SPEECH, blocks=WINDOW_BLOCKS + 10)
 
-    analyzer = _analyzer(states, levels)
-    await _feed(analyzer, levels)
-
-    assert analyzer.noise_floor.admits(SPEECH)
-    assert analyzer.noise_floor.floor == pytest.approx(QUIET_ROOM, abs=0.01)
+    assert floor.floor == pytest.approx(SPEECH, abs=0.001)
+    assert floor.admits(SPEECH), (
+        "an unbroken monologue raised the floor past the caller's own voice "
+        "and the clamp did not catch it"
+    )
 
 
 async def test_an_unmeasurable_block_does_not_take_the_call_down() -> None:
@@ -297,3 +335,76 @@ def test_even_a_deafening_room_leaves_real_speech_audible() -> None:
         f"a room at 0.95 clamps the threshold to {floor.threshold}, which "
         f"speech at {SPEECH} cannot clear - the caller is deaf again"
     )
+
+
+async def test_the_live_failure_replayed() -> None:
+    """
+    The call that this feature broke, reconstructed from its logs.
+
+    A room at 0.71, a caller at 0.89, and - the detail the original test
+    missed - the underlying analyzer reporting QUIET for the first block of
+    every utterance, because its start_secs lags the real onset. The first
+    implementation folded those full-volume blocks into the background as if
+    they were the room. Over the call the floor climbed 0.63, 0.72, 0.76,
+    0.80, 0.81, hit its cap, and suppressed the caller for eight minutes.
+
+    The floor must stay on the room, and no caller onset may be suppressed.
+    """
+
+    states: list[VADState] = []
+    levels: list[float] = []
+
+    for _ in range(WINDOW_BLOCKS + 10):
+        states.append(VADState.QUIET)
+        levels.append(LOUD_ROOM)
+
+    for _ in range(8):
+        # The onset the analyzer has not noticed yet: the caller, at full
+        # volume, labelled QUIET.
+        for _ in range(ONSET_LAG_BLOCKS):
+            states.append(VADState.QUIET)
+            levels.append(SPEECH)
+
+        for _ in range(4):
+            states.append(VADState.SPEAKING)
+            levels.append(SPEECH)
+
+        for _ in range(3):
+            states.append(VADState.QUIET)
+            levels.append(LOUD_ROOM)
+
+    analyzer = _analyzer(states, levels)
+    await _feed(analyzer, levels)
+
+    assert analyzer.noise_floor.floor == pytest.approx(LOUD_ROOM, abs=0.001), (
+        f"the floor drifted to {analyzer.noise_floor.floor:.3f} against a "
+        f"room at {LOUD_ROOM} - the caller's own onsets are training it"
+    )
+    # Deliberately not asserting a suppression count: that depends on the
+    # margin, which is uncalibrated. What must hold at any margin is that
+    # the caller's own onsets did not move the floor.
+
+
+async def test_shadow_mode_reports_without_acting() -> None:
+    """
+    How the margin gets calibrated against a deployment's real numbers
+    without risking a call on an uncalibrated guess - which is how this went
+    wrong the first time.
+    """
+
+    learn = WINDOW_BLOCKS
+    states = [VADState.QUIET] * learn + [VADState.SPEAKING] * 3
+    levels = [LOUD_ROOM] * learn + [LOUD_ROOM] * 3
+
+    remaining = list(levels)
+    analyzer = AdaptiveVolumeVADAnalyzer(
+        _ScriptedDelegate(states),
+        volume_of=lambda _b, _s: remaining.pop(0) if remaining else levels[-1],
+        shadow=True,
+    )
+    verdicts = await _feed(analyzer, levels)
+
+    # It would have suppressed these, and says so - but the call is
+    # unaffected.
+    assert analyzer.suppressed_runs == 1
+    assert verdicts[-3:] == [VADState.SPEAKING] * 3
