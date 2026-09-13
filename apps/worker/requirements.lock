@@ -1,14 +1,23 @@
 # GENERATED FILE - do not edit by hand.
 #
 # Every package installed for apps/worker, transitive dependencies
-# included, at the versions a clean resolve of requirements.txt produced.
+# included, at the version and artefact hash a clean resolve of
+# requirements.txt produced. The Dockerfile installs this with
+# --require-hashes, so pip refuses anything whose bytes differ from
+# what was resolved here.
+#
 # Regenerate with scripts/lock-python-deps.sh, then rebuild and run the
 # suite. To change a version, change requirements.txt and regenerate -
 # editing this file directly makes the two disagree, and the Dockerfile
 # installs this one.
 #
-# Resolved on python:3.12-slim, linux/amd64.
+# Resolved on python:3.12-slim, linux/amd64. One hash per package, for
+# the artefact that platform resolves to: a build elsewhere fails
+# loudly rather than quietly installing something else.
 
-hiredis==3.4.1
-python-dotenv==1.2.3
-redis==8.1.0
+hiredis==3.4.1 \
+    --hash=sha256:7a2cd31cba425ae954abeafa5dd74552e5ffa61661d3c8098cc66787330c1779
+python-dotenv==1.2.3 \
+    --hash=sha256:904552145e8bfed22162c09dab1c2b9b54fefa7b23ba780f4f26ca0316b0f0d9
+redis==8.1.0 \
+    --hash=sha256:a4fe1aac3d3b3cc791d4b3d5931c5a956045dc951ee74d1c913ee3ac4d2ee9fb

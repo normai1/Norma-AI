@@ -765,13 +765,15 @@ Do not use `localhost` for inter-container communication.
 Each Python service has two files, and they do different jobs:
 
 - `apps/<service>/requirements.txt` — **intent**. What this service asks for, pinned exactly (`==`, never `>=` or a bare name), with a comment on anything non-obvious.
-- `apps/<service>/requirements.lock` — **resolution**. Every package that ends up installed, transitive dependencies included, at the versions a clean resolve produced. Generated, committed, and what the Dockerfiles actually install.
+- `apps/<service>/requirements.lock` — **resolution**. Every package that ends up installed, transitive dependencies included, at the version *and sha256 of the artefact* a clean resolve produced. Generated, committed, and what the Dockerfiles actually install, with `--require-hashes` — so pip refuses the build outright if any downloaded byte differs.
 
 Regenerate with `scripts/lock-python-deps.sh`, which resolves `requirements.txt` in a throwaway `python:3.12-slim` container — not by freezing a long-running service container, which would capture anything hand-installed into it. Then rebuild, run that app's suite, and for anything the audio path touches make a real test call.
 
 This exists because it went wrong: the media plane's real-time framework moved from pipecat 1.8.1 to 1.10.0 as a side effect of rebuilding for an unrelated change, under a live call path, with nobody having read a changelog. **An upgrade is a commit with evidence behind it, never something a rebuild does quietly.**
 
-The locks are linux/amd64, which is what the images are. A host virtualenv used to run a suite on another platform is not covered by them.
+The shared package at `/packages/shared` is deliberately absent from the locks and installed separately with `--no-deps`: `--require-hashes` rejects any unhashed requirement, and a local source tree copied in from the build context has no meaningful artefact hash.
+
+The locks are linux/amd64 and CPython 3.12, which is what the images are, with one hash per package for the artefact that platform resolves to — a build elsewhere fails loudly rather than quietly installing something else. A host virtualenv used to run a suite on another platform is not covered by them.
 
 ### Public tunnel requirement
 

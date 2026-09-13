@@ -13,8 +13,12 @@ WORKDIR /app
 # so the image carries the intent alongside the resolution.
 COPY requirements.txt requirements.lock ./
 
+# --require-hashes: pip verifies every downloaded artefact against the lock
+# and refuses the install if any byte differs, so a version number cannot
+# quietly resolve to different content than the one this was built and
+# tested against.
 RUN pip install --no-cache-dir --upgrade pip \
-    && pip install --no-cache-dir -r requirements.lock
+    && pip install --no-cache-dir --require-hashes -r requirements.lock
 
 COPY . .
 
