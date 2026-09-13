@@ -415,24 +415,26 @@ def _speech_shaped_pcm(peak: int, *, sample_rate: int = 16000) -> bytes:
     return (signal / np.max(np.abs(signal)) * peak).astype(np.int16).tobytes()
 
 
-def test_the_volume_floor_admits_ordinary_speech_and_rejects_the_quiet_room() -> None:
+def test_the_volume_floor_sits_between_this_deployments_speech_and_its_room() -> None:
     """
     Both halves of a trade this project has now got wrong in both
-    directions, pinned against measured levels rather than against
-    pipecat's defaults.
+    directions, pinned against levels measured from real calls rather than
+    against a general claim about microphones.
 
     First the assistant answered voices in the room behind the caller, and
-    the volume floor went up. Then a real call arrived with peaks of 98-582
-    (-50 to -35 dBFS) against a configured 0.8, which needs -17.8 dBFS: the
-    speech-to-text provider still transcribed a word from it, the VAD never
-    reported speech, so no turn ever ended and the caller heard nothing for
-    the entire call.
+    the floor went up. Then a machine whose microphone delivered -46 dBFS
+    heard nothing at all - the transcriber produced words from it, the VAD
+    never reported speech, and the caller sat in silence for a whole call -
+    so the floor came down to pipecat's 0.6. The microphone was then fixed,
+    and 0.6 started admitting the room again: it counted 53% of all audio as
+    the caller talking, which is not what one participant in a conversation
+    does.
 
-    The floor is not a fraction of full scale - it is normalized BS.1770
-    loudness - so asserting on the number alone says nothing about which
-    callers it can hear. These two levels do: conversational speech on a
-    laptop microphone peaks around -30 to -20 dBFS, and a voice across the
-    room arrives far below that.
+    619 two-second windows of real calls say where the line goes. The
+    distribution is bimodal - a background floor around a median peak of 448
+    (-37 dBFS) and speech at p90 of 11466 (-9 dBFS) - and these two levels
+    are taken from it: p75, the loudest the background gets, must be
+    rejected, and p90, real speech, must be admitted.
     """
 
     from pipecat.audio.utils import calculate_audio_volume
@@ -443,15 +445,19 @@ def test_the_volume_floor_admits_ordinary_speech_and_rejects_the_quiet_room() ->
     floor = analyzer._params.min_volume
 
     # Silero also has to agree it is speech; this is only the volume gate.
-    ordinary_speech = calculate_audio_volume(_speech_shaped_pcm(1843), 16000)
-    distant_room = calculate_audio_volume(_speech_shaped_pcm(184), 16000)
+    speech = calculate_audio_volume(_speech_shaped_pcm(11466), 16000)
+    loudest_background = calculate_audio_volume(_speech_shaped_pcm(1501), 16000)
 
-    assert ordinary_speech >= floor, (
-        f"a caller at -25 dBFS measures {ordinary_speech:.3f}, below the "
-        f"{floor} floor - they would be heard by the transcriber and ignored "
-        "by turn detection, which the caller experiences as silence"
+    assert speech >= floor, (
+        f"measured speech at -9 dBFS gives {speech:.3f}, below the {floor} "
+        "floor - the caller would be transcribed and then ignored by turn "
+        "detection, which they experience as silence"
     )
-    assert distant_room < floor
+    assert loudest_background < floor, (
+        f"measured background at -27 dBFS gives {loudest_background:.3f}, "
+        f"at or above the {floor} floor - the room would be answered as if "
+        "it were the caller"
+    )
 
     # The certainty half is unchanged: pipecat's 0.7 is tuned for "is anyone
     # speaking anywhere" rather than "is the person on this call speaking".
@@ -521,3 +527,73 @@ async def test_heard_speech_clears_once_a_turn_has_ended() -> None:
 
     assert detector.turn_ended() is True
     assert detector.heard_speech is False
+
+
+async def test_a_turn_never_ends_on_words_the_vad_never_heard() -> None:
+    """
+    Regression for "it randomly takes any voice and generates any question".
+
+    The transcriber hears the whole call and commits anything it can make
+    words out of - a television, a voice across the room - and it is far
+    more willing to do that than the VAD is to call something speech. The
+    damage is not that the text is stored, it is that a turn can then *end*
+    on it: the caller makes some sound the VAD accepts, silence follows, and
+    the pending transcript that gets sent to the model is a sentence from
+    the room. The assistant answers a question nobody asked.
+
+    Here the caller's own sound produces no transcript of its own - the
+    realistic case, since the VAD accepts a cough or a chair before the
+    transcriber has anything to commit.
+    """
+
+    clock = _FakeClock()
+    vad = _ScriptedVADAnalyzer([VADState.QUIET, VADState.SPEAKING, VADState.QUIET])
+    detector = TurnDetector(sensitivity=0.5, sample_rate=16_000, vad_analyzer=vad, clock=clock)
+
+    # The room, which the VAD does not accept as the caller.
+    await detector.feed_audio(b"a television in the next room")
+    detector.feed_transcript("Book me a table for four tonight.", is_final=True)
+
+    # The caller makes a noise the VAD does accept, but says nothing the
+    # transcriber commits.
+    clock.value = 1.0
+    await detector.feed_audio(b"a cough")
+
+    # Then silence, long enough to end a turn.
+    clock.value = 2.0
+    await detector.feed_audio(b"silence")
+
+    assert detector.turn_ended() is False, (
+        "a turn ended carrying a sentence the VAD never attributed to the "
+        "caller - the assistant would answer a question from the room"
+    )
+    assert detector.last_final_transcript == ""
+
+
+async def test_a_transcript_arriving_just_after_the_caller_stops_is_still_theirs() -> None:
+    """
+    The guard must not eat genuine speech. A transcriber commits *after* the
+    speech ends - it needs the silence to know the utterance is over - so
+    the transcript for a real turn routinely arrives when the VAD has
+    already gone quiet. What matters is that the VAD heard speech at some
+    point in this turn, not that it is hearing it at the instant the words
+    land.
+    """
+
+    clock = _FakeClock()
+    vad = _ScriptedVADAnalyzer([VADState.SPEAKING, VADState.QUIET, VADState.QUIET])
+    detector = TurnDetector(sensitivity=0.5, sample_rate=16_000, vad_analyzer=vad, clock=clock)
+
+    await detector.feed_audio(b"the caller speaking")
+
+    clock.value = 0.4
+    await detector.feed_audio(b"they have stopped")
+
+    # Only now does the transcriber commit.
+    detector.feed_transcript("Can you book me in for Tuesday?", is_final=True)
+
+    clock.value = 0.9
+    await detector.feed_audio(b"still quiet")
+
+    assert detector.turn_ended() is True
+    assert detector.last_final_transcript == "Can you book me in for Tuesday?"

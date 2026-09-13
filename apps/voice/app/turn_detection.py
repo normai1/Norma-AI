@@ -8,6 +8,7 @@ context_builder.py precedent - app/media_session.py is the thin adapter
 that wires this into the live pipeline.
 """
 
+import logging
 import os
 import time
 from collections.abc import Callable
@@ -21,6 +22,8 @@ from pipecat.audio.vad.vad_analyzer import VADAnalyzer, VADParams, VADState
 # (most eager) reports it after well under half a second. Starting values,
 # not tuned against real call data - see this feature's spec for why that
 # tuning is explicitly out of scope here.
+logger = logging.getLogger(__name__)
+
 _MIN_STOP_SECS = 0.3
 _MAX_STOP_SECS = 1.5
 
@@ -50,16 +53,31 @@ _MAX_STOP_SECS = 1.5
 #     0.7 -> peak 1341       (-27.8 dBFS)
 #     0.6 -> peak  425       (-37.7 dBFS), pipecat's own default
 #
-# Normal conversational speech on a laptop microphone peaks around -30 to
-# -20 dBFS, so 0.7 sits right at the edge of ordinary speech and 0.8 is past
-# it. A real call was found delivering peaks of 98-582 (-50 to -35 dBFS)
-# against a configured 0.8: the speech-to-text provider still transcribed a
-# word from it, while the VAD never reported speech, so no turn ever ended
-# and the caller heard nothing at all for the whole call. Defaulting to
-# pipecat's 0.6 instead - the volume floor is still the lever that separates
-# the caller from the room, but it has to clear the caller first.
+# This project has now had both failures, in both directions, and the lesson
+# is that the number cannot be chosen from a general claim about microphones.
+#
+# First the assistant answered voices in the room, and the floor went up.
+# Then a machine whose microphone was delivering -46 dBFS heard nothing at
+# all: the transcriber still produced words from it, the VAD never reported
+# speech, no turn ever ended, and the caller sat in silence for a whole call.
+# The floor came down to 0.6 to compensate. The microphone was then fixed -
+# and 0.6, which had been compensating for it, started admitting the room
+# again.
+#
+# So it is set from measured audio. Over 619 two-second windows of real calls
+# the distribution is strongly bimodal: a background floor with a median peak
+# of 448 (-37 dBFS), speech at p90 of 11466 (-9 dBFS), and a wide gap between
+# roughly 1500 and 11000 where a threshold belongs. 0.8 asks for 4235, inside
+# that gap. The share of a call each value calls speech says the rest: 0.6
+# counts 53% of all audio as the caller talking, 0.7 counts 26%, 0.8 counts
+# 15%. One participant in a conversation is not talking half the time.
+#
+# The honest limit: this is one absolute threshold serving two jobs - hear
+# this caller, ignore that room - and it can only do both while the two are
+# far apart in level. Making it relative to each call's own measured noise
+# floor is the real answer and is not built.
 _VAD_CONFIDENCE = float(os.environ.get("VAD_CONFIDENCE", "0.8"))
-_VAD_MIN_VOLUME = float(os.environ.get("VAD_MIN_VOLUME", "0.6"))
+_VAD_MIN_VOLUME = float(os.environ.get("VAD_MIN_VOLUME", "0.8"))
 
 # How long sustained silence may persist with a semantically-incomplete
 # transcript before the turn ends anyway. Roughly double the most patient
@@ -210,7 +228,30 @@ class TurnDetector:
         """
 
         if is_final and text.strip():
-            self._pending_transcript = text
+            if not self._ever_spoken:
+                # The VAD has not confirmed the caller speaking since the
+                # last turn ended, so whatever was transcribed was not them:
+                # a voice across the room, a television, a passing
+                # conversation. The transcriber hears the whole call and
+                # commits anything it can make words out of, and it is much
+                # more willing to do that than the VAD is to call something
+                # speech.
+                #
+                # Dropping it does not change whether a turn fires - a turn
+                # already cannot end without _ever_spoken - it changes what
+                # the turn is *about*. Kept, this text sat in
+                # _pending_transcript until the caller genuinely spoke, and
+                # then went to the model as part of their question. Reported
+                # as the assistant "randomly taking any voice and generating
+                # any question".
+                #
+                # The word count, never the words (CLAUDE.md section 27).
+                logger.info(
+                    "ignoring a transcript the vad never heard: words=%d",
+                    len(text.split()),
+                )
+            else:
+                self._pending_transcript = text
 
         self._recompute()
 
