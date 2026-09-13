@@ -1,0 +1,88 @@
+# GENERATED FILE - do not edit by hand.
+#
+# Every package installed for apps/voice, transitive dependencies
+# included, at the versions a clean resolve of requirements.txt produced.
+# Regenerate with scripts/lock-python-deps.sh, then rebuild and run the
+# suite. To change a version, change requirements.txt and regenerate -
+# editing this file directly makes the two disagree, and the Dockerfile
+# installs this one.
+#
+# Resolved on python:3.12-slim, linux/amd64.
+
+aiofiles==25.1.0
+aiohappyeyeballs==2.7.1
+aiohttp==3.14.3
+aiosignal==1.4.0
+annotated-doc==0.0.5
+annotated-types==0.8.0
+anthropic==1.5.0
+anyio==4.15.1
+attrs==26.1.0
+certifi==2026.7.22
+click==8.5.0
+cloudpickle==3.1.2
+defusedxml==0.7.1
+distro==1.9.0
+docopt==0.6.2
+docstring_parser==0.18.0
+fastapi==0.141.1
+flatbuffers==25.12.19
+frozenlist==1.8.0
+groq==1.7.0
+h11==0.16.0
+httpcore2==2.12.0
+httpcore==1.0.9
+httptools==0.8.0
+httpx2==2.12.0
+httpx==0.28.1
+idna==3.19
+iniconfig==2.3.0
+jiter==0.17.0
+joblib==1.6.0
+llvmlite==0.49.0
+loguru==0.7.3
+loudness==0.2.0
+Markdown==3.10.3
+mpmath==1.3.0
+multidict==6.8.0
+nltk==3.10.3
+num2words==0.5.14
+numba==0.67.0
+numpy==2.5.3
+onnxruntime==1.24.4
+openai==2.54.0
+packaging==26.3
+pillow==12.3.0
+pipecat-ai==1.8.1
+pluggy==1.6.0
+propcache==0.5.2
+protobuf==6.33.6
+pydantic==2.13.5
+pydantic_core==2.46.5
+Pygments==2.21.0
+PyJWT==2.14.0
+pytest-asyncio==1.4.0
+pytest==9.1.1
+python-dotenv==1.2.3
+PyYAML==6.0.3
+regex==2026.9.10
+resampy==0.4.3
+ruff==0.16.7
+sniffio==1.3.1
+soxr==1.0.0
+starlette==1.6.0
+sympy==1.14.0
+tqdm==4.70.1
+truststore==0.10.4
+typing-inspection==0.4.4
+typing_extensions==4.16.0
+uvicorn==0.52.4
+uvloop==0.22.1
+watchfiles==1.2.0
+websockets==17.1
+yarl==1.24.5
+
+# The package shared with the other plane, installed editable from
+# the build context docker-compose.yml mounts at /packages/shared.
+# Not a versioned release, so it is carried here rather than frozen.
+-e /packages/shared

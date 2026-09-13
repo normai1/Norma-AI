@@ -760,6 +760,19 @@ Host    → localhost:6379   (redis)
 
 Do not use `localhost` for inter-container communication.
 
+### Python dependencies are locked
+
+Each Python service has two files, and they do different jobs:
+
+- `apps/<service>/requirements.txt` — **intent**. What this service asks for, pinned exactly (`==`, never `>=` or a bare name), with a comment on anything non-obvious.
+- `apps/<service>/requirements.lock` — **resolution**. Every package that ends up installed, transitive dependencies included, at the versions a clean resolve produced. Generated, committed, and what the Dockerfiles actually install.
+
+Regenerate with `scripts/lock-python-deps.sh`, which resolves `requirements.txt` in a throwaway `python:3.12-slim` container — not by freezing a long-running service container, which would capture anything hand-installed into it. Then rebuild, run that app's suite, and for anything the audio path touches make a real test call.
+
+This exists because it went wrong: the media plane's real-time framework moved from pipecat 1.8.1 to 1.10.0 as a side effect of rebuilding for an unrelated change, under a live call path, with nobody having read a changelog. **An upgrade is a commit with evidence behind it, never something a rebuild does quietly.**
+
+The locks are linux/amd64, which is what the images are. A host virtualenv used to run a suite on another platform is not covered by them.
+
 ### Public tunnel requirement
 
 Inbound telephony webhooks and media streams **cannot reach a local machine directly**. Development requires a public tunnel (ngrok or equivalent), and the tunnel URL must be configured with the telephony provider. This is a required setup step, not an optional convenience. Document it and keep the tunnel URL in `.env`, never committed.

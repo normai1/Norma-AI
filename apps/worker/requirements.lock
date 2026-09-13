@@ -1,0 +1,14 @@
+# GENERATED FILE - do not edit by hand.
+#
+# Every package installed for apps/worker, transitive dependencies
+# included, at the versions a clean resolve of requirements.txt produced.
+# Regenerate with scripts/lock-python-deps.sh, then rebuild and run the
+# suite. To change a version, change requirements.txt and regenerate -
+# editing this file directly makes the two disagree, and the Dockerfile
+# installs this one.
+#
+# Resolved on python:3.12-slim, linux/amd64.
+
+hiredis==3.4.1
+python-dotenv==1.2.3
+redis==8.1.0
