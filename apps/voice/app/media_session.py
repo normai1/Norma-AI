@@ -1651,6 +1651,28 @@ class TTSProcessor(FrameProcessor):
         # enough about the decision to tell, from a real call's logs,
         # whether an interruption was seen, and if it was ignored, which
         # guard ignored it.
+        # The room is not an interruption. A transcriber will make words
+        # out of a television or a passing conversation, and acting on those
+        # cancels the reply - the assistant stopping mid-sentence at a noise.
+        # So a mid-reply transcript only counts if the VAD heard the caller
+        # themselves recently; see BARGE_IN_SPEECH_WINDOW_SECONDS for why a
+        # window rather than "right now".
+        since_speech = self._turn_detector.seconds_since_speech()
+
+        if (
+            since_speech is None
+            or since_speech > config.BARGE_IN_SPEECH_WINDOW_SECONDS
+        ):
+            logger.info(
+                "barge-in candidate ignored, the vad has not heard the caller: "
+                "assistant=%s words=%d since_speech=%s",
+                self._assistant_id,
+                len(_normalized_words(text)),
+                "never" if since_speech is None else f"{since_speech:.1f}s",
+            )
+
+            return
+
         if _mostly_already_said(text, self._current_turn_text):
             logger.info(
                 "barge-in candidate ignored as own turn: assistant=%s is_final=%s words=%d",

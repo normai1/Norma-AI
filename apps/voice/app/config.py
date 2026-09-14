@@ -167,3 +167,22 @@ STT_DEAF_WATCHDOG_SECONDS = float(os.environ.get("STT_DEAF_WATCHDOG_SECONDS", "5
 STT_DEAF_WATCHDOG_POLL_SECONDS = float(
     os.environ.get("STT_DEAF_WATCHDOG_POLL_SECONDS", "2.0")
 )
+
+
+# How recently the VAD must have confirmed the caller speaking for a
+# mid-reply transcript to count as an interruption (item 20e's barge-in).
+#
+# The transcriber hears the whole call and will make words out of a
+# television, a passing conversation or a door closing. Without this, any of
+# those cancels the reply, which the caller experiences as the assistant
+# stopping mid-sentence at a noise - reported twice. Requiring the VAD to
+# have heard *them* recently is what separates an interruption from the room.
+#
+# A window rather than "right now" because a transcript arrives after the
+# audio it describes: a caller who has just stopped talking would fail an
+# instantaneous check and lose a real interruption. Two seconds is long
+# enough to cover the transcriber's lag and short enough that a noise
+# arriving well after the caller last spoke is not mistaken for them.
+BARGE_IN_SPEECH_WINDOW_SECONDS = float(
+    os.environ.get("BARGE_IN_SPEECH_WINDOW_SECONDS", "2.0")
+)

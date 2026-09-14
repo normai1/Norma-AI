@@ -1038,6 +1038,98 @@ def test_media_session_interruption_transcript_stops_the_reply_without_a_vad_edg
     assert {"type": "playback_cancelled"} in messages
 
 
+def test_a_transcript_the_vad_never_heard_does_not_stop_the_reply(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """
+    The reported bug: the caller speaks over a reply and has to sit through
+    the rest of it before being answered. Turn detection latches for the
+    whole reply, and the only signal that breaks that latch early -
+    caller_speech_started - is a VAD onset *edge* the assistant's own audio
+    in an open mic can hold high straight through the caller starting to
+    talk. This scripts exactly that: VAD never reports a fresh onset after
+    the first turn, so no caller_speech_started can fire, and the second
+    final transcript is the only evidence the caller said anything. The
+    reply must still be cut off.
+    """
+
+    # The interrupting final is held back until a fourth chunk arrives, which
+    # the body below only sends once the reply is audibly under way - an
+    # interruption has to land *during* a reply to be one at all.
+    mock_stt = MockSTT(
+        script=[
+            TranscriptEvent(text="What are your hours?", is_final=True),
+            TranscriptEvent(text="Actually cancel that.", is_final=True),
+        ],
+        chunks_before_event=[1, 4],
+    )
+    mock_llm = MockLLM(response="We open at nine. We close at five. See you then.")
+    # Slow enough that the reply is unambiguously still in flight when the
+    # interrupting transcript lands.
+    mock_tts = MockTTS(time_to_first_byte_seconds=0.4)
+
+    monkeypatch.setattr(main_module, "get_stt_provider", lambda: mock_stt)
+    monkeypatch.setattr(main_module, "get_llm_provider", lambda: mock_llm)
+    monkeypatch.setattr(main_module, "fetch_glossary_terms", _fake_fetch_glossary_terms)
+    monkeypatch.setattr(main_module, "fetch_turn_sensitivity", _fake_fetch_turn_sensitivity)
+    _patch_session_setup(monkeypatch)
+    monkeypatch.setattr(main_module, "get_tts_provider", lambda: mock_tts)
+    monkeypatch.setattr(
+        media_session_module, "fetch_retrieved_context", _fake_fetch_retrieved_context
+    )
+    # SPEAKING only for the very first chunk, then quiet forever: the first
+    # turn gets its onset edge, the interruption never does.
+    _patch_turn_detector_vad(
+        monkeypatch,
+        _ScriptedVADAnalyzer([VADState.SPEAKING, VADState.QUIET, VADState.QUIET]),
+    )
+
+    # Everything the VAD heard is now outside the window, so a transcript
+    # arriving here is the room rather than the caller.
+    monkeypatch.setattr(config, "BARGE_IN_SPEECH_WINDOW_SECONDS", 0.0)
+
+    assistant_id = "00000000-0000-0000-0000-00000000001c"
+    chunk = bytes(range(256)) * 5
+
+    with (
+        TestClient(app) as client,
+        client.websocket_connect(_media_session_url(assistant_id)) as ws,
+    ):
+        for _ in range(3):
+            ws.send_bytes(chunk)
+
+        messages = []
+
+        # Wait until the reply is actually being spoken before interrupting.
+        while True:
+            kind, value = _receive_one(ws)
+
+            if kind == "text":
+                messages.append(value)
+            elif kind == "bytes":
+                break
+
+        # The fourth chunk releases the interrupting final transcript.
+        ws.send_bytes(chunk)
+
+        while True:
+            kind, value = _receive_one(ws)
+
+            if kind == "text":
+                messages.append(value)
+
+                # reply_finished here is the cancelled reply's own reset,
+                # which is what proves it was cut off rather than played out.
+                if value == {"type": "reply_finished"}:
+                    break
+
+    assert not mock_tts.cancelled, (
+        "background noise cancelled the reply - the caller hears the "
+        "assistant stop mid-sentence at a noise"
+    )
+    assert {"type": "playback_cancelled"} not in messages
+
+
 def test_media_session_does_not_treat_its_own_echo_as_an_interruption(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

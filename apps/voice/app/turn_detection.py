@@ -233,6 +233,11 @@ class TurnDetector:
         self._ended_turn_text = ""
         self._turn_ended = False
         self._is_speaking = False
+        # When the VAD last confirmed speech, on the injected clock.
+        # A level, not an edge: barge-in needs to ask "is the caller
+        # talking right now", which an onset edge cannot answer once the
+        # assistant's own audio has held the signal high through it.
+        self._last_speech_at: float | None = None
 
     async def feed_audio(self, chunk: bytes) -> None:
         """
@@ -258,6 +263,9 @@ class TurnDetector:
 
         state = await self._vad_analyzer.analyze_audio(chunk)
         self._is_speaking = state == VADState.SPEAKING
+
+        if self._is_speaking:
+            self._last_speech_at = self._clock()
 
         if state == VADState.SPEAKING:
             self._ever_spoken = True
@@ -342,6 +350,28 @@ class TurnDetector:
         """
 
         return self._ever_spoken
+
+    def seconds_since_speech(self) -> float | None:
+        """
+        How long since the VAD last confirmed the caller speaking, or None
+        if it never has this session.
+
+        What barge-in asks before believing a transcript. A transcriber hears
+        the whole call and will make words out of a television, a passing
+        conversation or a door; if the VAD has not heard the caller at all
+        recently, those words are not an interruption and cancelling the
+        reply for them is the assistant falling silent at background noise.
+
+        Deliberately a window rather than "right now". The transcript arrives
+        after the audio it describes, so a caller who has just stopped
+        speaking would fail an instantaneous check and lose a real
+        interruption.
+        """
+
+        if self._last_speech_at is None:
+            return None
+
+        return self._clock() - self._last_speech_at
 
     @property
     def is_speaking(self) -> bool:
