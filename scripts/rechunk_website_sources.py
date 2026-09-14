@@ -80,7 +80,11 @@ async def main() -> int:
     from app.providers.factory import get_embedding_provider
     from app.repositories import chunk as chunk_repo
     from app.repositories.chunk import ChunkWrite
-    from app.services.chunker import MAX_CHUNK_TOKENS, chunk_text
+    from app.services.chunker import (
+        MAX_CHUNK_TOKENS,
+        chunk_text,
+        drop_repeated_spans,
+    )
     from app.services.embedding_batch import embed_in_batches
 
     assistant_id = uuid.UUID(args.assistant)
@@ -145,12 +149,19 @@ async def main() -> int:
                 for span in chunk_text(page.extracted_text)
             ]
 
+            # The same dedupe the crawl path applies, so a re-chunk produces
+            # what a fresh crawl would rather than quietly differing from it.
+            before_dedupe = len(spans_by_url)
+            spans_by_url = drop_repeated_spans(spans_by_url)
+            repeated = before_dedupe - len(spans_by_url)
+
             sizes = sorted(len(span.text) for _url, span in spans_by_url)
             median = sizes[len(sizes) // 2] if sizes else 0
 
             print(f"source {str(source.id)[:8]} ({source.source_url or 'website'})")
             print(f"  {len(pages)} stored pages")
             print(f"  {existing} chunks now -> {len(spans_by_url)} after re-chunking")
+            print(f"  {repeated} repeated across pages, dropped")
             print(
                 f"  new chunk size: median {median} chars, "
                 f"max {sizes[-1] if sizes else 0}"

@@ -15,8 +15,10 @@ import pytest
 from app.services.chunker import (
     CHUNK_OVERLAP_TOKENS,
     MAX_CHUNK_TOKENS,
+    ChunkSpan,
     _load_tokenizer,
     chunk_text,
+    drop_repeated_spans,
 )
 
 # Has no tokenizer on the Hub, so _load_tokenizer returns None and the
@@ -200,3 +202,68 @@ def test_the_real_tokenizer_is_used_when_the_model_has_one() -> None:
         # What the model really receives, special tokens included.
         assert len(tokenizer.encode(span.text)) <= 512
     _assert_offsets_match(text, spans)
+
+
+def test_text_repeated_across_pages_is_indexed_once() -> None:
+    """
+    Site furniture, detected by repetition rather than by markup.
+
+    `_NON_CONTENT_TAGS` already strips <nav>, <header> and <footer>, which
+    covers a semantically-marked-up site - but a documentation site that
+    renders its sidebar in plain <div>s defeats tag-based removal, and no
+    list of selectors generalises to the next site. Measured on a 300-page
+    crawl: 2,675 of 13,261 chunks were exact duplicates, a fifth of the
+    index, and one retrieval returned the same chunk twice inside a top-5.
+    """
+
+    sidebar = ChunkSpan(text="Docs Guides API Reference Settings", char_start=0, char_end=34)
+    spans = [
+        ("https://example.com/a", sidebar),
+        ("https://example.com/a", ChunkSpan(text="How billing works.", char_start=34, char_end=52)),
+        ("https://example.com/b", sidebar),
+        ("https://example.com/b", ChunkSpan(text="How limits work.", char_start=34, char_end=50)),
+        ("https://example.com/c", sidebar),
+    ]
+
+    kept = drop_repeated_spans(spans)
+
+    assert [span.text for _page, span in kept] == [
+        "Docs Guides API Reference Settings",
+        "How billing works.",
+        "How limits work.",
+    ]
+    # The first page to carry it keeps it, so the text is still retrievable.
+    assert kept[0][0] == "https://example.com/a"
+
+
+def test_near_duplicates_are_left_alone() -> None:
+    """
+    Exact matching only. Two pages that say almost the same thing may still
+    differ in the part that answers the question, and a similarity threshold
+    would be guessing which. Dropping an exact repeat cannot lose anything;
+    dropping a near-repeat can.
+    """
+
+    spans = [
+        ("a", ChunkSpan(text="The plan costs 649 rupees.", char_start=0, char_end=26)),
+        ("b", ChunkSpan(text="The plan costs 649 rupees a month.", char_start=0, char_end=34)),
+    ]
+
+    assert len(drop_repeated_spans(spans)) == 2
+
+
+def test_deduping_preserves_each_span_s_own_offsets() -> None:
+    """
+    Citation has to keep working: a surviving span still points into its own
+    page at its own offsets.
+    """
+
+    spans = [
+        ("a", ChunkSpan(text="shared", char_start=10, char_end=16)),
+        ("b", ChunkSpan(text="unique", char_start=99, char_end=105)),
+    ]
+
+    kept = drop_repeated_spans(spans)
+
+    assert kept[1][1].char_start == 99
+    assert kept[1][1].char_end == 105

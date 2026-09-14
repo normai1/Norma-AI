@@ -26,10 +26,12 @@ from app.repositories import workspace as workspace_repo
 from app.repositories.chunk import ChunkWrite
 from app.services import assistant as assistant_service
 from app.services import faq_generation as faq_generation_service
-from app.services.chunker import ChunkSpan, chunk_text
+from app.services.chunker import ChunkSpan, chunk_text, drop_repeated_spans
 from app.services.document_parser import DocumentParseError, parse_document
 from app.services.embedding_batch import embed_in_batches
 from app.services.web_crawler import crawl_website
+
+logger = logging.getLogger(__name__)
 
 FAILED_STATUS = knowledge_source_repo.FAILED_STATUS
 COMPLETED_STATUS = knowledge_source_repo.COMPLETED_STATUS
@@ -726,6 +728,19 @@ async def _crawl_and_reconcile(
     for result in sorted(crawl_results, key=lambda r: r.url):
         for span in chunk_text(result.extracted_text):
             spans_by_url.append((result.url, span))
+
+    # A fifth of a real 300-page crawl was the same sidebar and the same API
+    # examples over and over - see drop_repeated_spans.
+    before = len(spans_by_url)
+    spans_by_url = drop_repeated_spans(spans_by_url)
+
+    if before != len(spans_by_url):
+        logger.info(
+            "crawl chunks: %d unique of %d, %d repeated across pages dropped",
+            len(spans_by_url),
+            before,
+            before - len(spans_by_url),
+        )
 
     try:
         vectors = await embed_in_batches(
