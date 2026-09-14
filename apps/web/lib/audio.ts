@@ -201,3 +201,87 @@ export function interpretCloseCode(code: number): CloseReason {
 
   return { kind: "normal", message: "The test call ended." };
 }
+
+/**
+ * How a microphone's input level should be described to the operator.
+ *
+ * "silent" and "quiet" are separate on purpose: a muted or wrong device
+ * reads as nothing at all, which needs a different instruction from a mic
+ * that is working but turned down.
+ */
+export type InputLevelBand = "silent" | "quiet" | "good" | "loud" | "clipping";
+
+export interface InputLevel {
+  /** Peak of the most recent frames, 0..1 of full scale. */
+  peak: number;
+  /** The same as dBFS, which is what the server logs report. */
+  dbfs: number;
+  band: InputLevelBand;
+  label: string;
+}
+
+/**
+ * Bands taken from real calls on this deployment rather than from a
+ * reference level.
+ *
+ * Four sessions in one morning alternated between a p90 of 32,555 out of
+ * 32,768 - clipping at full scale - and 422, which is near-silence. At the
+ * quiet end neither the voice-activity detector nor the transcriber could
+ * find speech at all, and the call was silent with nothing on screen to say
+ * why. The loud end is what causes it: the browser's automatic gain control
+ * clamps down hard after clipping, and the next session starts from the
+ * clamped gain.
+ *
+ * So the meter has to call out both ends, not just silence.
+ */
+export function describeInputLevel(peak: number): InputLevel {
+  const dbfs = peak > 0 ? 20 * Math.log10(peak) : -Infinity;
+
+  if (peak < 0.004) {
+    return {
+      peak,
+      dbfs,
+      band: "silent",
+      label: "No sound from the microphone",
+    };
+  }
+
+  if (dbfs < -30) {
+    return {
+      peak,
+      dbfs,
+      band: "quiet",
+      label: "Too quiet - turn your microphone level up",
+    };
+  }
+
+  if (dbfs > -1.5) {
+    return {
+      peak,
+      dbfs,
+      band: "clipping",
+      label: "Clipping - turn your microphone level down",
+    };
+  }
+
+  if (dbfs > -6) {
+    return { peak, dbfs, band: "loud", label: "A little hot" };
+  }
+
+  return { peak, dbfs, band: "good", label: "Good" };
+}
+
+/** Peak magnitude of a frame, 0..1 of full scale. */
+export function peakOf(samples: Float32Array): number {
+  let peak = 0;
+
+  for (let i = 0; i < samples.length; i++) {
+    const magnitude = samples[i] < 0 ? -samples[i] : samples[i];
+
+    if (magnitude > peak) {
+      peak = magnitude;
+    }
+  }
+
+  return peak;
+}

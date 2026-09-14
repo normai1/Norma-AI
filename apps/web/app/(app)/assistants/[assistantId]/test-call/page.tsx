@@ -17,10 +17,14 @@ import { fetchTestCallTicket, getAssistant, type Assistant } from "@/lib/assista
 import {
   ECHO_GATE_IDLE,
   type EchoGateState,
+  describeInputLevel,
   floatToPCM16,
+  type InputLevel,
+  type InputLevelBand,
   interpretCloseCode,
   nextEchoGate,
   pcm16ToFloat32,
+  peakOf,
   resampleLinear,
   rms,
 } from "@/lib/audio";
@@ -188,6 +192,13 @@ export default function TestCallPage() {
   const [inlineNotice, setInlineNotice] = useState<string | null>(null);
   const [speaking, setSpeaking] = useState(false);
   const [transcript, setTranscript] = useState<TranscriptLine[]>([]);
+
+  // The microphone's current level, for the meter. Held in a ref and
+  // published on a timer rather than set from the audio callback: that
+  // callback runs about fifty times a second and a setState per frame would
+  // re-render the whole screen at the same rate.
+  const [inputLevel, setInputLevel] = useState<InputLevel | null>(null);
+  const inputPeakRef = useRef(0);
 
   const wsRef = useRef<WebSocket | null>(null);
   const audioContextRef = useRef<AudioContext | null>(null);
@@ -646,6 +657,16 @@ export default function TestCallPage() {
         // finishes, so this is exactly "the assistant is audible right now".
         const assistantPlaying =
           ECHO_GATE_ENABLED && context.currentTime < nextPlaybackTimeRef.current;
+        // Before the echo gate, deliberately: the meter answers "is my
+        // microphone working", and the gate's job is to replace the
+        // assistant's own echo with silence. Measuring after it would show
+        // a working microphone as dead every time the assistant spoke.
+        const framePeak = peakOf(samples);
+
+        if (framePeak > inputPeakRef.current) {
+          inputPeakRef.current = framePeak;
+        }
+
         const decision = nextEchoGate(echoGateRef.current, {
           level: rms(samples),
           assistantPlaying,
@@ -675,6 +696,24 @@ export default function TestCallPage() {
       teardown();
     };
   }, [activeWorkspace, assistantId, handleServerMessage, teardown]);
+
+  // Ten times a second: fast enough to feel live while someone adjusts a
+  // slider, slow enough not to matter. Reads the loudest frame since the
+  // last tick and resets, so a brief peak is not missed between samples.
+  useEffect(() => {
+    if (callStatus !== "connected") {
+      setInputLevel(null);
+
+      return;
+    }
+
+    const timer = window.setInterval(() => {
+      setInputLevel(describeInputLevel(inputPeakRef.current));
+      inputPeakRef.current = 0;
+    }, 100);
+
+    return () => window.clearInterval(timer);
+  }, [callStatus]);
 
   const disconnect = useCallback(() => {
     wsRef.current?.close(1000, "caller disconnected");
@@ -780,6 +819,10 @@ export default function TestCallPage() {
             {speaking ? "Norma is speaking" : "Listening"}
           </div>
         )}
+
+        {callStatus === "connected" && inputLevel && (
+          <MicrophoneLevel level={inputLevel} />
+        )}
       </Card>
 
       {inlineNotice && (
@@ -809,5 +852,70 @@ export default function TestCallPage() {
         </Card>
       </div>
     </PageShell>
+  );
+}
+
+
+// Bar colours by band. Deliberately not the only signal - the label below
+// says the same thing in words, because a meter that only speaks through
+// colour tells a colour-blind operator nothing, and this is the screen
+// someone stares at when the assistant has gone silent.
+const _LEVEL_BAR: Record<InputLevelBand, string> = {
+  silent: "bg-red-500",
+  quiet: "bg-amber-500",
+  good: "bg-green-500",
+  loud: "bg-amber-500",
+  clipping: "bg-red-500",
+};
+
+const _LEVEL_TEXT: Record<InputLevelBand, string> = {
+  silent: "text-red-400",
+  quiet: "text-amber-400",
+  good: "text-slate-400",
+  loud: "text-amber-400",
+  clipping: "text-red-400",
+};
+
+/**
+ * What the microphone is actually delivering.
+ *
+ * This screen used to show connection state and nothing else, so a dead
+ * microphone looked exactly like a working one and the only way to find out
+ * was to read the voice worker's logs. Four sessions in one morning were
+ * silent for that reason.
+ *
+ * The bar is scaled in dBFS rather than linearly: speech sits between -30
+ * and -6 dBFS, which is the top sliver of a linear scale and unreadable.
+ */
+function MicrophoneLevel({ level }: { level: InputLevel }) {
+  const floor = -60;
+  const filled = Math.max(
+    0,
+    Math.min(100, ((Math.max(level.dbfs, floor) - floor) / -floor) * 100),
+  );
+
+  return (
+    <div className="mt-4">
+      <div className="flex items-center gap-3">
+        <span className="text-xs text-slate-500">Mic</span>
+        <div
+          className="h-2 flex-1 overflow-hidden rounded-full bg-slate-800"
+          role="meter"
+          aria-valuemin={floor}
+          aria-valuemax={0}
+          aria-valuenow={Math.round(Math.max(level.dbfs, floor))}
+          aria-label="Microphone input level"
+        >
+          <div
+            className={`h-full rounded-full transition-[width] duration-100 ${_LEVEL_BAR[level.band]}`}
+            style={{ width: `${filled}%` }}
+          />
+        </div>
+        <span className="w-16 text-right text-xs tabular-nums text-slate-500">
+          {level.dbfs === -Infinity ? "--" : `${level.dbfs.toFixed(0)} dBFS`}
+        </span>
+      </div>
+      <p className={`mt-1 text-xs ${_LEVEL_TEXT[level.band]}`}>{level.label}</p>
+    </div>
   );
 }

@@ -4,13 +4,15 @@ import {
   ECHO_GATE_HOLD_MS,
   ECHO_GATE_IDLE,
   ECHO_GATE_LEARN_FRAMES,
-  type EchoGateState,
+  describeInputLevel,
   floatToPCM16,
   interpretCloseCode,
   nextEchoGate,
   pcm16ToFloat32,
+  peakOf,
   resampleLinear,
   rms,
+  type EchoGateState,
 } from "./audio";
 
 /** Runs `frames` frames of the given level through the gate, in order. */
@@ -230,5 +232,65 @@ describe("interpretCloseCode", () => {
   it("treats a normal close code as a normal end of call", () => {
     expect(interpretCloseCode(1000).kind).toBe("normal");
     expect(interpretCloseCode(1001).kind).toBe("normal");
+  });
+});
+
+describe("describeInputLevel", () => {
+  // The levels below are the ones real calls actually produced, out of
+  // 32768, so the bands are pinned to the failures they exist to catch.
+  const asPeak = (int16Peak: number) => int16Peak / 32768;
+
+  it("calls a dead microphone silent rather than quiet", () => {
+    // A muted or wrong device needs a different instruction from one that
+    // is merely turned down, so these are separate bands.
+    expect(describeInputLevel(asPeak(0)).band).toBe("silent");
+    expect(describeInputLevel(asPeak(80)).band).toBe("silent");
+  });
+
+  it("flags the level that made a whole call silent", () => {
+    // p90 of 422 on a real call: the voice-activity detector never reported
+    // speech once and the transcriber returned no words at all.
+    expect(describeInputLevel(asPeak(422)).band).toBe("quiet");
+    expect(describeInputLevel(asPeak(977)).band).toBe("quiet");
+  });
+
+  it("flags the clipping that causes the silence on the next call", () => {
+    // p90 of 32,555 out of 32,768. The browser's gain control clamps down
+    // hard afterwards, and the following session starts near-silent - which
+    // is why the loud end has to be called out too, not just the quiet end.
+    expect(describeInputLevel(asPeak(32555)).band).toBe("clipping");
+    expect(describeInputLevel(asPeak(32767)).band).toBe("clipping");
+  });
+
+  it("accepts ordinary speech", () => {
+    // -20 to -8 dBFS, which is where a correctly set microphone sits.
+    expect(describeInputLevel(asPeak(3300)).band).toBe("good");
+    expect(describeInputLevel(asPeak(6500)).band).toBe("good");
+    expect(describeInputLevel(asPeak(13000)).band).toBe("good");
+  });
+
+  it("reports dBFS, so the screen and the server logs agree", () => {
+    // The logs report "peak=N (x.xxx of full scale)" in dBFS terms; an
+    // operator reading one and an engineer reading the other have to be
+    // talking about the same number.
+    expect(describeInputLevel(0.5).dbfs).toBeCloseTo(-6.02, 1);
+    expect(describeInputLevel(1).dbfs).toBeCloseTo(0, 5);
+  });
+
+  it("never says a helpful-sounding nothing", () => {
+    for (const peak of [0, 0.001, 0.01, 0.1, 0.5, 1]) {
+      expect(describeInputLevel(peak).label.length).toBeGreaterThan(3);
+    }
+  });
+});
+
+describe("peakOf", () => {
+  it("finds the loudest sample regardless of sign", () => {
+    expect(peakOf(new Float32Array([0.1, -0.8, 0.3]))).toBeCloseTo(0.8);
+  });
+
+  it("is zero for silence and for nothing", () => {
+    expect(peakOf(new Float32Array([0, 0, 0]))).toBe(0);
+    expect(peakOf(new Float32Array())).toBe(0);
   });
 });
