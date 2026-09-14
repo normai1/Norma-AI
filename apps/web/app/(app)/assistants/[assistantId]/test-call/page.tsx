@@ -176,7 +176,11 @@ type ServerMessage =
   | { type: "llm_error"; text: string }
   | { type: "tts_error"; text: string }
   | { type: "reply_finished" }
-  | { type: "session_failover"; reason: string; message: string };
+  | { type: "session_failover"; reason: string; message: string }
+  // The transcriber has gone deaf while the call is otherwise fine. Spoken
+  // aloud by the assistant; shown here too, so a caller who missed it or
+  // has their volume down still learns why nothing is happening.
+  | { type: "hearing_trouble"; message: string };
 
 export default function TestCallPage() {
   const params = useParams<{ assistantId: string }>();
@@ -535,6 +539,7 @@ export default function TestCallPage() {
         case "tts_error":
           setInlineNotice(message.text);
           break;
+        case "hearing_trouble":
         case "session_failover":
           setInlineNotice(message.message);
           break;

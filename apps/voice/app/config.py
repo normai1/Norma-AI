@@ -186,3 +186,26 @@ STT_DEAF_WATCHDOG_POLL_SECONDS = float(
 BARGE_IN_SPEECH_WINDOW_SECONDS = float(
     os.environ.get("BARGE_IN_SPEECH_WINDOW_SECONDS", "2.0")
 )
+
+
+# How many times the deafness watchdog may restart the speech-to-text stream,
+# with nothing transcribed in between, before the assistant says out loud
+# that it cannot hear.
+#
+# Distinct from MAX_STT_STREAM_RECONNECTS, which is 50 and exists for a
+# provider that has genuinely gone away. A caller does not wait through 50
+# restarts: on a real call the stream went deaf while the microphone was
+# delivering healthy audio, was restarted twice, and the caller heard
+# absolutely nothing at all for the whole session. Two restarts is about
+# fifteen seconds of a person talking to a machine that is not listening,
+# which is already too long to say nothing about.
+STT_HEARING_TROUBLE_RESTARTS = int(
+    os.environ.get("STT_HEARING_TROUBLE_RESTARTS", "2")
+)
+
+# How long before it may say so again. The notice is worth repeating if the
+# trouble persists - a caller who hears it once and then nothing assumes the
+# call is dead - but not on every restart.
+STT_HEARING_TROUBLE_COOLDOWN_SECONDS = float(
+    os.environ.get("STT_HEARING_TROUBLE_COOLDOWN_SECONDS", "25.0")
+)

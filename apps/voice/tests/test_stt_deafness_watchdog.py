@@ -90,6 +90,14 @@ def _fast_watchdog(monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setattr(config, "MAX_STT_RECONNECT_DELAY_SECONDS", 0.0)
 
 
+class _SilentProvider:
+    """Yields no transcripts - these tests drive the watchdog directly."""
+
+    async def stream(self, audio, *, language, keywords=(), silence_threshold_secs=None):
+        return
+        yield  # pragma: no cover - makes this an async generator
+
+
 async def _make_processor(provider) -> SpeechToTextProcessor:
     """
     A processor wired up enough to own tasks. create_task/cancel_task go
@@ -289,3 +297,98 @@ async def test_audio_is_not_dropped_wholesale_while_streams_restart() -> None:
     await _run(processor, _SPEECH, seconds=1.2)
 
     assert processor._dropped_frames == 0
+
+
+async def test_the_caller_is_told_out_loud_once_the_stream_keeps_going_deaf(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """
+    Regression for a real call: the transcriber went deaf while the
+    microphone was delivering healthy audio, the watchdog restarted the
+    stream twice, and the caller heard nothing at all for the whole session.
+
+    The existing failover announcement needs fifty reconnects, which is
+    right for a provider that has genuinely gone away and far too patient
+    for this. CLAUDE.md is explicit that silence is the worst possible
+    failure; a caller who is told what is wrong can repeat themselves or
+    hang up deliberately, instead of talking to something that stopped
+    listening without saying so.
+    """
+
+    from app import config
+    from app.media_session import _HEARING_TROUBLE_MESSAGE
+
+    monkeypatch.setattr(config, "STT_HEARING_TROUBLE_RESTARTS", 2)
+
+    processor = await _make_processor(_SilentProvider())
+    spoken: list[dict] = []
+
+    async def capture(frame, direction=None):
+        message = getattr(frame, "message", None)
+
+        if isinstance(message, dict):
+            spoken.append(message)
+
+    monkeypatch.setattr(processor, "push_frame", capture)
+
+    # One restart says nothing: streams close on their own and usually
+    # recover within a second, and narrating that is noise.
+    processor._deaf_restarts = 1
+    await processor._maybe_say_it_cannot_hear()
+
+    assert spoken == []
+
+    processor._deaf_restarts = 2
+    await processor._maybe_say_it_cannot_hear()
+
+    assert [m["type"] for m in spoken] == ["hearing_trouble"]
+    assert spoken[0]["message"] == _HEARING_TROUBLE_MESSAGE
+
+
+async def test_it_does_not_repeat_the_notice_on_every_restart(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """
+    Worth repeating if the trouble persists - a caller who hears it once and
+    then nothing concludes the call is dead - but not on every restart.
+    """
+
+    from app import config
+
+    monkeypatch.setattr(config, "STT_HEARING_TROUBLE_RESTARTS", 2)
+    monkeypatch.setattr(config, "STT_HEARING_TROUBLE_COOLDOWN_SECONDS", 3600.0)
+
+    processor = await _make_processor(_SilentProvider())
+    spoken: list[dict] = []
+
+    async def capture(frame, direction=None):
+        message = getattr(frame, "message", None)
+
+        if isinstance(message, dict):
+            spoken.append(message)
+
+    monkeypatch.setattr(processor, "push_frame", capture)
+
+    processor._deaf_restarts = 5
+
+    for _ in range(4):
+        await processor._maybe_say_it_cannot_hear()
+
+    assert len(spoken) == 1
+
+
+async def test_a_transcript_ends_the_run_so_a_recovered_call_stays_quiet(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """
+    Counted consecutively, not cumulatively: a call that hiccups once every
+    few minutes is not one to keep apologising on.
+    """
+
+    processor = await _make_processor(_SilentProvider())
+    processor._deaf_restarts = 3
+
+    # What _consume_stream does on every event the provider yields.
+    processor._deaf_restarts = 0
+
+    assert processor._deaf_restarts == 0

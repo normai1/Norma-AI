@@ -14,6 +14,27 @@ import time
 import uuid
 from collections.abc import AsyncIterator, Sequence
 
+from app import config
+from app.conversation import ConversationState, assemble_system_prompt
+from app.guardrails import (
+    BLOCKED_TOPIC_REPLY,
+    SAFE_FALLBACK,
+    blocked_topic_in,
+    find_unsupported_claim,
+)
+from app.llm import LLMProvider, LLMProviderError, LLMRateLimited
+from app.llm_pricing import realtime_turn_cost_micro_usd
+from app.retrieval_client import fetch_retrieved_context
+from app.sentence_chunker import SentenceChunker
+from app.session_resilience import SessionResilienceTracker
+from app.spoken_text import to_spoken_text
+from app.turn_detection import (
+    TurnDetector,
+    is_semantically_complete,
+    sensitivity_to_stop_secs,
+)
+from app.turn_metrics import TurnMetricsRecorder
+from app.turn_metrics_client import record_turn_metric
 from fastapi import WebSocket
 from norma_shared.correlation import CallContext
 from norma_shared.speech import (
@@ -42,28 +63,6 @@ from pipecat.transports.websocket.fastapi import (
     FastAPIWebsocketTransport,
 )
 
-from app import config
-from app.conversation import ConversationState, assemble_system_prompt
-from app.guardrails import (
-    BLOCKED_TOPIC_REPLY,
-    SAFE_FALLBACK,
-    blocked_topic_in,
-    find_unsupported_claim,
-)
-from app.llm import LLMProvider, LLMProviderError, LLMRateLimited
-from app.llm_pricing import realtime_turn_cost_micro_usd
-from app.retrieval_client import fetch_retrieved_context
-from app.sentence_chunker import SentenceChunker
-from app.session_resilience import SessionResilienceTracker
-from app.spoken_text import to_spoken_text
-from app.turn_detection import (
-    TurnDetector,
-    is_semantically_complete,
-    sensitivity_to_stop_secs,
-)
-from app.turn_metrics import TurnMetricsRecorder
-from app.turn_metrics_client import record_turn_metric
-
 # Fixed, generic apologies - never str(exception). CLAUDE.md's rule against
 # exposing internal error details to a user applies to these JSON fallbacks
 # exactly as much as to an HTTP error response.
@@ -75,6 +74,17 @@ _TTS_ERROR_MESSAGE = "Sorry, I'm having trouble speaking right now."
 # deliberately not reason-specific or configurable.
 _FAILOVER_MESSAGE = (
     "I'm sorry, I'm having trouble with the call right now. Please try again in a few minutes."
+)
+
+# Said when the transcriber has gone deaf but the call is still perfectly
+# alive. Deliberately not _FAILOVER_MESSAGE: that one tells the caller to
+# give up and try later, which is wrong for a stream that usually recovers
+# within seconds. This one tells them what is happening and invites them to
+# keep going, because silence leaves them believing the call has died - which
+# is what actually happened on a real session where the stream went deaf
+# while the microphone was working perfectly.
+_HEARING_TROUBLE_MESSAGE = (
+    "Sorry, I'm having trouble hearing you at the moment. Could you say that again?"
 )
 
 # Matches norma_shared/speech.py's canonical internal audio format (item
@@ -296,6 +306,10 @@ class SpeechToTextProcessor(FrameProcessor):
         # the watchdog's patience, means this stream has stopped listening.
         self._last_speech_at = 0.0
         self._last_event_at = 0.0
+        # Consecutive watchdog restarts with nothing transcribed between
+        # them, and when the caller was last told about it.
+        self._deaf_restarts = 0
+        self._told_about_deafness_at = 0.0
         self._watchdog_task: asyncio.Task | None = None
         # Bytes currently sitting in _audio_queue, so the backlog can be
         # capped by duration rather than by a frame count that would mean
@@ -547,6 +561,10 @@ class SpeechToTextProcessor(FrameProcessor):
         ):
             self._events_this_stream += 1
             self._last_event_at = time.monotonic()
+            # Transcription is working again, so the run of deaf restarts is
+            # over. Counted consecutively rather than cumulatively: a call
+            # that hiccups once an hour is not one to keep apologising on.
+            self._deaf_restarts = 0
 
             await self.push_frame(
                 OutputTransportMessageUrgentFrame(
@@ -612,9 +630,57 @@ class SpeechToTextProcessor(FrameProcessor):
             # replacement stream gets its own full window instead of being
             # torn down again on the next poll.
             self._last_event_at = time.monotonic()
+            self._deaf_restarts += 1
+
+            await self._maybe_say_it_cannot_hear()
 
             if self._consume_task is not None:
                 self._consume_task.cancel()
+
+    async def _maybe_say_it_cannot_hear(self) -> None:
+        """
+        Tell the caller the assistant cannot hear them, out loud.
+
+        The existing failover announcement needs fifty reconnects to fire,
+        which is right for a provider that has genuinely gone away and far
+        too patient for this: on a real call the stream went deaf while the
+        microphone was delivering healthy audio, the watchdog restarted it
+        twice, and the caller heard nothing whatsoever for the whole
+        session. CLAUDE.md is explicit that silence is the worst possible
+        failure, and a caller who is told what is wrong can at least repeat
+        themselves or hang up deliberately.
+
+        Says nothing on the first restart - streams do close on their own
+        and usually recover within a second, and narrating that would be
+        noise. Repeats on a cooldown rather than once, because a caller who
+        hears it and then nothing concludes the call is dead anyway.
+
+        Never ends the session: a call belongs to the person on it (see
+        _handle_session_failover).
+        """
+
+        if self._deaf_restarts < config.STT_HEARING_TROUBLE_RESTARTS:
+            return
+
+        now = time.monotonic()
+
+        if now - self._told_about_deafness_at < config.STT_HEARING_TROUBLE_COOLDOWN_SECONDS:
+            return
+
+        self._told_about_deafness_at = now
+        logger.warning(
+            "telling the caller the assistant cannot hear them: restarts=%d",
+            self._deaf_restarts,
+        )
+
+        await self.push_frame(
+            OutputTransportMessageUrgentFrame(
+                message={
+                    "type": "hearing_trouble",
+                    "message": _HEARING_TROUBLE_MESSAGE,
+                }
+            )
+        )
 
     async def _announce_failover(self) -> None:
         await self.push_frame(
@@ -1343,7 +1409,19 @@ def _is_llm_reply_finished_message(message: object) -> bool:
 
 
 def _is_session_failover_message(message: object) -> bool:
-    return isinstance(message, dict) and message.get("type") == "session_failover"
+    """
+    Either of the two messages TTSProcessor speaks on the assistant's
+    behalf without a turn behind them.
+
+    "hearing_trouble" is the recoverable one: the transcriber has gone
+    deaf and the caller is told so and invited to repeat themselves.
+    "session_failover" is the graver one. Neither ends the call.
+    """
+
+    return isinstance(message, dict) and message.get("type") in (
+        "session_failover",
+        "hearing_trouble",
+    )
 
 
 class TTSProcessor(FrameProcessor):
