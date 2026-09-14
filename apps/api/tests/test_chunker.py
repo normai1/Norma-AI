@@ -163,6 +163,28 @@ def test_the_defaults_leave_room_for_the_models_special_tokens() -> None:
     assert 0 < CHUNK_OVERLAP_TOKENS < MAX_CHUNK_TOKENS
 
 
+def test_chunks_are_not_small_enough_to_stop_discriminating() -> None:
+    """
+    A lower bound, measured rather than assumed, and the reason it exists.
+
+    The budget was once 128 tokens, on the reasoning that a shorter chunk
+    embeds one idea and so retrieves more precisely. Re-chunking a real
+    300-page corpus to 128 and re-embedding it showed the opposite: a
+    fragment that short is not about anything in particular, so it sits
+    weakly near every question, and with ten thousand of them some fragment
+    is always close enough. Best-chunk scores for questions the site cannot
+    answer rose from 0.414-0.579 to 0.521-0.632 - across
+    `retrieval_min_score`, so the model started being handed chunks for
+    questions the knowledge does not cover. See chunker.py for the numbers.
+
+    This does not test retrieval quality, which needs embeddings and a
+    corpus. It pins the constant so that shrinking it back is a deliberate
+    act with this measurement in front of whoever does it.
+    """
+
+    assert MAX_CHUNK_TOKENS >= 192
+
+
 def test_a_model_without_a_tokenizer_still_chunks() -> None:
     """
     EMBEDDING_MODEL is operator-configurable and legitimately holds names with

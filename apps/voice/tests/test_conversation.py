@@ -28,13 +28,89 @@ def test_conversation_state_starts_empty() -> None:
 def test_assemble_system_prompt_adds_no_context_block_when_there_is_none() -> None:
     """
     No retrieval for this turn is a normal outcome, not an error - the
-    prompt is the operator's plus the standing rule, and no block at all.
+    prompt is the operator's plus the standing rules, and no data block.
+
+    It does not end there, though: see the test below for why the absence
+    has to be stated rather than simply left out.
     """
 
     result = assemble_system_prompt(base_prompt="You are helpful.", retrieved_context="")
 
     assert result.startswith("You are helpful.")
     assert BLOCK_START.format(label="KNOWLEDGE") not in result
+
+
+def test_a_turn_with_no_knowledge_says_so_instead_of_staying_silent() -> None:
+    """
+    The regression for the worst kind of wrong answer this project has
+    produced: fluent, specific, confident, and entirely invented.
+
+    The prompt used to just stop after the rules when retrieval came back
+    empty. A model given no sources and not told so does not infer that it
+    knows nothing - it answers from training. The assistant under test is
+    pointed at a public website the model has read, so what came back was a
+    detailed description of the wrong product, delivered exactly as
+    confidently as a grounded answer.
+
+    Two different turns land here and the notice covers both: nothing
+    matched, or the lookup did not finish inside its budget. On the reported
+    call it was the second - the hosted embedding provider took 4.8 and 7.4
+    seconds against a 1.5 second retrieval timeout.
+    """
+
+    result = assemble_system_prompt(base_prompt="You are helpful.", retrieved_context="")
+
+    assert "no reference information for this turn" in result
+    assert "Do not answer from memory" in result
+    # And still a usable assistant: not a blanket refusal machine that
+    # answers "I don't have that detail" to "good morning".
+    assert "greet them" in result
+
+
+def test_context_that_sanitises_away_is_treated_as_no_knowledge_too() -> None:
+    """
+    The same hole by another route. Context arriving as nothing but control
+    characters produces no block, and used to produce no notice either - so
+    a sanitised-away turn was indistinguishable, to the model, from a turn
+    where the rules simply ended.
+    """
+
+    result = assemble_system_prompt(
+        base_prompt="You are helpful.", retrieved_context="\x00\x01 <<<>>>"
+    )
+
+    assert "no reference information for this turn" in result
+
+
+def test_a_grounded_turn_is_not_told_it_has_nothing() -> None:
+    """
+    The notice is the exception, not a permanent fixture - a turn that did
+    retrieve knowledge must not carry a line telling the model to ignore it.
+    """
+
+    result = assemble_system_prompt(
+        base_prompt="You are helpful.", retrieved_context="The Pro plan is 649 rupees."
+    )
+
+    assert "no reference information for this turn" not in result
+    assert "Do not answer from memory" not in result
+
+
+def test_the_model_is_told_its_own_memory_of_the_business_is_not_a_source() -> None:
+    """
+    The rule used to pin only prices, opening times, availability and
+    policy - the specifics a caller acts on. Everything else was left open,
+    and "what is this feature", "what does that plan include", "what are the
+    limits" are exactly the questions a model answers from training without
+    hesitating, because it has genuinely read the website. It has just read
+    a different version of it, or a competitor's.
+    """
+
+    result = assemble_system_prompt(
+        base_prompt="You are helpful.", retrieved_context="The Pro plan is 649 rupees."
+    )
+
+    assert "What you remember is not a source" in result
 
 
 def test_assemble_system_prompt_appends_framed_context_when_present() -> None:
@@ -120,7 +196,7 @@ def test_grounded_answer_rules_are_present_for_every_resolution() -> None:
     ):
         result = assemble_system_prompt(base_prompt=base_prompt, retrieved_context="")
 
-        assert "only if it appears in the reference information" in result
+        assert "comes from the reference information for this turn" in result
         assert "Never say you have done something" in result
         assert result.startswith(base_prompt)
 

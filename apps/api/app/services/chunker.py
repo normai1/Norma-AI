@@ -47,10 +47,43 @@ from app.core.config import settings
 #   the whole budget. The model was handed seat pricing for a question about
 #   a different plan, and answered from it.
 #
-# 128 tokens is roughly 550 characters - a paragraph, one idea - so an
-# embedding represents one thing, and six or seven of them fit the same
-# budget. Retrieval gets more shots and each one means something.
-MAX_CHUNK_TOKENS = 128
+# The reply to that was 128 tokens, and it went too far in the other
+# direction. Measured on the same corpus, re-chunked to 128 and re-embedded
+# (10,141 chunks, median 579 characters), against eight questions the site
+# answers and five it does not:
+#
+#     best-chunk score, answerable:    0.642 - 0.824
+#     best-chunk score, unanswerable:  0.521 - 0.632
+#
+# The floor that decides whether the model is given anything at all sits at
+# 0.62. An unanswerable question scored 0.632 - above it - so the model was
+# handed chunks for a question the knowledge does not cover, which is
+# exactly the failure retrieval_min_score exists to prevent. The separation
+# between "we know this" and "we do not" had fallen from 0.091 to 0.010.
+#
+# Short chunks are the reason. A 128-token fragment carries too little to be
+# about anything in particular, so it sits near everything weakly - and at
+# 10,000 of them, some fragment is close enough to any question asked. The
+# ceiling did not move; the noise floor came up to meet it.
+#
+# 256 tokens - roughly 1,150 characters - was measured the same way and is
+# where both failures are avoided:
+#
+#     best-chunk score, answerable:    0.607 - 0.840
+#     best-chunk score, unanswerable:  0.494 - 0.600   (all below the floor)
+#
+# And the measure that actually matters, which no score can show: for five
+# questions whose answers are known to be in the corpus, the chunk holding
+# the answer reached the model all five times, at 0.682 to 0.901, inside the
+# context builder's 4,000-character budget with three to five chunks landing.
+#
+# The one answerable question that now falls below the floor is "what plans
+# do you offer" at 0.607, whose best chunk was about spend alerting - so it
+# was never going to be answered from that chunk anyway, and a refusal is
+# the right outcome. That asymmetry is deliberate and is the same one
+# retrieval_min_score is set by: refusing something known is safe and
+# annoying, inventing something unknown is the failure.
+MAX_CHUNK_TOKENS = 256
 
 # Still roughly 15%, scaled with the budget above. With no overlap at all -
 # which is what this used to do - a fact that straddles a boundary is split
@@ -58,7 +91,7 @@ MAX_CHUNK_TOKENS = 128
 # knowledge base "does not contain" something a reader can point to in the
 # source. The cost is more chunks, more embedding calls, and a higher chance
 # of two near-identical hits inside a small top-k.
-CHUNK_OVERLAP_TOKENS = 20
+CHUNK_OVERLAP_TOKENS = 40
 
 # Characters per token when no real tokenizer is available - see
 # _length_function. Deliberately pessimistic (English prose runs nearer 4)
