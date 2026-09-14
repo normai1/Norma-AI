@@ -139,6 +139,12 @@ def test_a_markdown_reply_reaches_the_caller_as_speech(
             script=[TranscriptEvent(text="What plans do you offer?", is_final=True)],
             chunks_before_event=[1],
         ),
+        # Grounded, because this test is about markdown reaching the
+        # caller as speech - not about whether the figures are supported.
+        # Without it the grounding guardrail correctly refuses a reply
+        # quoting plan limits that retrieval never returned, and this
+        # test fails for a reason that has nothing to do with markdown.
+        retrieved_context=_REPORTED_REPLY,
         mock_llm=MockLLM(response=_REPORTED_REPLY),
         mock_tts=MockTTS(),
         vad_states=[VADState.SPEAKING, VADState.QUIET, VADState.QUIET],

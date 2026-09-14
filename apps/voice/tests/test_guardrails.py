@@ -196,3 +196,119 @@ def test_an_empty_topic_list_blocks_nothing() -> None:
 
 def test_unrelated_questions_pass_through() -> None:
     assert blocked_topic_in("What are your opening hours?", ["legal advice"]) is None
+
+
+def test_a_quantity_the_assistant_was_not_given_is_refused() -> None:
+    """
+    The widening. The guardrail used to check only amounts and clock times,
+    and across a whole call of wrong answers it fired zero times - the
+    inventions were counts and limits, which a caller acts on exactly as
+    much as a price.
+    """
+
+    reason = find_unsupported_claim(
+        "You get 500 agent requests a month.",
+        grounded_text="The plan includes expanded access to agents.",
+    )
+
+    assert reason == "unsupported number"
+
+
+def test_a_quantity_that_is_in_the_context_is_spoken() -> None:
+    assert (
+        find_unsupported_claim(
+            "You get 500 agent requests a month.",
+            grounded_text="Includes 500 agent requests each month.",
+        )
+        is None
+    )
+
+
+def test_a_number_with_no_retrieval_at_all_is_refused() -> None:
+    """
+    Retrieval returned nothing, so there is nothing the figure could have
+    come from. This is the case the assistant should answer with "I don't
+    have that detail", and it is the one it was most confidently wrong in.
+    """
+
+    assert (
+        find_unsupported_claim("It costs 649 rupees.", grounded_text="")
+        == "unsupported number"
+    )
+
+
+def test_a_feature_name_the_assistant_was_never_told_about_is_refused() -> None:
+    """
+    If retrieval returned nothing containing the name, the assistant is
+    describing something it was not given, however fluent the sentence.
+    """
+
+    reason = find_unsupported_claim(
+        "Privacy Mode is on by default.",
+        grounded_text="Cursor does not train on your code.",
+    )
+
+    assert reason == "unsupported name"
+
+
+def test_a_feature_name_that_is_in_the_context_is_spoken() -> None:
+    assert (
+        find_unsupported_claim(
+            "Privacy Mode is on by default.",
+            grounded_text="Privacy Mode is enabled org-wide for Enterprise teams.",
+        )
+        is None
+    )
+
+
+def test_a_determiner_that_starts_a_sentence_is_not_a_feature_name() -> None:
+    """
+    Regression for a false positive found while building this, on a reply
+    that was entirely correct.
+
+    "The Start plan costs 649 rupees" reads as the capitalised pair "The
+    Start", which appears in no context, so a grounded answer was refused.
+    A false positive here is invisible to the operator and makes the
+    assistant useless, which is worse than the invention it is guarding
+    against.
+    """
+
+    assert (
+        find_unsupported_claim(
+            "The Start plan costs 649 rupees a month.",
+            grounded_text="The Cursor Start plan costs 649 rupees per month.",
+        )
+        is None
+    )
+
+
+def test_ordinary_conversational_replies_are_never_refused() -> None:
+    """
+    The assistant's own voice - offering, declining, acknowledging - carries
+    no claim about the business and must survive every rule here, including
+    when retrieval returned nothing at all.
+    """
+
+    for sentence in (
+        "I can take a message and have someone call you back.",
+        "I don't have that detail in front of me right now.",
+        "Yes, that is right.",
+        "Let me check that for you.",
+        "Sure, what would you like to know?",
+    ):
+        assert find_unsupported_claim(sentence, grounded_text="") is None, sentence
+
+
+def test_the_completed_action_rule_still_works() -> None:
+    """
+    Pinned because widening this module corrupted it once: the word-boundary
+    escapes in the pattern were silently replaced with literal backspace
+    characters, and the rule stopped matching anything at all while still
+    looking correct in a diff.
+    """
+
+    assert (
+        find_unsupported_claim("I've booked that for you.", grounded_text="Booking.")
+        == "claimed a completed action"
+    )
+    assert find_unsupported_claim("I can book that for you.", grounded_text="") is None

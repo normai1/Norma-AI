@@ -66,12 +66,16 @@ def test_conversation_replay_answers_the_real_question_after_an_interruption(
     first_final = TranscriptEvent(text="What are your hours?", is_final=True)
     second_final = TranscriptEvent(text="What is your address?", is_final=True)
     mock_stt = MockSTT(script=[first_final, second_final], chunks_before_event=[1, 5])
+    # The address is incidental to what this test checks, but it is a
+    # number, and an ungrounded number is now refused - so ground it.
     mock_llm = MockLLM(response="123 Main Street.", chunk_delay_seconds=0.2)
+    grounded = "We are at 123 Main Street."
 
     with open_conversation_session(
         monkeypatch,
         mock_stt=mock_stt,
         mock_llm=mock_llm,
+        retrieved_context=grounded,
         vad_states=[
             VADState.SPEAKING,
             VADState.QUIET,

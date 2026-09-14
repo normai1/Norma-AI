@@ -60,6 +60,7 @@ def open_conversation_session(
     mock_llm: MockLLM | None = None,
     mock_tts: MockTTS | None = None,
     vad_states: Sequence[VADState] = (VADState.QUIET,),
+    retrieved_context: str | None = None,
     clock=None,
     assistant_id: str | None = None,
     glossary_terms: Sequence[str] = _DEFAULT_GLOSSARY_TERMS,
@@ -95,7 +96,11 @@ def open_conversation_session(
         monkeypatch.setattr(main_module, "get_tts_provider", lambda: mock_tts)
 
     monkeypatch.setattr(
-        media_session_module, "fetch_retrieved_context", _fake_fetch_retrieved_context
+        media_session_module,
+        "fetch_retrieved_context",
+        _fake_fetch_retrieved_context
+        if retrieved_context is None
+        else _context_returning(retrieved_context),
     )
     _patch_turn_detector_vad(
         monkeypatch, _ScriptedVADAnalyzer(list(vad_states)), clock=clock
@@ -146,3 +151,17 @@ def receive_until(
         f"receive_until: read {limit} messages without seeing any of {stop_types!r}; "
         f"trace so far: {trace}"
     )
+
+
+def _context_returning(text: str):
+    """
+    Retrieval that returns a fixed context, for tests whose subject is not
+    grounding but whose reply happens to contain a figure or a name. The
+    guardrail refuses those when nothing was retrieved, which is correct
+    behaviour and a distraction in a test about something else.
+    """
+
+    async def _fetch(_assistant_id, _query) -> str:
+        return text
+
+    return _fetch

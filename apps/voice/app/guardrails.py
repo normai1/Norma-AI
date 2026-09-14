@@ -79,18 +79,6 @@ SAFE_FALLBACK = (
     "I can take a message and have someone call you back."
 )
 
-# Amounts and clock times are the specifics a caller acts on - a wrong price
-# or a wrong opening time sends them somewhere at the wrong moment, or with
-# the wrong expectation. Prose numbers ("we have three rooms") are left
-# alone: they are rarely acted on and matching them would flag ordinary
-# speech.
-_MONEY = re.compile(
-    r"[$£€₹]\s?\d[\d,]*(?:\.\d+)?"
-    r"|\b\d[\d,]*(?:\.\d+)?\s?(?:dollars?|pounds?|euros?|rupees?|usd|gbp|eur|inr)\b",
-    re.IGNORECASE,
-)
-_CLOCK = re.compile(r"\b\d{1,2}(?::\d{2})?\s?(?:am|pm)\b|\b\d{1,2}:\d{2}\b", re.IGNORECASE)
-
 # Claims that something has already happened. Always unsupported: no tool
 # exists for the assistant to have done any of it (items 36+), so the action
 # cannot have taken place. Deliberately past tense and completed only -
@@ -106,6 +94,61 @@ _COMPLETED_ACTION = re.compile(
 
 _DIGIT_RUN = re.compile(r"\d[\d,]*(?:\.\d+)?")
 
+# A product or feature name: two or more capitalised words in a row, allowing
+# a lowercase joiner ("Cursor for Teams"). One capitalised word is not enough
+# to go on - it catches the first word of every sentence, the assistant's own
+# subject, and any proper noun the caller happened to use.
+_NAMED_THING = re.compile(
+    r"\b[A-Z][a-zA-Z0-9]+(?:\s+(?:for|of|and|the|in|on)\s+[A-Z][a-zA-Z0-9]+"
+    r"|\s+[A-Z][a-zA-Z0-9]+)+"
+)
+
+# Words that get capitalised because a sentence started, not because they
+# name anything. Without this, "The Start plan costs 649 rupees" yields the
+# name "The Start", which no context contains, and a perfectly grounded
+# answer gets refused - caught by a test written from a real reply.
+_SENTENCE_OPENERS = frozenset(
+    {
+        "a",
+        "also",
+        "an",
+        "and",
+        "but",
+        "for",
+        "here",
+        "how",
+        "i",
+        "if",
+        "in",
+        "it",
+        "no",
+        "on",
+        "one",
+        "or",
+        "our",
+        "so",
+        "that",
+        "the",
+        "then",
+        "there",
+        "these",
+        "they",
+        "this",
+        "those",
+        "to",
+        "we",
+        "what",
+        "when",
+        "where",
+        "which",
+        "who",
+        "why",
+        "yes",
+        "you",
+        "your",
+    }
+)
+
 
 def _numbers_in(text: str) -> set[str]:
     """Digit runs, comma-stripped, so "1,200" and "1200" compare equal."""
@@ -113,31 +156,81 @@ def _numbers_in(text: str) -> set[str]:
     return {match.group(0).replace(",", "") for match in _DIGIT_RUN.finditer(text)}
 
 
+def _named_things_in(text: str) -> set[str]:
+    """
+    Multi-word capitalised names, with leading sentence-openers stripped.
+
+    A capital letter means two different things and only one of them is a
+    name. "The Start plan" and "Privacy Mode is on" both look like two
+    capitalised words in a row; the first is a determiner that happens to
+    begin a sentence. Dropping known openers and then requiring two words to
+    remain separates them, and keeps a name that genuinely opens a sentence.
+    """
+
+    names: set[str] = set()
+
+    for match in _NAMED_THING.finditer(text):
+        words = match.group(0).split()
+
+        while words and words[0].lower() in _SENTENCE_OPENERS:
+            words = words[1:]
+
+        if len(words) >= 2:
+            names.add(" ".join(words).lower())
+
+    return names
+
+
 def find_unsupported_claim(sentence: str, *, grounded_text: str) -> str | None:
     """
     A short reason this sentence should not be spoken, or None to speak it.
 
-    Errs towards speaking. A false positive here replaces a correct answer
+    Still errs towards speaking. A false positive replaces a correct answer
     with a refusal, which makes the assistant useless and is invisible to the
-    operator - strictly worse than letting one more unsupported number
-    through, which the prompt rules are already discouraging.
+    operator, so every rule here has to be one where the claim is almost
+    certainly invented rather than merely unproven.
+
+    It used to check only amounts, clock times and completed actions, on the
+    reasoning that those are the specifics a caller acts on. That reasoning
+    was right and the scope was too narrow: across a whole call of wrong
+    answers it fired zero times, because the inventions were quantities
+    ("500 requests"), feature names, and confident prose about things
+    retrieval had never returned. Two rules were added, both chosen for
+    precision rather than reach:
+
+    - **Every digit must be in what the assistant was given.** Not only
+      amounts and times. A digit is a specific commitment - a limit, a count,
+      a duration - and a model that emits one it was not given has invented
+      it. Rhetorical numbers survive because speech spells them out: a reply
+      headed for a text-to-speech engine says "two ways", not "2 ways".
+
+    - **A multi-word capitalised name must be in what the assistant was
+      given.** "Cloud Agents", "Privacy Mode", "Cursor Start" - if retrieval
+      returned nothing containing the name, the assistant is describing
+      something it was never told about, and "I don't have that detail" is
+      the true answer. Single capitalised words are deliberately not checked:
+      that would catch the first word of every sentence.
+
+    What it still cannot catch, and no guardrail of this shape can: an answer
+    built from chunks that are real but about the wrong question. Every fact
+    in it is supported, and it is still wrong. That is a retrieval problem.
     """
 
     if _COMPLETED_ACTION.search(sentence):
         return "claimed a completed action"
 
-    grounded_numbers = _numbers_in(grounded_text)
+    spoken_numbers = _numbers_in(sentence)
 
-    for pattern, reason in ((_MONEY, "unsupported amount"), (_CLOCK, "unsupported time")):
-        for match in pattern.finditer(sentence):
-            spoken = _numbers_in(match.group(0))
+    if spoken_numbers and not spoken_numbers <= _numbers_in(grounded_text):
+        # With no retrieval at all the grounded set is empty, so any number
+        # is unsupported by definition - which is the correct reading: the
+        # assistant was given nothing and answered with a figure anyway.
+        return "unsupported number"
 
-            # Supported only if every number in the claim is present in what
-            # the assistant was actually given. With no retrieval at all,
-            # grounded_numbers is empty and any amount or time is unsupported
-            # by definition.
-            if not spoken <= grounded_numbers:
-                return reason
+    unsupported_names = _named_things_in(sentence) - _named_things_in(grounded_text)
+
+    if unsupported_names:
+        return "unsupported name"
 
     return None
 
