@@ -28,18 +28,37 @@ from langchain_text_splitters import RecursiveCharacterTextSplitter
 from app.core.config import settings
 
 # BAAI/bge-base-en-v1.5 and its siblings accept 512 tokens including the two
-# special tokens the tokenizer adds, so 510 is the real content ceiling. The
-# budget sits below it rather than at it: a chunk that exactly fills the
-# window leaves the model no room, and smaller chunks retrieve more precisely
-# anyway, since a single embedding has to represent everything in them.
-MAX_CHUNK_TOKENS = 400
+# special tokens the tokenizer adds, so 510 is the real content ceiling. This
+# sits far below it, and the distance is the point.
+#
+# It was 400, which fits the model's window comfortably and was still much too
+# large. Two measured consequences on a real knowledge base of 4,185 chunks at
+# a median of 1,743 characters:
+#
+# - Retrieval could not discriminate. Every score across a whole call landed
+#   between 0.62 and 0.73, barely clear of the relevance floor, because a
+#   chunk that long covers several topics and its single embedding is the
+#   average of all of them. Everything matches everything, weakly.
+#
+# - Only two chunks fit the context builder's 4,000-character budget, so
+#   ranking mistakes were fatal rather than survivable. On one turn the FAQ
+#   that directly answered a pricing question was retrieved at 0.626 and then
+#   dropped, because two longer website chunks scored 0.02 higher and spent
+#   the whole budget. The model was handed seat pricing for a question about
+#   a different plan, and answered from it.
+#
+# 128 tokens is roughly 550 characters - a paragraph, one idea - so an
+# embedding represents one thing, and six or seven of them fit the same
+# budget. Retrieval gets more shots and each one means something.
+MAX_CHUNK_TOKENS = 128
 
-# Roughly 15%. With no overlap at all - which is what this used to do - a fact
-# that straddles a boundary is split across two chunks and neither retrieves
-# well for it: the usual reason a knowledge base "does not contain" something
-# a reader can point to in the source. The cost is more chunks, more embedding
-# calls, and a higher chance of two near-identical hits inside a small top-k.
-CHUNK_OVERLAP_TOKENS = 60
+# Still roughly 15%, scaled with the budget above. With no overlap at all -
+# which is what this used to do - a fact that straddles a boundary is split
+# across two chunks and neither retrieves well for it: the usual reason a
+# knowledge base "does not contain" something a reader can point to in the
+# source. The cost is more chunks, more embedding calls, and a higher chance
+# of two near-identical hits inside a small top-k.
+CHUNK_OVERLAP_TOKENS = 20
 
 # Characters per token when no real tokenizer is available - see
 # _length_function. Deliberately pessimistic (English prose runs nearer 4)
