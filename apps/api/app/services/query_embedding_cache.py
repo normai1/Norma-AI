@@ -136,3 +136,4 @@ def clear_query_embedding_cache() -> None:
     """
 
     _cache.clear()
+

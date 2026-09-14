@@ -20,7 +20,7 @@ from app.repositories import assistant as assistant_repo
 from app.repositories import faq_entry as faq_entry_repo
 from app.services.context_builder import build_context, chunks_that_fit
 from app.services.query_embedding_cache import warm_query_embeddings
-from app.services.retrieval import DEFAULT_TOP_K, retrieve
+from app.services.retrieval import DEFAULT_TOP_K, retrieve, wake_retrieval_path
 from app.services.retrieval_tracing import trace_retrieval
 
 logger = logging.getLogger(__name__)
@@ -145,6 +145,35 @@ async def warm_retrieval_cache(
 
     warmed = await warm_query_embeddings(
         embedding_provider, settings.embedding_model, questions
+    )
+
+    # Then one real retrieval, whatever was or was not cached above.
+    #
+    # Warming the cache and warming the path a turn takes are not the same
+    # thing, which is how this was missed twice. With no FAQ entries the
+    # call above does nothing at all - no questions, no provider call - and
+    # an assistant with no FAQs is exactly the one whose every question will
+    # be an uncached miss. But even with FAQs it only ever embedded; it
+    # never touched the search.
+    #
+    # The search is where the cold cost actually is. Measured immediately
+    # after the knowledge base was re-indexed, the first vector search took
+    # 4.14s and the next five took 55-118ms: the query reads roughly 35,000
+    # buffer pages, and the first one reads them off disk. Against a 1.5s
+    # per-turn budget the first turns of a call were abandoned one after
+    # another - and being abandoned, they never finished warming anything,
+    # so the turn after paid it again. Warming the provider alone did not
+    # help and could not have; three patient wake-up calls in a row left the
+    # next three turns still timing out.
+    #
+    # So this runs the whole thing - embed, then search - and discards the
+    # result. It costs one query while the greeting is playing.
+    await wake_retrieval_path(
+        db,
+        embedding_provider,
+        organization_id=assistant.organization_id,
+        workspace_id=assistant.workspace_id,
+        assistant_id=assistant_id,
     )
 
     return {"warmed": warmed}

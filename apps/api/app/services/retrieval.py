@@ -6,6 +6,7 @@ this function's first live caller, once it exists. No route yet: see
 feature 19's spec for why.
 """
 
+import logging
 import uuid
 from dataclasses import dataclass
 from typing import Any
@@ -19,6 +20,8 @@ from app.repositories import assistant as assistant_repo
 from app.repositories import chunk as chunk_repo
 from app.services.query_embedding_cache import embed_query, is_query_cached
 from app.services.retrieval_tracing import trace_step
+
+logger = logging.getLogger(__name__)
 
 DEFAULT_TOP_K = 5
 
@@ -144,3 +147,58 @@ async def retrieve(
     # it, and so the observability that reports scores reports the same set
     # the model was given.
     return [chunk for chunk in retrieved if chunk.score >= min_score]
+
+
+# What is asked at session start purely to warm the path, when there is no
+# real question yet. The content is irrelevant - only the work matters.
+_WAKE_QUERY = "hello"
+
+
+async def wake_retrieval_path(
+    db: AsyncSession,
+    embedding_provider: EmbeddingProvider,
+    *,
+    organization_id: uuid.UUID,
+    workspace_id: uuid.UUID,
+    assistant_id: uuid.UUID,
+) -> None:
+    """
+    Run one complete retrieval and throw the result away, so the first turn
+    of a call does not pay for a cold path.
+
+    Both legs are cold in their own way and the expensive one is not the
+    obvious one. The hosted embedding provider is slow and erratic after an
+    idle period, which is well known here. The vector search is worse:
+    measured straight after the knowledge base was re-indexed, the first
+    search took 4.14s and the next five took 55-118ms, because the query
+    reads on the order of 35,000 buffer pages and the first one reads them
+    from disk rather than from PostgreSQL's cache.
+
+    Against the media plane's 1.5s per-turn retrieval budget that first turn
+    is abandoned - and an abandoned turn warms nothing, so the next one pays
+    the same cost, and the next. Measured over eight consecutive turns after
+    a restart, half of them ran out of budget and answered with no knowledge
+    at all. Warming only the embedding provider does not help and cannot:
+    three patient provider wake-ups in a row still left the following three
+    turns timing out, because none of them touched the search.
+
+    Called once per session, before the caller has said anything, while the
+    greeting is playing - the one moment when several seconds cost nobody
+    anything.
+
+    Failure is not raised. The endpoint above is best-effort by contract,
+    and a warm that did not work leaves the call exactly where it would have
+    been without it.
+    """
+
+    try:
+        await retrieve(
+            db,
+            embedding_provider,
+            organization_id=organization_id,
+            workspace_id=workspace_id,
+            assistant_id=assistant_id,
+            query=_WAKE_QUERY,
+        )
+    except Exception:
+        logger.info("retrieval path warm-up did not complete", exc_info=True)

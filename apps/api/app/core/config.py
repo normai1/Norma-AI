@@ -50,6 +50,14 @@ class Settings(BaseSettings):
     app_version: str = "0.1.0"
     environment: str = "development"
     debug: bool = False
+
+    # Log every SQL statement and its bound parameters. Off even in
+    # development, and not tied to `debug`, because one of this
+    # application's bound parameters is a 768-float embedding vector on the
+    # per-turn retrieval path - see app/core/database.py for what that costs
+    # a live call. Turn it on deliberately, for a query you are debugging,
+    # and turn it off again.
+    sql_echo: bool = False
     # Matches apps/voice, which reads LOG_LEVEL from the environment too.
     log_level: str = "INFO"
 

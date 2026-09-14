@@ -1,5 +1,6 @@
 import uuid
 
+import pytest
 from httpx import AsyncClient
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -213,10 +214,41 @@ async def test_warming_twice_does_not_re_embed(
     assert (await client.post(url, headers=headers)).json() == {"warmed": 0}
 
 
-async def test_warming_an_assistant_with_no_faqs_is_a_no_op(
-    client: AsyncClient, db: AsyncSession
+async def test_warming_an_assistant_with_no_faqs_still_wakes_the_provider(
+    client: AsyncClient,
+    db: AsyncSession,
+    embedding_provider: MockEmbeddingProvider,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    """
+    There is nothing to cache, and that is not the same as nothing to do.
+
+    This used to be a genuine no-op: no FAQ questions, so no queries to
+    embed, so no call to the provider at all. An assistant with no FAQs is
+    precisely the one whose every caller question will be an uncached miss,
+    so it is the one that most needs the provider awake - and on a live
+    call the warm reported "entries=0" and was read as "nothing to do".
+
+    The hosted router goes cold when idle. Measured straight after an idle
+    period, the first call runs 3.1-7.0s against a 1.5s per-turn retrieval
+    budget, so the first turn is abandoned - and an abandoned call never
+    completes the wake-up, so the next turn pays it again. Eight consecutive
+    turns each lost their knowledge that way. One patient call at session
+    start, while the greeting is playing, and the turns after it ran
+    479-673ms with none lost.
+    """
+
     clear_query_embedding_cache()
+
+    embedded: list[list[str]] = []
+    real_embed = embedding_provider.embed
+
+    async def recording_embed(texts: list[str]) -> list[list[float]]:
+        embedded.append(list(texts))
+
+        return await real_embed(texts)
+
+    monkeypatch.setattr(embedding_provider, "embed", recording_embed)
 
     assistant, _organization, _workspace = await _make_assistant(
         db, "internal-warm-empty"
@@ -228,7 +260,10 @@ async def test_warming_an_assistant_with_no_faqs_is_a_no_op(
     )
 
     assert response.status_code == 200
+    # Still nothing cached - there were no questions to cache.
     assert response.json() == {"warmed": 0}
+    # But the provider was reached, which is the whole point.
+    assert len(embedded) == 1, "the provider was never called, so it stays cold"
 
 
 async def test_warming_does_not_reach_another_assistant_s_questions(

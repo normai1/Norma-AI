@@ -25,7 +25,11 @@ process that never embeds never opens a pool, and closed from the
 application lifespan.
 """
 
+import logging
+
 import httpx
+
+logger = logging.getLogger(__name__)
 
 # Generous, and deliberately not the per-turn budget: the crawl and upload
 # paths embed batches of dozens of chunks through this same client and a
@@ -43,6 +47,9 @@ _LIMITS = httpx.Limits(
     max_keepalive_connections=10,
     keepalive_expiry=300.0,
 )
+
+# See warm_embedding_connection for why this is not 1.
+_WARM_UP_CALLS = 3
 
 _client: httpx.AsyncClient | None = None
 
@@ -72,3 +79,59 @@ async def close_embedding_http_client() -> None:
         await _client.aclose()
 
     _client = None
+
+
+async def warm_embedding_connection() -> None:
+    """
+    Open the pool's first connection at startup, rather than making the
+    first caller of the day pay for it mid-turn.
+
+    The docstring above measures a cold client at 0.88-1.60s against a warm
+    one at 0.28-0.33s, and retrieval's whole per-turn budget is 1.5s. So the
+    first turns after a restart lose their knowledge entirely and the
+    assistant answers without it - measured immediately after a restart at
+    3.06s and 1.79s, both abandoned, before the next call came back in
+    1.33s and the one after in 0.16s.
+
+    That is every deploy, not an edge case: the media plane and the API
+    deploy separately and a restart is routine. Pre-warming is the first
+    technique CLAUDE.md section 11 lists for keeping retrieval inside the
+    budget, and this is the cheapest half of it.
+
+    Deliberately best-effort and never raised. It runs detached from the
+    lifespan so a slow or unreachable provider cannot hold up startup, and
+    an embedding provider that is down must not stop the API serving
+    everything that does not need it. Failure costs exactly what happens
+    today: the first turn is slow.
+    """
+
+    # Imported here, not at module scope: the providers this builds import
+    # this module for their shared client, so a top-level import is a cycle.
+    from app.providers.factory import get_embedding_provider
+
+    provider = get_embedding_provider()
+
+    # Three, not one. One was measured and was not enough: the first calls
+    # after a restart still ran 2.74s, 1.62s and 1.56s.
+    #
+    # Being honest about what this does and does not fix. It opens the pool
+    # and gets the handshake out of the way, which the measurements at the
+    # top of this module are worth. It does not keep the provider awake -
+    # the hosted router goes cold again after an idle period, so by the time
+    # a call arrives this has long since stopped helping. What covers the
+    # first turn of a call is the session-start wake in
+    # app/services/query_embedding_cache.py, which runs while the greeting
+    # is playing. This is the cheap half, and it is only the cheap half.
+    for attempt in range(_WARM_UP_CALLS):
+        try:
+            await provider.embed(["warm"])
+        except Exception:
+            logger.info(
+                "embedding connection warm-up did not complete (call %d)",
+                attempt + 1,
+                exc_info=True,
+            )
+
+            return
+
+    logger.info("embedding connection warmed with %d calls", _WARM_UP_CALLS)

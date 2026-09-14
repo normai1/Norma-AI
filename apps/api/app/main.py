@@ -1,3 +1,4 @@
+import asyncio
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
@@ -23,7 +24,10 @@ from app.api.v1.voices import router as voices_router
 from app.api.v1.workspaces import router as workspaces_router
 from app.core.config import settings
 from app.core.redis import redis
-from app.providers.embedding_http_client import close_embedding_http_client
+from app.providers.embedding_http_client import (
+    close_embedding_http_client,
+    warm_embedding_connection,
+)
 from app.services.retrieval_tracing import flush as flush_retrieval_traces
 
 # Item 24d: installs the redacting formatter, so nothing this process logs -
@@ -44,6 +48,7 @@ async def lifespan(app: FastAPI):
     # start, which may happen after this module is imported.
     install_redaction()
     await redis.ping()
+    asyncio.create_task(warm_embedding_connection())
 
     yield
 

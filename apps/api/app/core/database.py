@@ -10,7 +10,20 @@ from app.core.config import settings
 
 engine = create_async_engine(
     settings.database_url,
-    echo=settings.debug,
+    # Deliberately its own switch rather than following DEBUG, which is on
+    # in every development environment. Echo logs each statement with its
+    # bound parameters, and one of this application's parameters is a
+    # 768-float query vector: roughly 16KB of digits, per retrieval, on the
+    # per-turn path. It is then handed to item 24d's redacting formatter,
+    # which scans every record for PII patterns and rewrites digit runs - so
+    # the vector is not only formatted but regexed and rebuilt, thousands of
+    # substitutions at a time, between the caller finishing their sentence
+    # and the assistant starting to answer.
+    #
+    # Measured: retrieval through the internal endpoint at DEBUG=true ran
+    # 1.54-1.65s against a 1.5s per-turn budget, so the turn was abandoned
+    # and the assistant answered with no knowledge. See SQL_ECHO in config.
+    echo=settings.sql_echo,
     pool_pre_ping=True,
     pool_size=10,
     max_overflow=20,
