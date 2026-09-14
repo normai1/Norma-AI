@@ -13,6 +13,8 @@ from norma_shared.mock_speech import MockTTS
 from norma_shared.voice_session_ticket import create_voice_session_ticket
 from pipecat.audio.vad.vad_analyzer import VADState
 
+from app import config
+
 import app.main as main_module
 import app.media_session as media_session_module
 from app.llm_config_client import LLMConfig
@@ -224,3 +226,24 @@ def _receive_one(ws) -> tuple[str, object]:
         return ("bytes", message["bytes"])
 
     return ("text", json.loads(message["text"]))
+
+
+@pytest.fixture(autouse=True)
+def _ungated_audio_by_default(monkeypatch: pytest.MonkeyPatch):
+    """
+    Send every frame to the speech provider in pipeline tests.
+
+    These tests drive MockSTT, which releases its scripted transcripts after
+    a fixed number of chunks. The speech gate changes how many chunks reach
+    the provider - it substitutes silence for the room and releases a
+    pre-roll in one burst at a speech onset - so with it on, a mock keyed to
+    "the fourth chunk" fires somewhere else entirely and the test waits
+    forever for a transcript that already happened.
+
+    That is an artefact of counting frames, which no real provider does, so
+    the harness opts out rather than every test relearning the arithmetic.
+    The gate's own behaviour is covered directly in test_speech_gate.py, and
+    end to end in the test that turns this back on.
+    """
+
+    monkeypatch.setattr(config, "STT_GATE_ON_SPEECH", False)

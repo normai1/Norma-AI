@@ -27,6 +27,7 @@ from app.llm_pricing import realtime_turn_cost_micro_usd
 from app.retrieval_client import fetch_retrieved_context
 from app.sentence_chunker import SentenceChunker
 from app.session_resilience import SessionResilienceTracker
+from app.speech_gate import SpeechGate
 from app.spoken_text import to_spoken_text
 from app.turn_detection import (
     TurnDetector,
@@ -278,8 +279,23 @@ class SpeechToTextProcessor(FrameProcessor):
         language: str,
         keywords: Sequence[str] = (),
         silence_threshold_secs: float | None = None,
+        turn_detector: TurnDetector | None = None,
     ) -> None:
         super().__init__()
+        # The same detector turn-taking uses. Shared rather than a second
+        # opinion of this processor's own: two detectors disagreeing about
+        # whether the caller is speaking is a bug with no good outcome, and
+        # this one is already the source of truth for ending a turn.
+        self._turn_detector = turn_detector
+        self._speech_gate = (
+            SpeechGate(
+                pre_roll_seconds=config.STT_GATE_PRE_ROLL_SECONDS,
+                hangover_seconds=config.STT_GATE_HANGOVER_SECONDS,
+                sample_rate=AUDIO_SAMPLE_RATE_HZ,
+            )
+            if config.STT_GATE_ON_SPEECH and turn_detector is not None
+            else None
+        )
         self._provider = provider
         self._language = language
         self._keywords = keywords
@@ -339,6 +355,52 @@ class SpeechToTextProcessor(FrameProcessor):
             self._frames_sent += 1
 
             yield chunk
+
+    def _note_speech_sent(self, chunk: bytes) -> None:
+        """
+        Record that speech-level audio actually reached the provider, which
+        is what the deafness watchdog waits on a transcript for.
+        """
+
+        samples = memoryview(chunk).cast("h") if len(chunk) % 2 == 0 else None
+
+        if samples is None or len(samples) == 0:
+            return
+
+        for value in samples:
+            if (-value if value < 0 else value) >= _SPEECH_PEAK_FRACTION * 32768:
+                self._last_speech_at = time.monotonic()
+
+                return
+
+    def _audio_for_provider(self, chunk: bytes) -> list[bytes]:
+        """
+        What this frame becomes on its way to the transcriber: itself, an
+        equal length of silence, or - at a speech onset - the held-back
+        pre-roll and itself.
+
+        Also the one place that decides the deafness watchdog has something
+        to be owed a transcript for. Without that the watchdog would see
+        speech-level audio arriving, see no transcript coming back from a
+        provider it is deliberately being fed silence, and restart a
+        perfectly healthy stream every few seconds. That interaction is why
+        this gate was put off twice.
+        """
+
+        if self._speech_gate is None or self._turn_detector is None:
+            self._note_speech_sent(chunk)
+
+            return [chunk]
+
+        sending = self._speech_gate.feed(
+            chunk, speaking=self._turn_detector.is_speaking
+        )
+
+        if self._speech_gate.is_open:
+            for outgoing in sending:
+                self._note_speech_sent(outgoing)
+
+        return sending
 
     def _queue_audio(self, chunk: bytes, *, sample_rate: int) -> None:
         """
@@ -755,8 +817,13 @@ class SpeechToTextProcessor(FrameProcessor):
         self._total_frames += 1
         self._level_peak = max(self._level_peak, peak)
 
-        if peak >= _SPEECH_PEAK_FRACTION * 32768:
-            self._last_speech_at = time.monotonic()
+        # Deliberately not setting _last_speech_at here any more. The
+        # deafness watchdog asks "did speech go to the provider and nothing
+        # come back", and once the room is being replaced with silence the
+        # answer has to be about what was sent, not what arrived - otherwise
+        # the watchdog restarts a healthy stream every few seconds for
+        # failing to transcribe silence it was given on purpose. See
+        # _note_speech_sent.
 
         now = time.monotonic()
 
@@ -787,7 +854,9 @@ class SpeechToTextProcessor(FrameProcessor):
             await self.push_frame(frame, direction)
         elif isinstance(frame, InputAudioRawFrame):
             self._observe_incoming_audio(frame.audio)
-            self._queue_audio(frame.audio, sample_rate=frame.sample_rate)
+
+            for outgoing in self._audio_for_provider(frame.audio):
+                self._queue_audio(outgoing, sample_rate=frame.sample_rate)
             await self.push_frame(frame, direction)
         elif isinstance(frame, (EndFrame, CancelFrame)):
             logger.info(
@@ -2327,6 +2396,7 @@ def build_voice_session_pipeline_worker(
                 provider,
                 language=language,
                 keywords=keywords,
+                turn_detector=turn_detector,
                 # The same number the local VAD below uses. Two turn
                 # detectors disagreeing means the slower one decides, and
                 # the provider's own default was always the slower one - so

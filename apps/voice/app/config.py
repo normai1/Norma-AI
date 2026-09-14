@@ -209,3 +209,29 @@ STT_HEARING_TROUBLE_RESTARTS = int(
 STT_HEARING_TROUBLE_COOLDOWN_SECONDS = float(
     os.environ.get("STT_HEARING_TROUBLE_COOLDOWN_SECONDS", "25.0")
 )
+
+
+# Whether the transcriber is sent only the caller's own speech, with the room
+# replaced by silence (app/speech_gate.py).
+#
+# On. A transcriber hears everything it is given and finds words in a
+# television or a passing conversation far more readily than the detector
+# calls that sound speech, and those words ended turns, cancelled replies and
+# appeared in the transcript as things nobody said. Downstream guards stop
+# them doing damage; this stops them being produced.
+#
+# Set false to send every frame again, which is what to do if the caller is
+# being clipped and raising VAD_NOISE_MARGIN has not helped.
+STT_GATE_ON_SPEECH = os.environ.get("STT_GATE_ON_SPEECH", "true").lower() == "true"
+
+# How much audio from just before speech was confirmed is kept and sent with
+# it. The detector is a little behind the caller, and without this the first
+# syllable of every sentence is lost - which is the half of the requirement
+# that is easy to forget while fixing the other half.
+STT_GATE_PRE_ROLL_SECONDS = float(os.environ.get("STT_GATE_PRE_ROLL_SECONDS", "0.4"))
+
+# How long speech keeps flowing after the detector goes quiet. Covers the
+# pauses inside a sentence and the trailing word on a falling voice; too
+# short and the caller's speech arrives as fragments, which is how one-word
+# transcripts happen.
+STT_GATE_HANGOVER_SECONDS = float(os.environ.get("STT_GATE_HANGOVER_SECONDS", "0.8"))
