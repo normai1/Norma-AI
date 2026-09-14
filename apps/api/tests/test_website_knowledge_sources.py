@@ -507,14 +507,24 @@ async def test_a_large_crawl_embeds_in_batches_rather_than_one_request(
     )
 
     # Enough content that one request would carry far more than a batch.
-    body = " ".join(
-        f"Sentence {i} about the clinic and its services." for i in range(400)
-    )
+    #
+    # Each page says something different, which matters twice over. Site
+    # furniture is dropped by repetition (`drop_repeated_spans`), so pages
+    # with identical bodies collapse to one page's worth of chunks and this
+    # stops measuring batching at all - it measured only how many chunks one
+    # page happened to split into, and quietly stopped biting when the chunk
+    # budget grew. Distinct pages are also what a real crawl looks like.
+    def _body(page: int) -> str:
+        return " ".join(
+            f"Page {page} sentence {i} about the clinic and its services."
+            for i in range(400)
+        )
+
     page_fetcher.pages["http://example.com/"] = _page(
-        body + "".join(f'<a href="/p{i}">p{i}</a>' for i in range(12))
+        _body(0) + "".join(f'<a href="/p{i}">p{i}</a>' for i in range(12))
     )
     for i in range(12):
-        page_fetcher.pages[f"http://example.com/p{i}"] = _page(body)
+        page_fetcher.pages[f"http://example.com/p{i}"] = _page(_body(i + 1))
 
     provider = _CountingProvider(dimension=settings.embedding_dimension)
     overrides = client._transport.app.dependency_overrides
