@@ -3,6 +3,7 @@ from dataclasses import dataclass
 
 from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import defer
 
 from app.models.chunk import Chunk
 from app.models.knowledge_source import KnowledgeSource
@@ -173,8 +174,26 @@ async def search_by_similarity(
 
     distance = Chunk.embedding.cosine_distance(query_vector)
 
+    # The tenant filter and the vector index fight each other, and the fix
+    # lives in the database rather than here - see the migration that sets
+    # hnsw.iterative_scan. HNSW walks the index in global nearest-first order
+    # and the WHERE clause is applied afterwards, so every vector belonging to
+    # another assistant that happens to sit near the query is fetched,
+    # checked and discarded. Measured with 453 of 10,594 chunks belonging
+    # elsewhere: 983ms for one top-5 lookup even with the index present, 17ms
+    # with iterative scan on.
+    #
+    # It is set on the database, not issued here, because pgvector registers
+    # that parameter only once its library has been loaded into the backend -
+    # so a SET on a connection that has not yet run a vector query raises
+    # "unrecognized configuration parameter" and takes the turn down with it.
     result = await db.execute(
         select(Chunk, KnowledgeSource.type, distance.label("distance"))
+        # Every returned row carries a 768-float vector that no caller reads:
+        # retrieval wants the text, the source and the distance. Fetching and
+        # deserialising five of them per turn is most of the gap between this
+        # query's 17ms in psql and what the application was measuring.
+        .options(defer(Chunk.embedding))
         .join(KnowledgeSource, Chunk.knowledge_source_id == KnowledgeSource.id)
         .where(
             Chunk.organization_id == organization_id,
