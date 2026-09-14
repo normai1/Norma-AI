@@ -21,12 +21,16 @@ guessing it is what broke a live call. VAD_ADAPTIVE_FLOOR_SHADOW collects the
 real distribution without acting on it.
 """
 
+import math
+
 import pytest
 from pipecat.audio.vad.vad_analyzer import VADState
 
 from app.adaptive_vad import (
     DEFAULT_MAX_THRESHOLD,
     DEFAULT_MIN_THRESHOLD,
+    MAX_SUPPRESSED_RUN_SECONDS,
+    ONSET_WINDOW_SECONDS,
     WINDOW_BLOCKS,
     AdaptiveNoiseFloor,
     AdaptiveVolumeVADAnalyzer,
@@ -210,20 +214,28 @@ async def _feed(analyzer: AdaptiveVolumeVADAnalyzer, levels: list[float]) -> lis
     return [await analyzer.analyze_audio(audio) for _ in levels]
 
 
-def _analyzer(states: list[VADState], levels: list[float]) -> AdaptiveVolumeVADAnalyzer:
+def _scripted(states: list[VADState], levels: list[float], **kwargs):
     """
-    Wraps a scripted delegate with a scripted loudness sequence, so each
-    call to analyze_audio measures the next level in the list.
+    A delegate and a loudness sequence, indexed by step rather than popped.
+
+    Each analyze_audio call here carries exactly one gating block, and the
+    wrapper now measures twice within a step - the block that trains the
+    noise floor, and the trailing window an onset is judged on. Both are
+    looking at the same audio, so both get the same level.
     """
 
-    remaining = list(levels)
+    delegate = _ScriptedDelegate(states)
 
     def volume_of(_buffer: bytes, _sample_rate: int) -> float:
-        return remaining.pop(0) if remaining else levels[-1]
+        step = max(0, delegate._index - 1)
 
-    return AdaptiveVolumeVADAnalyzer(
-        _ScriptedDelegate(states), volume_of=volume_of
-    )
+        return levels[min(step, len(levels) - 1)]
+
+    return AdaptiveVolumeVADAnalyzer(delegate, volume_of=volume_of, **kwargs)
+
+
+def _analyzer(states: list[VADState], levels: list[float]) -> AdaptiveVolumeVADAnalyzer:
+    return _scripted(states, levels)
 
 
 async def test_a_speech_onset_that_does_not_stand_out_is_suppressed() -> None:
@@ -396,15 +408,259 @@ async def test_shadow_mode_reports_without_acting() -> None:
     states = [VADState.QUIET] * learn + [VADState.SPEAKING] * 3
     levels = [LOUD_ROOM] * learn + [LOUD_ROOM] * 3
 
-    remaining = list(levels)
-    analyzer = AdaptiveVolumeVADAnalyzer(
-        _ScriptedDelegate(states),
-        volume_of=lambda _b, _s: remaining.pop(0) if remaining else levels[-1],
-        shadow=True,
-    )
+    analyzer = _scripted(states, levels, shadow=True)
     verdicts = await _feed(analyzer, levels)
 
     # It would have suppressed these, and says so - but the call is
     # unaffected.
     assert analyzer.suppressed_runs == 1
     assert verdicts[-3:] == [VADState.SPEAKING] * 3
+
+
+# ---------------------------------------------------------------------------
+# The second live failure: the onset judged on the wrong audio, and one wrong
+# verdict lasting the rest of the call.
+#
+# Everything above feeds one complete gating block per analyze_audio call,
+# which is the one arrangement in which the old implementation looked
+# correct: a block finished on exactly the step the verdict was taken, so
+# "the last completed block" and "now" were the same audio. A real analyzer
+# is handed ~32ms at a time and a block finishes whenever it finishes, so at
+# an onset the last completed block is the room a moment earlier. These tests
+# feed small frames so that misalignment is present, which is the only way
+# they can see the bug.
+# ---------------------------------------------------------------------------
+
+FRAME_SECONDS = 0.02
+SAMPLE_RATE = 16000
+FRAME_SAMPLES = int(FRAME_SECONDS * SAMPLE_RATE)
+
+# Amplitudes chosen so the measure below reports the levels this file is
+# written against: the room at about 0.62, the caller at about 0.82.
+ROOM_AMPLITUDE = 130
+SPEECH_AMPLITUDE = 1304
+
+
+def _pcm(amplitude: int, frames: int = 1) -> bytes:
+    """
+    Frames at a fixed RMS amplitude.
+
+    Alternating sign, so the RMS is the amplitude exactly and no test
+    depends on a random seed.
+    """
+
+    sample = int(amplitude).to_bytes(2, "little", signed=True)
+    flipped = int(-amplitude).to_bytes(2, "little", signed=True)
+
+    return (sample + flipped) * (FRAME_SAMPLES * frames // 2)
+
+
+def _loudness(buffer: bytes, _sample_rate: int) -> float:
+    """
+    dBFS mapped onto pipecat's -110..-10 normalized scale.
+
+    A stand-in for calculate_audio_volume on the same scale and in the same
+    units, without depending on the exact shape of its filtering - what these
+    tests need is that a window half full of speech reads much closer to
+    speech than to the room, which is a property of energy, not of BS.1770.
+    """
+
+    samples = memoryview(buffer).cast("h")
+
+    if not len(samples):
+        return 0.0
+
+    mean_square = sum(sample * sample for sample in samples) / len(samples)
+    rms = math.sqrt(mean_square)
+
+    if rms <= 0:
+        return 0.0
+
+    decibels = 20 * math.log10(rms / 32768)
+
+    return min(1.0, max(0.0, (decibels + 110.0) / 100.0))
+
+
+class _Call:
+    """
+    A call fed frame by frame, with the delegate's verdict and the audio's
+    level given independently - because the whole bug lives in the gap
+    between when speech starts and when the delegate admits it has.
+    """
+
+    def __init__(self, **kwargs) -> None:
+        self.states: list[VADState] = []
+        self.delegate = _ScriptedDelegate(self.states)
+        self.analyzer = AdaptiveVolumeVADAnalyzer(
+            self.delegate, volume_of=_loudness, **kwargs
+        )
+        self.verdicts: list[VADState] = []
+
+    async def feed(self, *, amplitude: int, state: VADState, frames: int) -> None:
+        audio = _pcm(amplitude)
+
+        for _ in range(frames):
+            self.states.append(state)
+            self.verdicts.append(await self.analyzer.analyze_audio(audio))
+
+
+def _frames(seconds: float) -> int:
+    return round(seconds / FRAME_SECONDS)
+
+
+# Long enough for AdaptiveNoiseFloor.learned, which wants a quarter of the
+# window: WINDOW_BLOCKS // 4 gating blocks of 0.4s each.
+_LEARNING_SECONDS = (WINDOW_BLOCKS // 4) * 0.4 + 0.4
+
+
+async def test_the_onset_is_judged_on_the_sound_that_caused_it() -> None:
+    """
+    The regression for the live failure of 14 September.
+
+    The delegate confirms speech 0.2s after it starts, and at that instant
+    the most recently *completed* 400ms block is still entirely the room. The
+    old implementation read that block, compared the room against a threshold
+    derived from the room, and suppressed the caller - the logs from the call
+    show it exactly: a suppression at loudness 0.618 against a floor of
+    0.618, which is to say the "speech onset" measured as the quietest block
+    in twenty seconds.
+
+    Judged instead on the 400ms ending at the decision - half the room, half
+    the caller - the caller is heard.
+    """
+
+    call = _Call()
+
+    await call.feed(
+        amplitude=ROOM_AMPLITUDE,
+        state=VADState.QUIET,
+        frames=_frames(_LEARNING_SECONDS),
+    )
+
+    # Speech has begun, and the delegate has not caught up yet.
+    await call.feed(
+        amplitude=SPEECH_AMPLITUDE, state=VADState.QUIET, frames=_frames(0.2)
+    )
+    await call.feed(
+        amplitude=SPEECH_AMPLITUDE, state=VADState.SPEAKING, frames=_frames(0.5)
+    )
+
+    assert call.analyzer.suppressed_runs == 0, (
+        "the caller's first words were judged against audio from before "
+        "they started speaking"
+    )
+    assert call.verdicts[-1] == VADState.SPEAKING
+
+
+async def test_the_room_is_still_suppressed_when_it_is_the_room() -> None:
+    """
+    The other half, and the reason the previous test is not simply "admit
+    everything": audio that really is the room, at the room's own level, is
+    still refused.
+    """
+
+    call = _Call()
+
+    await call.feed(
+        amplitude=ROOM_AMPLITUDE,
+        state=VADState.QUIET,
+        frames=_frames(_LEARNING_SECONDS),
+    )
+    await call.feed(
+        amplitude=ROOM_AMPLITUDE, state=VADState.SPEAKING, frames=_frames(0.5)
+    )
+
+    assert call.analyzer.suppressed_runs == 1
+    assert call.verdicts[-1] == VADState.QUIET
+
+
+async def test_a_suppression_cannot_outlast_the_phrase_it_suppressed() -> None:
+    """
+    The second defect, and the one that turned a clipped phrase into a silent
+    call.
+
+    The verdict is taken once per run of SPEAKING and held. Nothing bounded
+    the run: the delegate's own volume gate is turned down to 0.3 to defer to
+    this one, so a room it calls speech can hold SPEAKING for minutes. On the
+    reported call one misjudged onset at 18:07:05 was still muting the caller
+    when they hung up five minutes later - every transcript in between
+    committed with words=0, because the provider was being sent silence.
+
+    So a suppression expires and the question is asked again. Here the caller
+    starts speaking into a run that was already suppressed, and has to be
+    heard without the delegate ever having gone quiet.
+    """
+
+    call = _Call()
+
+    await call.feed(
+        amplitude=ROOM_AMPLITUDE,
+        state=VADState.QUIET,
+        frames=_frames(_LEARNING_SECONDS),
+    )
+
+    # The room trips the delegate, and is correctly suppressed.
+    await call.feed(
+        amplitude=ROOM_AMPLITUDE, state=VADState.SPEAKING, frames=_frames(0.5)
+    )
+
+    assert call.verdicts[-1] == VADState.QUIET
+
+    # The caller now speaks, while the delegate stays SPEAKING throughout.
+    before = len(call.verdicts)
+    await call.feed(
+        amplitude=SPEECH_AMPLITUDE, state=VADState.SPEAKING, frames=_frames(5.0)
+    )
+
+    during_speech = call.verdicts[before:]
+
+    assert VADState.SPEAKING in during_speech, (
+        "one suppressed onset muted the caller for the rest of the run"
+    )
+
+    # And not much later than promised: the expiry, plus the window it then
+    # measures, plus a frame.
+    heard_after = during_speech.index(VADState.SPEAKING) * FRAME_SECONDS
+
+    assert heard_after <= MAX_SUPPRESSED_RUN_SECONDS + ONSET_WINDOW_SECONDS + 0.1
+
+
+async def test_an_admitted_caller_is_never_re_judged_mid_phrase() -> None:
+    """
+    The expiry applies to suppressions only, and this is why.
+
+    A voice falls at the end of a phrase and drops towards the room's level.
+    Re-judging an admitted run would cut the caller off on their own
+    trailing words - the flapping the wrapper exists not to introduce - so
+    once a run is admitted it runs to the delegate's own end.
+    """
+
+    call = _Call()
+
+    await call.feed(
+        amplitude=ROOM_AMPLITUDE,
+        state=VADState.QUIET,
+        frames=_frames(_LEARNING_SECONDS),
+    )
+
+    # With the delegate's own onset lag, as above. Without it the window at
+    # the decision is 95% room and the onset is suppressed - which is the
+    # gate working, and makes this test measure nothing.
+    await call.feed(
+        amplitude=SPEECH_AMPLITUDE, state=VADState.QUIET, frames=_frames(0.2)
+    )
+    await call.feed(
+        amplitude=SPEECH_AMPLITUDE, state=VADState.SPEAKING, frames=_frames(0.5)
+    )
+
+    assert call.verdicts[-1] == VADState.SPEAKING, "the onset was not admitted"
+
+    before = len(call.verdicts)
+
+    # The voice falls away, well past the suppression expiry.
+    await call.feed(
+        amplitude=ROOM_AMPLITUDE, state=VADState.SPEAKING, frames=_frames(5.0)
+    )
+
+    assert set(call.verdicts[before:]) == {VADState.SPEAKING}
+    assert call.analyzer.suppressed_runs == 0

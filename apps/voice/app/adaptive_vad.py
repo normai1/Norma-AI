@@ -41,6 +41,31 @@ One design point survives from the first attempt:
   turn of speech may *begin*, and once it has, the analyzer runs it to its
   end unmodified.
 
+**And it was wrong a second time, differently.** Rebuilding the estimator
+fixed how the floor is learned and left two faults in how the onset is
+*judged*, which together muted a caller for most of a five-minute call:
+
+- **The onset was judged on audio from before it.** Loudness was read from
+  the last *completed* 400ms gating block, so at the moment the delegate
+  confirmed speech the reading described the room a fraction of a second
+  earlier - not the speech. The log said so plainly and was not read
+  carefully enough: two suppressions at loudness 0.605 and 0.618 against
+  floors of 0.559 and 0.618, where real speech onsets on the same machine
+  measure 0.78 to 0.845. The second is the giveaway - a "speech onset"
+  measured at exactly the quietest block in twenty seconds is not speech
+  being measured. The onset is now measured over the audio immediately
+  *preceding the decision*, which is the audio that made the delegate say
+  speech.
+
+- **A single wrong verdict latched.** The verdict is taken once per run of
+  SPEAKING and held, which is right, but nothing bounded how long a run
+  lasts - and with the delegate's own volume gate turned down to defer to
+  this one, a noisy room can hold it SPEAKING indefinitely. One misjudged
+  onset therefore muted the caller not for a phrase but until the room
+  went quiet. A suppression now expires: after MAX_SUPPRESSED_RUN_SECONDS
+  the decision is taken again. Deciding afresh every couple of seconds is
+  not the block-by-block flapping the paragraph above rules out; it is the
+  bound that made that latch safe to have in the first place.
 """
 
 import logging
@@ -109,6 +134,26 @@ DEFAULT_MIN_THRESHOLD = 0.55
 # "admit things" is the right way to lose - the caller is heard, some of the
 # room is too, and someone can hear that something is wrong.
 DEFAULT_MAX_THRESHOLD = 0.75
+
+# How much of the audio immediately before a decision is measured to judge
+# that decision.
+#
+# A full gating block, ending *now* rather than whenever the last one
+# happened to finish. The delegate confirms speech start_secs (0.2) after it
+# begins, so this window is roughly half speech and half the room before it -
+# and loudness is an energy measure, so speech twenty decibels above the room
+# still dominates a window it only half fills. Reading a stale block instead
+# is what muted a live call.
+ONSET_WINDOW_SECONDS = 0.4
+
+# The longest one "this is the room" verdict may stand before it is taken
+# again.
+#
+# Short enough that the worst case of a wrong verdict is a clipped phrase
+# rather than a silent call, long enough not to reopen mid-phrase on a room
+# that really is being suppressed. The failure it bounds is not theoretical:
+# without it, one misjudged onset held for over five minutes.
+MAX_SUPPRESSED_RUN_SECONDS = 2.0
 
 
 class AdaptiveNoiseFloor:
@@ -196,10 +241,14 @@ class AdaptiveVolumeVADAnalyzer(VADAnalyzer):
         noise_floor: AdaptiveNoiseFloor | None = None,
         volume_of: Callable[[bytes, int], float] = calculate_audio_volume,
         shadow: bool = False,
+        onset_window_seconds: float = ONSET_WINDOW_SECONDS,
+        max_suppressed_run_seconds: float = MAX_SUPPRESSED_RUN_SECONDS,
     ) -> None:
         self._delegate = delegate
         self._noise_floor = noise_floor or AdaptiveNoiseFloor()
         self._volume_of = volume_of
+        self._onset_window_seconds = onset_window_seconds
+        self._max_suppressed_run_seconds = max_suppressed_run_seconds
         # Shadow mode logs what this would have decided and then passes the
         # delegate's verdict through untouched. It exists because the first
         # version of this gate deafened a live call, and the margin it needs
@@ -207,7 +256,13 @@ class AdaptiveVolumeVADAnalyzer(VADAnalyzer):
         # should not require risking another call to collect.
         self._shadow = shadow
         self._block: bytearray = bytearray()
+        # The audio immediately behind the playhead, kept so an onset can be
+        # judged on the sound that caused it rather than on the last block
+        # that happened to finish.
+        self._onset_window: bytearray = bytearray()
         self._recent_loudness = 0.0
+        # Samples of SPEAKING seen since the current suppression was decided.
+        self._suppressed_samples = 0
         # Whether the delegate's current run of SPEAKING was admitted. None
         # while it is quiet; True or False for the duration of a run, so the
         # verdict is taken once at the onset and then held - see the module
@@ -255,41 +310,98 @@ class AdaptiveVolumeVADAnalyzer(VADAnalyzer):
     async def analyze_audio(self, buffer: bytes) -> VADState:
         state = await self._delegate.analyze_audio(buffer)
 
+        self._remember(buffer)
         self._measure(buffer)
 
         if state != VADState.SPEAKING:
             # The run is over; the next onset gets a fresh decision.
             self._admitted = None
+            self._suppressed_samples = 0
 
             return state
 
         if self._admitted is None:
-            self._admitted = self._noise_floor.admits(self._recent_loudness)
+            self._decide()
+        elif not self._admitted:
+            # A suppression is the only verdict with an expiry. Admitting is
+            # allowed to stand for the whole run - that is the hysteresis
+            # this deliberately does not second-guess - but muting the caller
+            # has to be reconsidered, because getting it wrong is the failure
+            # that matters and nothing else will notice.
+            self._suppressed_samples += len(buffer) // 2
+            limit = self._max_suppressed_run_seconds * max(1, self.sample_rate)
 
-            if not self._admitted:
-                self._suppressed_runs += 1
-                # Levels only, never anything transcribed (CLAUDE.md 27).
-                logger.info(
-                    "vad onset %s as background: loudness=%.3f floor=%.3f "
-                    "threshold=%.3f",
-                    "would be suppressed" if self._shadow else "suppressed",
-                    self._recent_loudness,
-                    self._noise_floor.floor,
-                    self._noise_floor.threshold,
-                )
-            elif self._shadow:
-                logger.info(
-                    "vad onset would be admitted: loudness=%.3f floor=%.3f "
-                    "threshold=%.3f",
-                    self._recent_loudness,
-                    self._noise_floor.floor,
-                    self._noise_floor.threshold,
-                )
+            if self._suppressed_samples >= limit:
+                self._suppressed_samples = 0
+                self._decide()
 
         if self._shadow:
             return state
 
         return VADState.SPEAKING if self._admitted else VADState.QUIET
+
+    def _decide(self) -> None:
+        """Take the admit/suppress verdict for the run, and say why."""
+
+        loudness = self._onset_loudness()
+        self._admitted = self._noise_floor.admits(loudness)
+
+        if not self._admitted:
+            self._suppressed_runs += 1
+            # Levels only, never anything transcribed (CLAUDE.md 27).
+            logger.info(
+                "vad onset %s as background: loudness=%.3f floor=%.3f "
+                "threshold=%.3f",
+                "would be suppressed" if self._shadow else "suppressed",
+                loudness,
+                self._noise_floor.floor,
+                self._noise_floor.threshold,
+            )
+        elif self._shadow:
+            logger.info(
+                "vad onset would be admitted: loudness=%.3f floor=%.3f "
+                "threshold=%.3f",
+                loudness,
+                self._noise_floor.floor,
+                self._noise_floor.threshold,
+            )
+
+    def _onset_loudness(self) -> float:
+        """
+        The loudness of the audio immediately before now.
+
+        Falls back to the last completed gating block only while too little
+        audio has arrived to fill the window - the opening moments of a call,
+        where being permissive is the right way to be wrong.
+        """
+
+        wanted = self._window_bytes(self._onset_window_seconds)
+
+        if wanted <= 0 or len(self._onset_window) < wanted:
+            return self._recent_loudness
+
+        try:
+            return self._volume_of(bytes(self._onset_window), self.sample_rate)
+        except Exception:  # pragma: no cover - defensive
+            logger.debug("could not measure the onset window", exc_info=True)
+
+            return self._recent_loudness
+
+    def _window_bytes(self, seconds: float) -> int:
+        return int(seconds * self.sample_rate) * 2
+
+    def _remember(self, buffer: bytes) -> None:
+        """Keep the trailing onset window, and no more than that."""
+
+        wanted = self._window_bytes(self._onset_window_seconds)
+
+        if wanted <= 0:
+            return
+
+        self._onset_window.extend(buffer)
+
+        if len(self._onset_window) > wanted:
+            del self._onset_window[: len(self._onset_window) - wanted]
 
     def _measure(self, buffer: bytes) -> None:
         """
