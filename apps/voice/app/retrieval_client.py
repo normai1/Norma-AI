@@ -49,9 +49,36 @@ logger = logging.getLogger(__name__)
 _TIMEOUT_SECONDS = float(os.environ.get("RETRIEVAL_TIMEOUT_SECONDS", "1.5"))
 
 
+class RetrievedContext(str):
+    """
+    This turn's knowledge, and - when there is none - why there is none.
+
+    A `str` subclass so nothing that already consumes this has to change: the
+    value *is* the context text, and every existing caller and test double
+    keeps working unchanged.
+
+    The flag answers the one question the text cannot. An empty string means
+    two opposite things: the knowledge base was searched and does not cover
+    this, or it was never searched because the lookup did not finish. The
+    first justifies "I don't have that detail"; the second makes that
+    sentence a falsehood - the assistant may well have the detail and simply
+    failed to look. Callers that cannot tell them apart have to guess, and
+    the guess was reported as the assistant refusing a question it answers
+    perfectly well a moment later.
+    """
+
+    lookup_failed: bool
+
+    def __new__(cls, text: str = "", *, lookup_failed: bool = False) -> "RetrievedContext":
+        value = super().__new__(cls, text)
+        value.lookup_failed = lookup_failed
+
+        return value
+
+
 async def fetch_retrieved_context(
     assistant_id: uuid.UUID, query: str, *, client: httpx.AsyncClient | None = None
-) -> str:
+) -> RetrievedContext:
     owned_client = client or httpx.AsyncClient()
     started = time.monotonic()
 
@@ -73,14 +100,14 @@ async def fetch_retrieved_context(
                 time.monotonic() - started,
                 assistant_id,
             )
-            return ""
+            return RetrievedContext(lookup_failed=True)
         except httpx.HTTPError as exc:
             logger.warning(
                 "retrieval request failed: assistant=%s error=%s",
                 assistant_id,
                 type(exc).__name__,
             )
-            return ""
+            return RetrievedContext(lookup_failed=True)
 
         if response.status_code != 200:
             logger.warning(
@@ -88,7 +115,7 @@ async def fetch_retrieved_context(
                 response.status_code,
                 assistant_id,
             )
-            return ""
+            return RetrievedContext(lookup_failed=True)
 
         try:
             body = response.json()
@@ -100,18 +127,18 @@ async def fetch_retrieved_context(
             logger.warning(
                 "retrieval response was not valid JSON: assistant=%s", assistant_id
             )
-            return ""
+            return RetrievedContext(lookup_failed=True)
 
         if not isinstance(context, str):
             logger.warning(
                 "retrieval response had no usable context field: assistant=%s",
                 assistant_id,
             )
-            return ""
+            return RetrievedContext(lookup_failed=True)
 
         _log_what_was_retrieved(assistant_id, body)
 
-        return context
+        return RetrievedContext(context)
     finally:
         if client is None:
             await owned_client.aclose()

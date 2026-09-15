@@ -271,3 +271,59 @@ def test_the_bound_applies_to_what_is_held_not_only_what_is_sent() -> None:
         state.append_user_turn(f"turn {i}")
 
     assert len(state._messages) == 2
+
+
+def test_a_failed_lookup_does_not_claim_the_business_has_no_answer() -> None:
+    """
+    The regression for a contradiction a caller actually heard.
+
+    "What is cursor agent" was answered in full. "Tell me, what is cursor
+    agent", seconds later, was refused with "I don't have that detail to
+    hand". Retrieval is identical on both phrasings when measured - 0.813 and
+    0.797, five chunks each - and the only difference in the logs was
+    `retrieval timed out after 1.5s` on the second.
+
+    So the refusal was a falsehood: the business did have the answer and the
+    assistant had simply failed to look. An empty context means two opposite
+    things and the prompt has to say which, or the model picks one and
+    sometimes picks wrong in the way that destroys trust fastest - flatly
+    contradicting what it said a moment ago.
+    """
+
+    result = assemble_system_prompt(
+        base_prompt="You are Norma.", retrieved_context="", lookup_failed=True
+    )
+
+    assert "did not finish in time" in result
+    assert "Do not say you don't have the detail" in result
+    # And it asks for the one thing that recovers the turn, since a retry is
+    # normally fast (p50 640ms against a p90 of 800ms).
+    assert "say that again" in result
+
+
+def test_nothing_matching_still_says_it_does_not_have_the_detail() -> None:
+    """
+    The other half. When the knowledge really was searched and covers
+    nothing, "I don't have that detail" is true and must still be said -
+    otherwise every unanswerable question turns into "say that again", and
+    the caller is asked to repeat a question that will never be answered.
+    """
+
+    result = assemble_system_prompt(
+        base_prompt="You are Norma.", retrieved_context="", lookup_failed=False
+    )
+
+    assert "nothing in it matched the caller" in result
+    assert "did not finish in time" not in result
+
+
+def test_a_grounded_turn_carries_neither_notice() -> None:
+    result = assemble_system_prompt(
+        base_prompt="You are Norma.",
+        retrieved_context="Cursor Agent writes and runs code.",
+        lookup_failed=True,
+    )
+
+    assert "did not finish in time" not in result
+    assert "nothing in it matched the caller" not in result
+    assert "Cursor Agent writes and runs code." in result

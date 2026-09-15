@@ -376,3 +376,64 @@ async def test_a_request_made_outside_a_call_carries_no_correlation(
 
     assert CALL_ID_HEADER.lower() not in sent_headers
     assert TURN_ID_HEADER.lower() not in sent_headers
+
+
+async def test_a_timeout_is_marked_as_a_failed_lookup() -> None:
+    """
+    The regression for a contradiction a caller heard on one call.
+
+    "What is cursor agent" was answered in full; "Tell me, what is cursor
+    agent" was refused seconds later with "I don't have that detail to hand".
+    Both phrasings retrieve the same five chunks when measured (0.813 and
+    0.797) - the second turn's lookup had simply timed out.
+
+    The refusal was therefore a falsehood, and the prompt could not know: an
+    empty string meant both "searched, covers nothing" and "never searched".
+    It has to carry which.
+    """
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        raise httpx.ReadTimeout("too slow", request=request)
+
+    context = await fetch_retrieved_context(
+        _ASSISTANT_ID, "what is cursor agent", client=_client_returning(handler)
+    )
+
+    assert context == ""
+    assert context.lookup_failed is True
+
+
+async def test_a_search_that_matched_nothing_is_not_a_failed_lookup() -> None:
+    """
+    The other half, and the one that must not regress into asking the caller
+    to repeat a question nothing can answer: retrieval ran, matched nothing,
+    and "I don't have that detail" is the true answer.
+    """
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json={"context": ""})
+
+    context = await fetch_retrieved_context(
+        _ASSISTANT_ID, "who won the cricket", client=_client_returning(handler)
+    )
+
+    assert context == ""
+    assert context.lookup_failed is False
+
+
+async def test_every_other_failure_is_also_a_failed_lookup() -> None:
+    """One flag, set on every path where the answer was never looked for."""
+
+    cases = {
+        "non-200": lambda request: httpx.Response(503),
+        "malformed body": lambda request: httpx.Response(200, content=b"not json"),
+        "no context field": lambda request: httpx.Response(200, json={"other": 1}),
+    }
+
+    for name, handler in cases.items():
+        context = await fetch_retrieved_context(
+            _ASSISTANT_ID, "anything", client=_client_returning(handler)
+        )
+
+        assert context == "", name
+        assert context.lookup_failed is True, name

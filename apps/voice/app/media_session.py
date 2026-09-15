@@ -1219,7 +1219,12 @@ class LLMTurnProcessor(FrameProcessor):
                     retrieved_context = ""
 
                 system = assemble_system_prompt(
-                    base_prompt=self._system_prompt, retrieved_context=retrieved_context
+                    base_prompt=self._system_prompt,
+                    retrieved_context=retrieved_context,
+                    # getattr, not an attribute access: a test double may
+                    # return a plain str, and a missing flag means the
+                    # ordinary "nothing matched" case.
+                    lookup_failed=getattr(retrieved_context, "lookup_failed", False),
                 )
                 stream = self._llm_provider.stream(
                     self._conversation.messages, system=system, temperature=self._creativity

@@ -69,22 +69,20 @@ _GUARDRAIL_RULE = (
 # missing. On a business with a public website, which is most of them, that
 # produces a confident, detailed, wrong answer rather than a refusal.
 #
-# It happens on two very different turns and the caller must not be able to
-# tell them apart. Either nothing in the knowledge base matched the question,
-# or the lookup did not finish inside its budget - the hosted embedding
-# provider is routinely slower than the whole retrieval timeout. The first
-# means the business has not published the answer; the second means nobody
-# knows yet. Neither is a licence to invent one.
+# This is the case where the knowledge base was searched and covers nothing
+# relevant, so "I don't have that detail" is a true sentence. The other way
+# of having no context - the lookup never finished - is _LOOKUP_FAILED_NOTICE
+# below, and conflating the two is what made the assistant contradict itself
+# between one turn and the next.
 #
 # Deliberately not a blanket refusal. A caller who says hello, or gives their
 # number, or is asked to repeat themselves, is not asking for a fact, and an
 # assistant that answers "I don't have that detail" to "good morning" is its
 # own kind of broken.
 _NO_CONTEXT_NOTICE = (
-    "There is no reference information for this turn. Either nothing in this "
-    "business's knowledge matched the caller, or the lookup did not finish - "
-    "you cannot tell which, and it does not matter: you have no source for "
-    "any specific claim right now. Do not answer from memory. If the caller "
+    "There is no reference information for this turn: this business's "
+    "knowledge was searched and nothing in it matched the caller. You have no "
+    "source for any specific claim. Do not answer from memory. If the caller "
     "asked something factual about the business, say you don't have that "
     "detail to hand and offer to take a message or have someone call back. "
     "Carry on normally otherwise - greet them, ask them to repeat or clarify, "
@@ -190,7 +188,37 @@ class ConversationState:
         return list(self._messages)
 
 
-def assemble_system_prompt(*, base_prompt: str, retrieved_context: str) -> str:
+# What the model is told when the lookup itself did not finish.
+#
+# Distinct from _NO_CONTEXT_NOTICE, and the distinction matters to the
+# caller. "Nothing matched" means the business has not published an answer,
+# and "I don't have that detail" is true. A lookup that timed out means
+# nobody asked the question - the knowledge base may answer it perfectly
+# well, and saying "I don't have that detail" is then simply false.
+#
+# Reported exactly that way: "what is cursor agent" answered in full, and
+# "tell me, what is cursor agent" refused seconds later. Identical retrieval
+# on both phrasings when measured - 0.813 and 0.797, five chunks each - and
+# the only difference in the logs was `retrieval timed out after 1.5s` on
+# the second. The caller heard a flat contradiction and read it, reasonably,
+# as the assistant making things up.
+#
+# So this asks for the one thing that actually recovers the turn: have them
+# say it again. The retry is nearly always fast - measured p50 640ms against
+# a p90 of 800ms - so the second attempt normally succeeds.
+_LOOKUP_FAILED_NOTICE = (
+    "Looking that up did not finish in time, so you have no reference "
+    "information for this turn. This is not the same as not knowing: the "
+    "business may well have the answer. Do not say you don't have the "
+    "detail, and do not answer from memory. Apologise briefly for the delay "
+    "and ask the caller to say that again, which gives the lookup another "
+    "attempt. If it has already failed twice, offer to take a message."
+)
+
+
+def assemble_system_prompt(
+    *, base_prompt: str, retrieved_context: str, lookup_failed: bool = False
+) -> str:
     """
     The operator's resolved prompt, then the standing guardrail rule, then
     this turn's reference information if there is any.
@@ -217,6 +245,10 @@ def assemble_system_prompt(*, base_prompt: str, retrieved_context: str) -> str:
     block = contain_untrusted(retrieved_context, label=_CONTEXT_LABEL) if retrieved_context else ""
 
     if not block:
-        return f"{prompt}\n\n{_NO_CONTEXT_NOTICE}"
+        # Which of the two empty cases this is decides whether "I don't have
+        # that detail" is true or a falsehood - see _LOOKUP_FAILED_NOTICE.
+        notice = _LOOKUP_FAILED_NOTICE if lookup_failed else _NO_CONTEXT_NOTICE
+
+        return f"{prompt}\n\n{notice}"
 
     return f"{prompt}\n\n{_CONTEXT_HEADING}\n{block}"
