@@ -77,8 +77,37 @@ _MAX_STOP_SECS = 1.5
 # this caller, ignore that room - and it can only do both while the two are
 # far apart in level. Making it relative to each call's own measured noise
 # floor is the real answer and is not built.
+# **0.8 was measured deaf on a real machine and came down to 0.73.** The
+# table above maps a threshold to the *peak* that reaches it, and a peak is
+# not what the analyzer compares - it compares a 400ms block's integrated
+# loudness, which for real speech sits well below the peak. Reading the
+# table as though the two were the same is what put this at 0.8.
+#
+# Measured on one caller's session, four calls and thirteen minutes, through
+# pipecat's own calculate_audio_volume:
+#
+#     their background, median peak 280   -> loudness 0.615
+#     their background, p90 peak    580   -> loudness 0.677
+#     real speech onsets, live call       -> loudness 0.780 - 0.845
+#
+# 0.8 sits inside the range real speech occupies, so it rejects most of it:
+# the analyzer reported speech zero times in thirteen minutes, across four
+# calls in which the caller spoke. Nothing reached the transcriber - the
+# speech gate correctly forwards silence for audio the analyzer says is not
+# the caller - so every committed transcript was empty and no turn ever
+# ended. Reported as "I said hello, there is no transcript and no response".
+#
+# 0.73 is the midpoint of that caller's loudest background (0.677) and the
+# quietest real speech onset (0.780). It is the same measured-not-guessed
+# rule as before, applied to the quantity the analyzer actually uses.
+#
+# The tension this does not resolve, and cannot: 0.8 was right for a machine
+# whose speech reached 0.85 and whose room was louder. One absolute number
+# cannot serve both microphones, which is what app/adaptive_vad.py exists
+# for. VAD_ADAPTIVE_FLOOR_SHADOW is on, logging what a relative floor would
+# decide against real onsets, so the next calibration is measured too.
 _VAD_CONFIDENCE = float(os.environ.get("VAD_CONFIDENCE", "0.8"))
-_VAD_MIN_VOLUME = float(os.environ.get("VAD_MIN_VOLUME", "0.8"))
+_VAD_MIN_VOLUME = float(os.environ.get("VAD_MIN_VOLUME", "0.73"))
 
 # Whether the volume floor follows this call's own background instead of
 # sitting at a fixed absolute level (app/adaptive_vad.py). On, because a
