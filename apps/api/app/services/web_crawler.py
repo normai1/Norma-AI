@@ -93,6 +93,39 @@ def _normalize_url(url: str) -> str:
 # not an address, not validate deliverability.
 _EMAIL_SHAPE = re.compile(r"^[^@\s]+@[^@\s]+\.[A-Za-z]{2,}$")
 
+# Elements that end a line of text. They are what gives the chunker
+# something to split on - see _extract_text.
+_BLOCK_LEVEL_TAGS = (
+    "address",
+    "article",
+    "blockquote",
+    "br",
+    "dd",
+    "div",
+    "dl",
+    "dt",
+    "figcaption",
+    "figure",
+    "h1",
+    "h2",
+    "h3",
+    "h4",
+    "h5",
+    "h6",
+    "hr",
+    "li",
+    "main",
+    "ol",
+    "p",
+    "pre",
+    "section",
+    "table",
+    "td",
+    "th",
+    "tr",
+    "ul",
+)
+
 _NON_CONTENT_TAGS = (
     "script",
     "style",
@@ -197,9 +230,38 @@ def _extract_text(html: str) -> str:
     for tag in soup.select('[aria-hidden="true"]'):
         tag.decompose()
 
-    text = soup.get_text(separator=" ", strip=True)
+    # A line break after every block-level element, before the text is
+    # flattened.
+    #
+    # Without this a whole page arrives as one unbroken run: measured on the
+    # pricing page of a real crawl, 5,668 characters containing zero
+    # newlines. The chunker splits on paragraph breaks first and line breaks
+    # second, so a page with neither offers it nothing to split on, and it
+    # falls through to cutting at whatever word boundary the token budget
+    # happens to land on.
+    #
+    # What that produces is chunks beginning and ending mid-thought. That
+    # pricing page became six of them, one starting "for daily agent users,
+    # and Ultra for agent power users" - so plan names and the prices beside
+    # them ended up in different chunks, and "what plans do you offer"
+    # retrieved a fragment scoring 0.630, barely over the relevance floor.
+    # Every page in the corpus was chunked this way.
+    #
+    # Appended inside each block tag rather than passed as get_text's
+    # separator, which would break between *every* text node - including an
+    # anchor or a bold run inside a sentence, tearing sentences apart instead
+    # of joining them.
+    for tag in soup.find_all(_BLOCK_LEVEL_TAGS):
+        tag.append("\n")
 
-    return re.sub(r"\s+", " ", text).strip()
+    text = soup.get_text(separator=" ")
+
+    # Collapse runs of spaces and tabs, and tidy up the line breaks - but
+    # keep them. They are the only structure the chunker has to work with.
+    text = re.sub(r"[ \t\r\f\v]+", " ", text)
+    text = re.sub(r" *\n *", "\n", text)
+
+    return re.sub(r"\n{3,}", "\n\n", text).strip()
 
 
 def _content_hash(text: str) -> str:

@@ -424,7 +424,19 @@ def test_content_inside_a_hidden_wrapper_is_kept() -> None:
     assert "The clinic opens at nine." in _extract_text(html)
 
 
-def test_ordinary_page_content_survives_unchanged() -> None:
+def test_ordinary_page_content_survives_with_its_structure() -> None:
+    """
+    A heading and a paragraph come out as separate lines, not one run of
+    words.
+
+    This used to flatten to "Pricing Lite is 50 interviews a month.", and so
+    did every page: measured on a real crawl, the pricing page was 5,668
+    characters containing zero newlines. The chunker splits on paragraph
+    breaks first and line breaks second, so a page with neither gives it
+    nothing to split on and it cuts wherever the token budget lands -
+    producing chunks that begin and end mid-thought.
+    """
+
     from app.services.web_crawler import _extract_text
 
     html = (
@@ -432,7 +444,42 @@ def test_ordinary_page_content_survives_unchanged() -> None:
         "<p>Lite is 50 interviews a month.</p></body></html>"
     )
 
-    assert _extract_text(html) == "Pricing Lite is 50 interviews a month."
+    assert _extract_text(html) == "Pricing\nLite is 50 interviews a month."
+
+
+def test_a_sentence_is_not_broken_up_by_the_markup_inside_it() -> None:
+    """
+    Why block-level tags get the line break rather than get_text's separator:
+    a separator breaks between every text node, so an anchor or a bold run
+    inside a sentence would tear the sentence in half - trading one chunking
+    problem for a worse one.
+    """
+
+    from app.services.web_crawler import _extract_text
+
+    html = (
+        "<html><body><p>Call <a href='/x'>our team</a> on "
+        "<strong>9am</strong> weekdays.</p></body></html>"
+    )
+
+    assert _extract_text(html) == "Call our team on 9am weekdays."
+
+
+def test_list_items_become_their_own_lines() -> None:
+    """
+    What lets a pricing table chunk correctly: each plan and the price beside
+    it stay together, instead of the plan names landing in one chunk and the
+    prices in the next.
+    """
+
+    from app.services.web_crawler import _extract_text
+
+    html = (
+        "<html><body><ul><li>Hobby - Free</li>"
+        "<li>Individual - $20 a month</li></ul></body></html>"
+    )
+
+    assert _extract_text(html) == "Hobby - Free\nIndividual - $20 a month"
 
 
 def test_a_cloudflare_obfuscated_email_is_decoded() -> None:
