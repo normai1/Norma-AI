@@ -227,10 +227,34 @@ def find_unsupported_claim(sentence: str, *, grounded_text: str) -> str | None:
         # assistant was given nothing and answered with a figure anyway.
         return "unsupported number"
 
-    unsupported_names = _named_things_in(sentence) - _named_things_in(grounded_text)
-
-    if unsupported_names:
-        return "unsupported name"
+    # A multi-word capitalised name was checked here too, and it is gone.
+    #
+    # The reasoning was symmetrical with the digit rule - if retrieval did not
+    # return the name, the assistant is describing something it was never
+    # told about. It is not symmetrical in practice, and the asymmetry is the
+    # whole point of this function's own warning about false positives.
+    #
+    # A number is a commitment the caller acts on: a price, a limit, a count.
+    # A name is usually a reference, and a model answering one question
+    # naturally mentions neighbouring things by their real names. Those names
+    # are in the knowledge base; they are simply not in the three to five
+    # chunks retrieved for *this* question, which is what this function gets
+    # to see.
+    #
+    # Measured on one call: three replies blocked as "unsupported name", every
+    # one of them on a turn where retrieval had succeeded with good scores -
+    # and because a block abandons the rest of the reply, each became a
+    # truncated answer followed by "I don't have that detail in front of me".
+    # Reproduced afterwards against that call's own context: "You can use it
+    # with Cloud Agents for longer tasks" is blocked, and Cloud Agents is a
+    # real feature documented in the knowledge base.
+    #
+    # Prevention covers this better than enforcement can, which is what 24b
+    # asks for: the system prompt now tells the model that everything it says
+    # about the business comes from this turn's reference information and that
+    # its own memory of the business is not a source. That constrains the
+    # sentence before it is written, without needing to decide whether a
+    # capitalised pair of words is an invention or an ordinary mention.
 
     return None
 

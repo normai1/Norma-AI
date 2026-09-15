@@ -237,18 +237,48 @@ def test_a_number_with_no_retrieval_at_all_is_refused() -> None:
     )
 
 
-def test_a_feature_name_the_assistant_was_never_told_about_is_refused() -> None:
+def test_a_real_feature_name_is_not_treated_as_an_invention() -> None:
     """
-    If retrieval returned nothing containing the name, the assistant is
-    describing something it was not given, however fluent the sentence.
+    The regression for three blocked replies in a single call.
+
+    A multi-word capitalised name used to be refused when it did not appear
+    in this turn's retrieved text, by symmetry with the digit rule. The
+    symmetry does not hold. A number is a commitment the caller acts on; a
+    name is usually a reference, and a model answering one question mentions
+    neighbouring features by their real names as a matter of course - names
+    that are in the knowledge base but not in the three to five chunks this
+    turn happened to retrieve.
+
+    Every one of those three blocks landed on a turn where retrieval had
+    succeeded with good scores, and because a block abandons the rest of the
+    reply, each became a truncated answer followed by "I don't have that
+    detail in front of me right now". Taken from that call's own context:
+    "Cloud Agents" is a real, documented feature and was refused.
     """
 
-    reason = find_unsupported_claim(
-        "Privacy Mode is on by default.",
-        grounded_text="Cursor does not train on your code.",
+    assert (
+        find_unsupported_claim(
+            "You can use it with Cloud Agents for longer tasks.",
+            grounded_text="Cursor Agent can edit your codebase and run commands.",
+        )
+        is None
     )
 
-    assert reason == "unsupported name"
+
+def test_an_invented_number_is_still_refused_alongside_an_unknown_name() -> None:
+    """
+    Dropping the name rule must not drop the one that matters. A sentence
+    carrying both an unknown name and a figure the assistant was never given
+    is still refused - on the figure.
+    """
+
+    assert (
+        find_unsupported_claim(
+            "Privacy Mode costs 499 rupees.",
+            grounded_text="Cursor does not train on your code.",
+        )
+        == "unsupported number"
+    )
 
 
 def test_a_feature_name_that_is_in_the_context_is_spoken() -> None:
