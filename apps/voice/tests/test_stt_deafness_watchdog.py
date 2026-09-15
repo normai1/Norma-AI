@@ -13,6 +13,7 @@ the caller hung up.
 """
 
 import asyncio
+import time
 
 import pytest
 from norma_shared.speech import TranscriptEvent
@@ -392,3 +393,63 @@ async def test_a_transcript_ends_the_run_so_a_recovered_call_stays_quiet(
     processor._deaf_restarts = 0
 
     assert processor._deaf_restarts == 0
+
+
+async def test_a_conversational_pause_is_not_counted_against_the_provider() -> None:
+    """
+    The regression for four stream restarts in one call, each one losing the
+    audio in flight and arriving as a fragment of the caller's sentence.
+
+    The gap was measured from the provider's last event, which on a phone
+    call is the wrong clock entirely: the assistant answers, the caller
+    listens, and nobody sends speech for twenty or thirty seconds at a time.
+    That silence counted against the provider, so the moment the caller spoke
+    again the watchdog found "no transcript for 28 seconds" and tore down a
+    working stream before it had been given a chance to transcribe the word
+    that had just arrived.
+
+    What has to be measured is how long a transcript has been *owed*, which
+    starts when the caller speaks, not when the provider last replied.
+    """
+
+    processor = await _make_processor(_SilentProvider())
+    now = time.monotonic()
+
+    # The provider answered thirty seconds ago and nobody has spoken since -
+    # an ordinary pause while the assistant was talking.
+    processor._last_event_at = now - 30.0
+    processor._last_speech_at = now - 31.0
+    processor._speech_owed_since = now - 31.0
+
+    # The caller says one word.
+    processor._note_speech_sent(_SPEECH)
+
+    owed_for = time.monotonic() - processor._speech_owed_since
+
+    assert owed_for < 1.0, (
+        f"the provider is already considered {owed_for:.0f}s late for a word "
+        "that has only just arrived"
+    )
+
+
+async def test_speaking_on_does_not_reset_a_provider_that_is_already_behind() -> None:
+    """
+    The other direction, and what stops the fix above from disabling the
+    watchdog altogether: once a transcript is owed, continuing to talk must
+    not keep pushing the deadline back, or a genuinely deaf stream would
+    never be restarted while the caller kept speaking.
+    """
+
+    processor = await _make_processor(_SilentProvider())
+    now = time.monotonic()
+
+    # Speech arrived five seconds ago and the provider has said nothing since.
+    processor._last_event_at = now - 10.0
+    processor._last_speech_at = now - 5.0
+    processor._speech_owed_since = now - 5.0
+
+    processor._note_speech_sent(_SPEECH)
+
+    owed_for = time.monotonic() - processor._speech_owed_since
+
+    assert owed_for >= 4.5, "the deadline was pushed back by the caller still talking"

@@ -322,6 +322,11 @@ class SpeechToTextProcessor(FrameProcessor):
         # the watchdog's patience, means this stream has stopped listening.
         self._last_speech_at = 0.0
         self._last_event_at = 0.0
+        # When the provider started owing a transcript: the moment speech
+        # first arrived that it has not answered since. Reset every time it
+        # answers. See _watch_for_deafness for why the gap has to be
+        # measured from here and not from the provider's last event.
+        self._speech_owed_since = 0.0
         # Consecutive watchdog restarts with nothing transcribed between
         # them, and when the caller was last told about it.
         self._deaf_restarts = 0
@@ -369,7 +374,16 @@ class SpeechToTextProcessor(FrameProcessor):
 
         for value in samples:
             if (-value if value < 0 else value) >= _SPEECH_PEAK_FRACTION * 32768:
-                self._last_speech_at = time.monotonic()
+                now = time.monotonic()
+
+                # Only the *first* unanswered frame starts the clock. While
+                # the provider is up to date this keeps moving forward with
+                # the caller; the moment it falls behind, this pins the
+                # instant it did, and the watchdog measures from there.
+                if self._last_speech_at <= self._last_event_at:
+                    self._speech_owed_since = now
+
+                self._last_speech_at = now
 
                 return
 
@@ -677,7 +691,20 @@ class SpeechToTextProcessor(FrameProcessor):
             if self._last_speech_at <= self._last_event_at:
                 continue
 
-            silent_for = time.monotonic() - self._last_event_at
+            # Measured from when the provider started owing a transcript,
+            # not from when it last produced one. Those are the same number
+            # only if the caller speaks continuously, and a phone call is the
+            # opposite: the assistant answers, the caller listens, and
+            # nobody sends speech for twenty or thirty seconds at a time.
+            #
+            # Using the provider's last event meant that gap counted against
+            # it. The caller would finish listening, say one word, and this
+            # would find "no transcript for 28 seconds" and tear down a
+            # working stream before the provider had been given a chance to
+            # transcribe that word at all - measured at four restarts in a
+            # single call, each one losing the audio in flight and arriving
+            # as a fragment of the caller's sentence.
+            silent_for = time.monotonic() - self._speech_owed_since
 
             if silent_for < config.STT_DEAF_WATCHDOG_SECONDS:
                 continue
@@ -692,6 +719,7 @@ class SpeechToTextProcessor(FrameProcessor):
             # replacement stream gets its own full window instead of being
             # torn down again on the next poll.
             self._last_event_at = time.monotonic()
+            self._speech_owed_since = self._last_event_at
             self._deaf_restarts += 1
 
             await self._maybe_say_it_cannot_hear()
