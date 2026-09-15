@@ -614,7 +614,30 @@ export default function TestCallPage() {
           channelCount: 1,
           echoCancellation: true,
           noiseSuppression: true,
-          autoGainControl: true,
+          // Off, deliberately, and this one is load-bearing.
+          //
+          // Automatic gain control is built for a conference call: it hunts
+          // for a target level and rides the gain to reach it. On this
+          // deployment it oscillates instead of settling, and the swing is
+          // enormous - describeInputLevel's own bands were derived from four
+          // sessions in one morning alternating between a p90 of 32,555 out
+          // of 32,768 and 422. The first is clipping at full scale, the
+          // second is near-silence.
+          //
+          // Both ends break the call, in ways that look like different bugs.
+          // Clipped speech is distorted, and a transcriber asked to read
+          // distortion returns words that were never said - measured on a
+          // live call reaching 32,767 exactly, the largest value a 16-bit
+          // sample can hold, with floatToPCM16 clamping what arrived above
+          // 1.0. At the other end the detector finds no speech at all and
+          // the caller sits in silence. Chasing either with a threshold is
+          // chasing a level that moves between calls, which is what made the
+          // volume floor look wrong twice when it was not.
+          //
+          // Off, the level is simply whatever the operating system's input
+          // gain is: stable, and adjustable once, with the on-screen level
+          // meter to adjust it against.
+          autoGainControl: false,
         },
       });
     } catch {
