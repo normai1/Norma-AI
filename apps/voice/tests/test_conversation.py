@@ -110,7 +110,7 @@ def test_the_model_is_told_its_own_memory_of_the_business_is_not_a_source() -> N
         base_prompt="You are helpful.", retrieved_context="The Pro plan is 649 rupees."
     )
 
-    assert "What you remember is not a source" in result
+    assert "what you remember is not a source" in result
 
 
 def test_assemble_system_prompt_appends_framed_context_when_present() -> None:
@@ -196,7 +196,7 @@ def test_grounded_answer_rules_are_present_for_every_resolution() -> None:
     ):
         result = assemble_system_prompt(base_prompt=base_prompt, retrieved_context="")
 
-        assert "comes from the reference information for this turn" in result
+        assert "comes from this turn's reference information" in result
         assert "Never say you have done something" in result
         assert result.startswith(base_prompt)
 
