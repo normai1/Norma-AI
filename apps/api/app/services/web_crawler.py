@@ -65,6 +65,10 @@ class CrawlResult:
     extracted_text: str
     content_hash: str
     fetched_at: datetime
+    # What this page is called, for chunks to carry so they can be read on
+    # their own - see _extract_title and the chunk titling in
+    # services/knowledge_source.py.
+    title: str = ""
 
 
 def _normalize_url(url: str) -> str:
@@ -92,6 +96,11 @@ def _normalize_url(url: str) -> str:
 # Loose on purpose - this only has to reject decoded bytes that are plainly
 # not an address, not validate deliverability.
 _EMAIL_SHAPE = re.compile(r"^[^@\s]+@[^@\s]+\.[A-Za-z]{2,}$")
+
+# A page title is prepended to every chunk of that page, so it is paid for
+# once per chunk in both tokens and embedding space. Long enough for a real
+# title, short enough that it never dominates the chunk it introduces.
+_MAX_TITLE_CHARS = 80
 
 # Elements that end a line of text. They are what gives the chunker
 # something to split on - see _extract_text.
@@ -289,6 +298,81 @@ def _extract_same_host_links(
     return links
 
 
+def _extract_title(html: str, *, url: str) -> str:
+    """
+    What this page is called: its <title>, else its first heading, else the
+    last meaningful segment of its URL.
+
+    Every page has at least one of the three, which is what makes this usable
+    on any site rather than tuned to one. Site names are commonly appended to
+    a title with a separator ("Pricing | Acme", "Pricing - Acme"); the part
+    before the separator is the part that says what the page is about, and
+    repeating the site name on every chunk of every page would add tokens
+    while making all of them look slightly more alike.
+    """
+
+    label = _label_from_path(url)
+
+    if label:
+        return label[:_MAX_TITLE_CHARS]
+
+    soup = BeautifulSoup(html, "html.parser")
+    raw = ""
+
+    if soup.title and soup.title.string:
+        raw = soup.title.string
+    else:
+        heading = soup.find(["h1", "h2"])
+
+        if heading:
+            raw = heading.get_text(separator=" ")
+
+    return re.sub(r"\s+", " ", raw).strip()[:_MAX_TITLE_CHARS]
+
+
+def _label_from_path(url: str) -> str:
+    """
+    The page's identity as its own URL states it - "Agent Overview" for
+    /docs/agent/overview.
+
+    The <title> looked like the obvious source and is not, because sites do
+    not agree on what order it goes in. Measured on one real site in a single
+    crawl: "Cursor · Pricing" puts the site name first, "Overview | Cursor
+    Docs" puts it last, and splitting on the separator therefore yields
+    "Cursor" for the pricing page - the site's name, on every chunk of every
+    page, saying nothing about any of them.
+
+    A path has no such ambiguity, is canonical, and is written by the site to
+    describe its own structure. It also carries the context a title often
+    drops: /docs/agent/overview is the *agent* overview, where its <title>
+    says only "Overview".
+
+    Returns "" for a root page or an opaque path (/p/12345), where the title
+    is the better answer and the caller falls back to it.
+    """
+
+    segments = [
+        segment
+        for segment in urlparse(url).path.strip("/").split("/")
+        if segment and not segment.isdigit()
+    ]
+
+    if not segments:
+        return ""
+
+    # The last two are the page and what it belongs to, which is as much
+    # context as a short label can carry without becoming a breadcrumb.
+    words = " ".join(segments[-2:]).replace("-", " ").replace("_", " ")
+    words = re.sub(r"\.(html?|php|aspx)$", "", words)
+
+    # An opaque final segment - a hash or an id with no vowels - describes
+    # nothing, so let the title answer instead.
+    if not re.search(r"[aeiou]", segments[-1], re.IGNORECASE):
+        return ""
+
+    return " ".join(word.capitalize() for word in words.split())
+
+
 def _to_result(url: str, html: str) -> CrawlResult:
     text = _extract_text(html)
 
@@ -297,6 +381,7 @@ def _to_result(url: str, html: str) -> CrawlResult:
         extracted_text=text,
         content_hash=_content_hash(text),
         fetched_at=datetime.now(UTC),
+        title=_extract_title(html, url=url),
     )
 
 

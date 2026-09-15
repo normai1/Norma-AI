@@ -542,3 +542,66 @@ def test_an_ordinary_email_on_a_page_is_untouched() -> None:
     from app.services.web_crawler import _extract_text
 
     assert "hello@example.com" in _extract_text("<p>Email hello@example.com.</p>")
+
+
+def test_a_pages_label_comes_from_its_url_not_its_title() -> None:
+    """
+    The title looked like the obvious source and is not: sites disagree about
+    what order it goes in. Measured on one real site in a single crawl,
+    "Cursor - Pricing" puts the site name first and "Overview | Cursor Docs"
+    puts it last, so splitting on the separator yields the site's own name
+    for the pricing page - on every chunk of every page, saying nothing about
+    any of them.
+    """
+
+    from app.services.web_crawler import _extract_title
+
+    html = "<html><head><title>Acme - Pricing</title></head><body>x</body></html>"
+
+    assert _extract_title(html, url="https://acme.com/pricing") == "Pricing"
+
+
+def test_the_url_carries_context_the_title_drops() -> None:
+    """
+    A docs page titled only "Overview" is the *agent* overview, and its path
+    is the only place that says so. Prepending "Overview" to every chunk
+    would add nothing; "Agent Overview" is what makes them findable.
+    """
+
+    from app.services.web_crawler import _extract_title
+
+    html = "<html><head><title>Overview | Acme Docs</title></head><body>x</body></html>"
+    label = _extract_title(html, url="https://acme.com/docs/agent/overview")
+
+    assert label == "Agent Overview"
+
+
+def test_a_root_page_falls_back_to_its_title() -> None:
+    """A path with no segments describes nothing, so the title answers."""
+
+    from app.services.web_crawler import _extract_title
+
+    html = "<html><head><title>Acme - build faster</title></head><body>x</body></html>"
+
+    assert _extract_title(html, url="https://acme.com/") == "Acme - build faster"
+
+
+def test_an_opaque_path_falls_back_to_its_title() -> None:
+    """
+    Not every site writes readable URLs. A hash or an id describes nothing,
+    and a label of "P 7f3a9b" would be worse than the title it replaced.
+    """
+
+    from app.services.web_crawler import _extract_title
+
+    html = "<html><head><title>Spring sale</title></head><body>x</body></html>"
+
+    assert _extract_title(html, url="https://acme.com/p/7f3xzb") == "Spring sale"
+
+
+def test_a_page_with_no_title_uses_its_heading() -> None:
+    from app.services.web_crawler import _extract_title
+
+    html = "<html><body><h1>Refund policy</h1></body></html>"
+
+    assert _extract_title(html, url="https://acme.com/") == "Refund policy"

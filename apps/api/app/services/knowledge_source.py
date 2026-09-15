@@ -742,10 +742,31 @@ async def _crawl_and_reconcile(
             before - len(spans_by_url),
         )
 
+    # Every chunk is given the name of the page it came from, and it is given
+    # it *after* deduplication above - prefixing first would make the same
+    # sidebar on two pages into two different strings, and nothing would ever
+    # be recognised as repeated.
+    #
+    # A chunk is retrieved and read entirely on its own, and a passage lifted
+    # out of the middle of a page frequently cannot say what it is about.
+    # Measured on a real 5,622-chunk corpus: 14% began mid-sentence and 12%
+    # began on a bare connective, and one chunk of a pricing page read "No.
+    # Subscriptions are only sold directly through cursor.com" - true, useful,
+    # and impossible to match to a caller's question or to interpret once
+    # retrieved. The page's own title is the cheapest thing that fixes both:
+    # it goes into the embedding, so the chunk is findable by what the page is
+    # about, and it goes to the model, so the answer is read in context.
+    titles = {result.url: (result.title or "") for result in crawl_results}
+
+    def _titled(page_url: str, span: ChunkSpan) -> str:
+        title = titles.get(page_url, "")
+
+        return f"{title}\n\n{span.text}" if title else span.text
+
+    chunk_texts = [_titled(page_url, span) for page_url, span in spans_by_url]
+
     try:
-        vectors = await embed_in_batches(
-            embedding_provider, [span.text for _url, span in spans_by_url]
-        )
+        vectors = await embed_in_batches(embedding_provider, chunk_texts)
     except EmbeddingProviderError as exc:
         knowledge_source.status = FAILED_STATUS
         knowledge_source.error_message = str(exc)
@@ -761,15 +782,21 @@ async def _crawl_and_reconcile(
         knowledge_source_id=knowledge_source.id,
         chunks=[
             ChunkWrite(
-                text=span.text,
+                text=chunk_text_with_title,
                 metadata={
                     "url": page_url,
+                    "title": titles.get(page_url, ""),
+                    # Offsets locate the body within the page's extracted
+                    # text, which is what citation needs; the title above it
+                    # is not part of that span.
                     "char_start": span.char_start,
                     "char_end": span.char_end,
                 },
                 embedding=vector,
             )
-            for (page_url, span), vector in zip(spans_by_url, vectors, strict=True)
+            for (page_url, span), chunk_text_with_title, vector in zip(
+                spans_by_url, chunk_texts, vectors, strict=True
+            )
         ],
     )
 
