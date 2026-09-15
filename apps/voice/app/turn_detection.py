@@ -14,7 +14,6 @@ import time
 from collections.abc import Callable
 
 from app.adaptive_vad import AdaptiveNoiseFloor, AdaptiveVolumeVADAnalyzer
-from app.vad_diagnostics import DiagnosticVADAnalyzer
 from pipecat.audio.vad.silero import SileroVADAnalyzer
 from pipecat.audio.vad.vad_analyzer import VADAnalyzer, VADParams, VADState
 
@@ -136,12 +135,6 @@ _VAD_ADAPTIVE_FLOOR_SHADOW = (
 # How far above the measured room speech has to sit. See adaptive_vad.py.
 _VAD_NOISE_MARGIN = float(os.environ.get("VAD_NOISE_MARGIN", "0.10"))
 
-# Log, per two-second window, the two numbers the detector actually
-# compares and which of them fell short - see app/vad_diagnostics.py. On
-# by default: a caller who cannot be heard is this project's most
-# frequently reported failure and has now been misdiagnosed twice from
-# peak levels alone, which are not what the decision uses.
-_VAD_DIAGNOSTICS = os.environ.get("VAD_DIAGNOSTICS", "true").lower() == "true"
 
 # What Silero's own volume gate is set to while the adaptive floor is doing
 # the real work - low enough to defer to it, not zero, so a pathological
@@ -223,11 +216,6 @@ def _build_default_vad_analyzer(*, sensitivity: float, sample_rate: int) -> VADA
             noise_floor=AdaptiveNoiseFloor(margin=_VAD_NOISE_MARGIN),
             shadow=not _VAD_ADAPTIVE_FLOOR,
         )
-
-    # Outermost, so it reports the verdict the pipeline actually receives
-    # rather than one an inner wrapper may still overrule.
-    if _VAD_DIAGNOSTICS:
-        analyzer = DiagnosticVADAnalyzer(analyzer)
 
     # The constructor's sample_rate kwarg alone does not take effect - the
     # analyzer's active sample rate stays 0, and stop_secs/start_secs never
