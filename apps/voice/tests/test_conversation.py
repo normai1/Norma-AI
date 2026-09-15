@@ -327,3 +327,39 @@ def test_a_grounded_turn_carries_neither_notice() -> None:
     assert "did not finish in time" not in result
     assert "nothing in it matched the caller" not in result
     assert "Cursor Agent writes and runs code." in result
+
+
+def test_the_length_limit_is_a_number_the_model_can_check_itself_against() -> None:
+    """
+    "Keep it short" was the old wording and it did not work: five replies in
+    one call hit the 300-token ceiling exactly, around ninety seconds of
+    speech each, every one cut off mid-sentence when it ran out.
+
+    Measured against the same questions and the same retrieved context after
+    rewording - 97 words to 49, 112 to 50, 102 to 55, half the length and no
+    longer near the ceiling. A limit the model can count against does what an
+    adjective could not.
+    """
+
+    result = assemble_system_prompt(
+        base_prompt="You are Norma.", retrieved_context="The Pro plan is $20 a month."
+    )
+
+    assert "two or three sentences" in result
+
+
+def test_the_prompt_does_not_demonstrate_the_behaviour_it_forbids() -> None:
+    """
+    The old rule asked for brevity in one bullet while the bullet above it
+    worked an example of a reply reciting a whole pricing table - "There are
+    four plans. Lite includes 50 interviews a month, Standard 300," and so
+    on. A prompt that demonstrates the failure gets the failure.
+
+    What replaces it asks for the headline and an offer, so the worked
+    example and the instruction now agree.
+    """
+
+    result = assemble_system_prompt(base_prompt="You are Norma.", retrieved_context="x")
+
+    assert "Lite includes 50 interviews" not in result
+    assert "offer to go through the detail rather than going through it" in result

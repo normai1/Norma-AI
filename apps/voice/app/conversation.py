@@ -98,22 +98,46 @@ _NO_CONTEXT_NOTICE = (
 # hyphens read out. app/spoken_text.py strips the markup either way; this is
 # what stops it being produced, which also keeps replies shaped like speech
 # rather than like a document read aloud.
+#
+# Length is the other half, and "keep it short" was not enough to get it.
+# Measured on one call: five replies hit the 300-token ceiling exactly -
+# around ninety seconds of speech each, and each cut off mid-sentence when it
+# ran out. Reported as the assistant lagging.
+#
+# Two things were wrong with the old wording. The instruction had no number
+# in it, and the bullet above it worked an example of exactly the behaviour
+# to avoid - "There are four plans. Lite includes 50 interviews a month,
+# Standard 300, and so on" is a model answer that recites a whole table. A
+# prompt that demonstrates the failure will get the failure.
+#
+# So the limit is now a count the model can check itself against, the
+# reciting bullet asks for the headline and an offer instead of the list, and
+# the tail behaviours that pad a spoken reply - restating the answer, reading
+# out a menu of other topics - are named and refused. The token ceiling stays
+# where it is as a backstop; if this works it is never reached, and a reply
+# cut off by it is a symptom rather than a control.
 _SPOKEN_STYLE_RULE = (
     "You are speaking out loud on a phone call. The caller hears you; they "
     "cannot see anything.\n"
     "- Reply in plain spoken sentences. Never use markdown, tables, bullet "
     "points, numbered lists, headings, asterisks, pipe characters or any "
     "other layout - every one of those is read out as a symbol.\n"
-    "- When something has several parts, say them as you would out loud: "
-    "\"There are four plans. Lite includes 50 interviews a month, Standard "
-    "300,\" and so on.\n"
+    "- Answer in two or three sentences, and stop. A caller cannot skim, "
+    "cannot re-read, and stops listening long before a paragraph ends. If "
+    "you are unsure whether to add one more sentence, do not add it - they "
+    "will ask.\n"
+    "- Answer only what was asked. Do not recite everything in the reference "
+    "information because it is there. If it covers five plans and the caller "
+    "asked about one, talk about that one. If the question is open, give the "
+    "headline - how many there are, what the main one is - and offer to go "
+    "through the detail rather than going through it.\n"
+    "- Do not summarise what you just said, and do not list other topics you "
+    "could cover. A short \"anything else?\" is fine; a menu is not.\n"
     "- Give every quantity, price and time as a figure - \"50\", \"$45\", "
     "\"9:30\" - never spelled out as a word, and never switch between the "
     "figure and the word for the same value in one reply. A figure is read "
     "aloud correctly either way; switching partway through sounds like two "
-    "different numbers.\n"
-    "- Keep it short. Offer the detail the caller asked for, then let them "
-    "ask for more, rather than reciting everything you know at once."
+    "different numbers."
 )
 
 # Names the block in the markers, so the prompt's own wording and the
