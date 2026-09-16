@@ -167,37 +167,14 @@ async def media_session(
         # same speed whether or not warming succeeds, or is even finished.
         _start_background(warm_retrieval_cache(assistant_id))
 
-        # Concurrently, because nothing here depends on anything else here
-        # and every millisecond is one the caller can already be talking
-        # into. The pipeline - and with it the transcriber - does not exist
-        # until all four have returned, so anything said before that is
-        # simply gone: measured across six sessions, the gap from the
-        # session opening to the transcriber being ready ran to a median of
-        # 1.6s and a worst case of 6.9s, and a caller who speaks in that
-        # window gets no transcript and no answer.
-        #
-        # Four sequential round trips measured 640ms; the same four
-        # concurrently measured 192ms. asyncio.gather rather than a task
-        # group: one failure should still propagate, exactly as it did when
-        # these were awaited in a row.
-        keywords, sensitivity, llm_config, tts_config = await asyncio.gather(
-            fetch_glossary_terms(assistant_id),
-            fetch_turn_sensitivity(assistant_id),
-            fetch_llm_config(assistant_id),
-            fetch_tts_config(assistant_id),
-        )
+        keywords = await fetch_glossary_terms(assistant_id)
+        sensitivity = await fetch_turn_sensitivity(assistant_id)
+        llm_config = await fetch_llm_config(assistant_id)
+        tts_config = await fetch_tts_config(assistant_id)
         provider = get_stt_provider()
         llm_provider = get_llm_provider()
         tts_provider = get_tts_provider()
 
-        # Same reasoning as the retrieval warm above, for the other hosted
-        # provider on the turn path: open the connection while the greeting
-        # is playing rather than in front of the caller's first answer.
-        for provider_with_warm in (tts_provider, llm_provider):
-            warm = getattr(provider_with_warm, "warm", None)
-
-            if warm is not None:
-                _start_background(warm())
         worker = build_voice_session_pipeline_worker(
             websocket,
             provider,
