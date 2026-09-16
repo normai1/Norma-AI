@@ -23,6 +23,7 @@ from app.guardrails import (
     find_unsupported_claim,
 )
 from app.llm import LLMProvider, LLMProviderError, LLMRateLimited
+from app.llm_provider_factory import get_fallback_llm_provider
 from app.llm_pricing import realtime_turn_cost_micro_usd
 from app.retrieval_client import fetch_retrieved_context
 from app.sentence_chunker import SentenceChunker
@@ -1158,6 +1159,10 @@ class LLMTurnProcessor(FrameProcessor):
     ) -> None:
         super().__init__()
         self._llm_provider = llm_provider
+        # Set once the turn loop has switched to the fallback model, so a
+        # call that has already fallen back stays there rather than
+        # rediscovering the rate limit on the primary every turn.
+        self._used_fallback_llm = False
         self._turn_detector = turn_detector
         self._turn_metrics = turn_metrics
         self._session_resilience = session_resilience
@@ -1236,7 +1241,12 @@ class LLMTurnProcessor(FrameProcessor):
         # a retry means: see the LLMRateLimited branch below.
         drop_context_to_fit = False
 
-        for attempt in range(config.MAX_PROVIDER_RETRIES + 1):
+        # One extra pass beyond the retry budget, reachable only by the
+        # rate-limit branch switching to the fallback model: without it the
+        # switch happens on the final attempt and the loop ends before the
+        # fallback is ever asked anything. can_shed below still uses the
+        # configured budget, so this adds no ordinary retries.
+        for attempt in range(config.MAX_PROVIDER_RETRIES + 2):
             try:
                 retrieved_context = await fetch_retrieved_context(
                     self._assistant_id, caller_text
@@ -1287,6 +1297,16 @@ class LLMTurnProcessor(FrameProcessor):
                 can_shed = (
                     attempt < config.MAX_PROVIDER_RETRIES and not drop_context_to_fit
                 )
+                # Shedding buys one attempt against the same exhausted
+                # budget. A second model is a second budget - the quota is
+                # per model, measured: spending 1,500 tokens on one model
+                # left the other's remaining allowance untouched. So when
+                # there is nothing left to shed, the turn moves rather than
+                # dies, and the caller gets an answer from a smaller model
+                # instead of "Sorry, I'm having trouble responding right
+                # now".
+                can_fall_back = not can_shed and not self._used_fallback_llm
+                fallback = self._fallback_llm_provider() if can_fall_back else None
                 # Says what actually happens next. The first version of this
                 # line claimed a retry on both paths, including the one that
                 # gives up - a misleading log in precisely the situation
@@ -1298,11 +1318,24 @@ class LLMTurnProcessor(FrameProcessor):
                     exc.retry_after_seconds,
                     "retrying without retrieved context"
                     if can_shed
-                    else "giving up on this turn",
+                    else (
+                        f"retrying on the fallback model {config.LLM_FALLBACK_MODEL}"
+                        if fallback is not None
+                        else "giving up on this turn"
+                    ),
                 )
 
                 if can_shed:
                     drop_context_to_fit = True
+
+                    continue
+
+                if fallback is not None:
+                    # Only once per turn, and only for the rest of this call:
+                    # a fallback that could itself be rate limited must not
+                    # become a second way to loop.
+                    self._used_fallback_llm = True
+                    self._llm_provider = fallback
 
                     continue
 
@@ -1443,6 +1476,24 @@ class LLMTurnProcessor(FrameProcessor):
             self._session_resilience.record_turn_succeeded()
         except LLMProviderError:
             await self._give_up_on_turn()
+
+    def _fallback_llm_provider(self) -> LLMProvider | None:
+        """
+        A provider for the configured fallback model, or None.
+
+        Built here rather than at session start so a deployment with no
+        fallback configured constructs nothing, and a misconfigured one
+        fails on the turn that needed it rather than on every call. Never
+        raises: a fallback that cannot be built leaves the turn exactly
+        where it was, which is giving up with the spoken error.
+        """
+
+        try:
+            return get_fallback_llm_provider()
+        except Exception:
+            logger.warning("the fallback LLM could not be built", exc_info=True)
+
+            return None
 
     def _record_token_cost(self, generation: int) -> None:
         """

@@ -2299,3 +2299,104 @@ def test_a_rate_limited_turn_retries_without_retrieval_instead_of_giving_up(
 
     # And the caller got an answer rather than the error message.
     assert spoken and spoken[0] != "ERROR"
+
+
+async def test_a_rate_limited_turn_falls_back_to_a_second_model(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """
+    Reported as "Sorry, I'm having trouble responding right now" appearing
+    after a few questions on a call that was otherwise working.
+
+    It is the per-minute token quota. Measured on a real call: six turns
+    spending 13,693 tokens in about sixty seconds against a limit of 8,000,
+    and the seventh turn refused. Shedding the retrieved context buys one
+    attempt against the same exhausted budget and no more.
+
+    A second model is a second budget, which was measured rather than
+    assumed: spending 1,500 tokens on gpt-oss-120b took its remaining
+    allowance from 7,927 to 6,420 and left gpt-oss-20b's untouched at 7,927.
+    So the turn moves to the fallback instead of dying, and the caller hears
+    a smaller model's answer rather than an apology.
+    """
+
+    final = TranscriptEvent(text="What are your hours?", is_final=True)
+    mock_stt = MockSTT(script=[final], chunks_before_event=[1])
+
+    class _AlwaysRateLimited:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        def last_usage(self):
+            return None
+
+        async def stream(self, messages, *, system: str, temperature: float):
+            self.calls += 1
+
+            raise LLMRateLimited("over the limit", retry_after_seconds=366.0)
+
+            yield ""  # pragma: no cover - makes this an async generator
+
+    class _FallbackModel:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        def last_usage(self):
+            return None
+
+        async def stream(self, messages, *, system: str, temperature: float):
+            self.calls += 1
+
+            for word in ("We", "open", "at", "nine."):
+                yield word + " "
+
+    primary = _AlwaysRateLimited()
+    fallback = _FallbackModel()
+
+    monkeypatch.setattr(main_module, "get_stt_provider", lambda: mock_stt)
+    monkeypatch.setattr(main_module, "get_llm_provider", lambda: primary)
+    monkeypatch.setattr(main_module, "fetch_glossary_terms", _fake_fetch_glossary_terms)
+    monkeypatch.setattr(
+        main_module, "fetch_turn_sensitivity", _fake_fetch_turn_sensitivity
+    )
+    _patch_session_setup(monkeypatch)
+    monkeypatch.setattr(
+        main_module, "get_tts_provider", lambda: MockTTS(bytes_per_character=0)
+    )
+    monkeypatch.setattr(
+        media_session_module, "get_fallback_llm_provider", lambda: fallback
+    )
+    _patch_turn_detector_vad(
+        monkeypatch,
+        _ScriptedVADAnalyzer([VADState.SPEAKING, VADState.QUIET, VADState.QUIET]),
+    )
+    _capturing_record_turn_metric(monkeypatch)
+
+    assistant_id = "00000000-0000-0000-0000-0000000004b7"
+    chunk = bytes(range(256)) * 5
+    spoken = ""
+
+    with (
+        TestClient(app) as client,
+        client.websocket_connect(_media_session_url(assistant_id)) as ws,
+    ):
+        for _ in range(3):
+            ws.send_bytes(chunk)
+
+        while True:
+            message = json.loads(ws.receive_text())
+
+            if message["type"] == "llm_complete":
+                spoken = message["text"]
+                break
+
+            if message["type"] == "llm_error":
+                pytest.fail(
+                    "the caller heard the error message instead of the "
+                    "fallback model's answer"
+                )
+
+    assert "We open at nine." in spoken
+    assert fallback.calls == 1, "the fallback model was never asked"
+    # Shedding the context first, then moving - not straight to the fallback.
+    assert primary.calls > 1

@@ -35,12 +35,32 @@ class MissingGroqApiKeyError(ValueError):
     """
 
 
-def get_llm_provider(name: str | None = None) -> LLMProvider:
+def get_fallback_llm_provider() -> LLMProvider | None:
     """
-    Resolve an LLM provider by name, defaulting to LLM_PROVIDER.
+    The provider to use when the configured one is rate limited, or None
+    when no fallback is configured.
+
+    Same provider, different model, because the token quota is per model -
+    measured, not assumed: spending 1,500 tokens on gpt-oss-120b took its
+    remaining allowance from 7,927 to 6,420 and left gpt-oss-20b's
+    untouched at 7,927. A second model is therefore a second budget, which
+    a retry against the first model can never be.
+    """
+
+    if not config.LLM_FALLBACK_MODEL:
+        return None
+
+    return get_llm_provider(model=config.LLM_FALLBACK_MODEL)
+
+
+def get_llm_provider(name: str | None = None, *, model: str | None = None) -> LLMProvider:
+    """
+    Resolve an LLM provider by name, defaulting to LLM_PROVIDER, and to
+    LLM_REALTIME_MODEL unless a model is named.
     """
 
     provider_name = name if name is not None else config.LLM_PROVIDER
+    model_name = model if model is not None else config.LLM_REALTIME_MODEL
 
     if provider_name == "mock":
         return MockLLM()
@@ -54,7 +74,7 @@ def get_llm_provider(name: str | None = None) -> LLMProvider:
 
         return AnthropicLLM(
             api_key=config.ANTHROPIC_API_KEY,
-            model=config.LLM_REALTIME_MODEL,
+            model=model_name,
             base_url=config.ANTHROPIC_BASE_URL or None,
         )
 
@@ -66,7 +86,7 @@ def get_llm_provider(name: str | None = None) -> LLMProvider:
 
         return GroqLLM(
             api_key=config.GROQ_API_KEY,
-            model=config.LLM_REALTIME_MODEL,
+            model=model_name,
         )
 
     raise UnknownLLMProviderError(

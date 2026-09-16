@@ -39,6 +39,24 @@ LLM_PROVIDER = os.environ.get("LLM_PROVIDER", "mock")
 # rejection of a frontier model in the per-turn conversation loop.
 LLM_REALTIME_MODEL = os.environ.get("LLM_REALTIME_MODEL", "claude-haiku-4-5-20251001")
 
+# A second realtime model to fall back to when the first is rate limited.
+#
+# A per-minute token quota is the one provider failure that retrying cannot
+# fix, and shedding the prompt only buys one attempt. Measured on a real
+# call: six turns spending 13,693 tokens in about sixty seconds against a
+# limit of 8,000, and the seventh turn answered "Sorry, I'm having trouble
+# responding right now."
+#
+# What makes a second model a real answer rather than a slower retry is that
+# the quota is per model, which was measured rather than assumed: spending
+# 1,500 tokens on gpt-oss-120b took its remaining allowance from 7,927 to
+# 6,420 and left gpt-oss-20b's at 7,927.
+#
+# Empty disables it, and it is off by default: a fallback silently answering
+# from a different model is a surprise nobody asked for, and the models a
+# deployment is willing to speak with are the operator's decision.
+LLM_FALLBACK_MODEL = os.environ.get("LLM_FALLBACK_MODEL", "")
+
 # What LLM_REALTIME_MODEL charges, in USD per million tokens, as decimal
 # strings ("0.15") so no float ever represents money (item 25b, see
 # norma_shared.token_cost). Deliberately unset by default: a price is a fact
