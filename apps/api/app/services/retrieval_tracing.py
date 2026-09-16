@@ -32,8 +32,9 @@ Every entry point swallows its own failures and the trace is simply missing.
 """
 
 import logging
+import sys
 import uuid
-from collections.abc import Iterator, Sequence
+from collections.abc import Callable, Iterator, Sequence
 from contextlib import contextmanager
 from typing import TYPE_CHECKING, Any, Protocol
 
@@ -228,32 +229,36 @@ def trace_retrieval(
         if context.turn_id is not None:
             metadata["turn_id"] = str(context.turn_id)
 
-    try:
-        # enabled=True explicitly: the SDK otherwise decides from
-        # LANGSMITH_TRACING, and this project's switch is the presence of a
-        # key, so that a pasted key is all it takes.
-        with tracing_context(
+    # enabled=True explicitly: the SDK otherwise decides from
+    # LANGSMITH_TRACING, and this project's switch is the presence of a key,
+    # so that a pasted key is all it takes.
+    context_span, _ = _open_span(
+        lambda: tracing_context(
             enabled=True, client=client, project_name=settings.langsmith_project
-        ):
-            with trace(
-                "retrieval",
-                run_type="retriever",
-                inputs={
-                    "query": query if _include_text() else WITHHELD,
-                    "top_k": top_k,
-                    "min_score": min_score,
-                },
-                metadata=metadata,
-                tags=["retrieval", f"assistant:{assistant_id}"],
-            ) as run:
-                yield _RunRecorder(run, include_text=_include_text())
-    except Exception:
-        # Reached only if the SDK itself fails - a retrieval error propagates
-        # through the `with` above and is recorded on the run first. Either
-        # way the caller's answer matters more than the trace.
-        logger.warning("retrieval tracing failed", exc_info=True)
+        ),
+        "retrieval context",
+    )
+    span, run = _open_span(
+        lambda: trace(
+            "retrieval",
+            run_type="retriever",
+            inputs={
+                "query": query if _include_text() else WITHHELD,
+                "top_k": top_k,
+                "min_score": min_score,
+            },
+            metadata=metadata,
+            tags=["retrieval", f"assistant:{assistant_id}"],
+        ),
+        "retrieval",
+        warn=True,
+    )
 
-        yield _NullRecorder()
+    try:
+        yield _RunRecorder(run, include_text=_include_text()) if run else _NullRecorder()
+    finally:
+        _close_span(span, "retrieval")
+        _close_span(context_span, "retrieval context")
 
 
 # LangSmith validates run_type server-side and rejects the entire ingest
@@ -304,13 +309,73 @@ def trace_step(name: str, run_type: str, **metadata: Any) -> Iterator[None]:
 
         return
 
-    try:
-        with trace(name, run_type=run_type, metadata=metadata):
-            yield
-    except Exception:
-        logger.debug("could not record the %s span", name, exc_info=True)
+    span, _entered = _open_span(
+        lambda: trace(name, run_type=run_type, metadata=metadata), name
+    )
 
+    try:
         yield
+    finally:
+        _close_span(span, name)
+
+
+def _open_span(
+    factory: Callable[[], Any], name: str, *, warn: bool = False
+) -> tuple[Any, Any]:
+    """
+    Enter a LangSmith span, or (None, None) if opening it failed.
+
+    Entering and leaving are guarded; what happens *between* them is not, and
+    that distinction is the whole point of this pair existing.
+
+    Both tracing helpers used to wrap their own `yield` in a try/except, on
+    the stated assumption that "a retrieval error propagates through the
+    `with` above". It does not. A `@contextmanager` generator is suspended at
+    its yield, so an exception raised by the caller's body is thrown *into*
+    the generator at that line - where the except caught it, swallowed the
+    real error, and yielded a second time. contextlib then raised
+    "generator didn't stop after throw()", and that is what reached the
+    caller.
+
+    Seen in production the day HuggingFace's inference API returned 500s: a
+    clean EmbeddingProviderUnavailable became an opaque RuntimeError, the
+    endpoint answered 500 instead of degrading, and the traceback named this
+    module rather than the provider that was actually down. Observability
+    that rewrites the errors it observes is worse than none - CLAUDE.md
+    section 27 asks that nothing here raise, and swallowing somebody else's
+    exception is the other half of that rule.
+    """
+
+    try:
+        span = factory()
+
+        return span, span.__enter__()
+    except Exception:
+        # A turn's own trace failing is worth seeing at the level a
+        # deployment actually runs at; the per-step spans inside it are not,
+        # since a healthy turn opens several and losing one costs a detail
+        # rather than the trace.
+        if warn:
+            logger.warning("retrieval tracing failed", exc_info=True)
+        else:
+            logger.debug("could not open the %s span", name, exc_info=True)
+
+        return None, None
+
+
+def _close_span(span: Any, name: str) -> None:
+    """
+    Leave a span, passing it whatever exception is in flight so the trace
+    records the failure, and never letting its own failure replace that one.
+    """
+
+    if span is None:
+        return
+
+    try:
+        span.__exit__(*sys.exc_info())
+    except Exception:
+        logger.debug("could not close the %s span", name, exc_info=True)
 
 
 def flush() -> None:

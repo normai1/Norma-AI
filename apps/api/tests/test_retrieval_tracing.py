@@ -456,3 +456,85 @@ async def test_the_retrieve_endpoint_is_unchanged_when_tracing_cannot_work(
 
     assert untraced.status_code == traced.status_code == 200
     assert untraced.json() == traced.json()
+
+
+def test_an_error_inside_a_traced_step_reaches_the_caller_unchanged(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """
+    The regression for a live outage made unreadable by its own telemetry.
+
+    Both helpers wrapped their own yield in a try/except, on the stated
+    assumption that an error in the traced body "propagates through the with
+    above". It does not. A @contextmanager generator is suspended at its
+    yield, so the caller's exception is thrown *into* the generator there -
+    the except caught it, swallowed it, and yielded a second time, and
+    contextlib turned that into "generator didn't stop after throw()".
+
+    The day HuggingFace's inference API returned 500s, a clean
+    EmbeddingProviderUnavailable became an opaque RuntimeError, the endpoint
+    answered 500 instead of degrading, and the traceback named this module
+    instead of the provider that was down.
+    """
+
+    monkeypatch.setattr(settings, "langsmith_api_key", "test-key")
+
+    class _Boom(Exception):
+        pass
+
+    with pytest.raises(_Boom):
+        with retrieval_tracing.trace_step("embed_query", "embedding"):
+            raise _Boom("the provider is down")
+
+
+def test_an_error_inside_a_traced_retrieval_reaches_the_caller_unchanged(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The same hole in the outer helper, which is where it was hit."""
+
+    monkeypatch.setattr(settings, "langsmith_api_key", "test-key")
+
+    class _Boom(Exception):
+        pass
+
+    with pytest.raises(_Boom):
+        with retrieval_tracing.trace_retrieval(
+            assistant_id=uuid.uuid4(),
+            organization_id=uuid.uuid4(),
+            workspace_id=uuid.uuid4(),
+            query="anything",
+            top_k=5,
+            min_score=0.6,
+        ):
+            raise _Boom("the provider is down")
+
+
+def test_tracing_still_does_not_raise_on_its_own_account(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """
+    The other half of the rule, and what the swallowing was there for: if the
+    tracing SDK itself fails, the caller must not notice. Opening and closing
+    a span are guarded; only the body between them is not.
+    """
+
+    monkeypatch.setattr(settings, "langsmith_api_key", "test-key")
+    # How a broken SDK surfaces: the span never opens.
+    monkeypatch.setattr(
+        retrieval_tracing,
+        "_open_span",
+        lambda factory, name, **_kwargs: (None, None),
+    )
+
+    with retrieval_tracing.trace_step("embed_query", "embedding"):
+        pass
+
+    with retrieval_tracing.trace_retrieval(
+        assistant_id=uuid.uuid4(),
+        organization_id=uuid.uuid4(),
+        workspace_id=uuid.uuid4(),
+        query="anything",
+        top_k=5,
+        min_score=0.6,
+    ) as recorder:
+        assert recorder is not None
