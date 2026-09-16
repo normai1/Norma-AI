@@ -1330,6 +1330,35 @@ class LLMTurnProcessor(FrameProcessor):
             chunker = SentenceChunker()
             blocked = False
 
+            # What the assistant is allowed to say back: the knowledge it was
+            # given, *and* what the caller has told it on this call.
+            #
+            # Retrieved text alone is the wrong bar, and it broke the one
+            # skill that has nothing to do with the knowledge base. Reported
+            # from a real call: the caller gave their phone number and their
+            # email address, the assistant read them back to confirm - which
+            # is the whole of taking a message - and both replies were
+            # blocked as "unsupported number", because the digits the caller
+            # had just said were not in any crawled page. The caller heard
+            # "I don't have that detail in front of me right now" in answer
+            # to their own email address.
+            #
+            # Repeating what the caller said is not a claim about the
+            # business and cannot be an invention: they are the source. Only
+            # their own turns count - the assistant's previous replies are
+            # deliberately excluded, or anything it invented once would
+            # ground itself for the rest of the call.
+            grounded_text = "\n".join(
+                [
+                    retrieved_context,
+                    *(
+                        message.content
+                        for message in self._conversation.messages
+                        if message.role == "user"
+                    ),
+                ]
+            )
+
             async def emit(sentence: str) -> bool:
                 """Push one sentence, or the fallback if it cannot be spoken."""
 
@@ -1345,7 +1374,7 @@ class LLMTurnProcessor(FrameProcessor):
                     # There is nothing to say and nothing to check.
                     return True
 
-                reason = self._unsupported_claim_in(sentence, retrieved_context)
+                reason = self._unsupported_claim_in(sentence, grounded_text)
 
                 if reason is None:
                     reply_parts.append(sentence)

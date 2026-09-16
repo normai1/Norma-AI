@@ -32,11 +32,13 @@ from tests.conftest import (
 _KNOWLEDGE = "A standard session costs $50. We open at 9am."
 
 
-def _spoken_reply(monkeypatch, *, reply: str, knowledge: str) -> str:
+def _spoken_reply(
+    monkeypatch, *, reply: str, knowledge: str, caller_says: str = "How much is a session?"
+) -> str:
     """The assistant's completed reply text for one turn."""
 
     mock_stt = MockSTT(
-        script=[TranscriptEvent(text="How much is a session?", is_final=True)],
+        script=[TranscriptEvent(text=caller_says, is_final=True)],
         chunks_before_event=[1],
     )
     mock_llm = MockLLM(response=reply, chunk_words=3)
@@ -159,3 +161,53 @@ def test_an_ordinary_answer_is_spoken_unchanged(
     assert "Monday to Friday" in spoken
     assert "take a message" in spoken
     assert SAFE_FALLBACK not in spoken
+
+
+def test_the_assistant_may_read_back_what_the_caller_just_told_it(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """
+    The regression for a real call, and for the one skill that has nothing to
+    do with the knowledge base.
+
+    The caller gave their phone number and their email address; the assistant
+    read them back to confirm, which is the whole of taking a message; and
+    both replies were blocked as "unsupported number", because digits the
+    caller had just spoken were not in any crawled page. What they heard, in
+    answer to their own email address, was "I don't have that detail in front
+    of me right now."
+
+    Repeating what the caller said is not a claim about the business and
+    cannot be an invention - they are the source.
+    """
+
+    spoken = _spoken_reply(
+        monkeypatch,
+        caller_says="My phone number is 7400294369.",
+        reply="Thanks, I have your number as 7400294369.",
+        knowledge=_KNOWLEDGE,
+    )
+
+    assert "7400294369" in spoken
+    assert SAFE_FALLBACK not in spoken
+
+
+def test_the_knowledge_bar_still_applies_to_claims_about_the_business(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """
+    The other half: letting the caller's words ground a reply must not let
+    the assistant invent a price merely because a number was mentioned on
+    the call. A figure the caller never said and the knowledge never
+    contained is still refused.
+    """
+
+    spoken = _spoken_reply(
+        monkeypatch,
+        caller_says="My phone number is 7400294369.",
+        reply="Certainly. A session costs $250.",
+        knowledge=_KNOWLEDGE,
+    )
+
+    assert SAFE_FALLBACK in spoken
+    assert "$250" not in spoken
