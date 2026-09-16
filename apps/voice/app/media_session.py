@@ -108,6 +108,10 @@ _AUDIO_LEVEL_REPORT_SECONDS = 2.0
 # the STT stream ought to be reacting to - never to gate audio, which is the
 # mistake that made an earlier version of this file go deaf whenever the
 # threshold was wrong.
+# Added to the transcriber's silence threshold when deriving the gate's
+# hangover, so the two do not race - see _gate_hangover_seconds.
+_GATE_HANGOVER_MARGIN_SECONDS = 0.5
+
 _SPEECH_PEAK_FRACTION = 0.08
 
 # The most caller audio that may sit waiting to be sent to the speech
@@ -235,6 +239,42 @@ class RawAudioFrameSerializer(FrameSerializer):
         return None
 
 
+def _gate_hangover_seconds(silence_threshold_secs: float | None) -> float:
+    """
+    How long the gate keeps forwarding after the detector goes quiet - never
+    less than the transcriber's own silence threshold.
+
+    The gate replaces non-speech with silence, and the transcriber commits an
+    utterance once it has heard enough silence. So if the gate starts
+    injecting silence *before* the transcriber's threshold, the gate is what
+    ends the caller's sentence, and the operator's turn-sensitivity setting -
+    which is what sets that threshold - no longer decides anything.
+
+    That is not hypothetical. With a 0.8s hangover against a 0.9s threshold,
+    a caller pausing mid-sentence for under two seconds had their question
+    cut in half: one real call committed "Which Cursor feature require-",
+    mid-word, and the rest arrived as a second question a few seconds later.
+    Both halves were then answered separately, neither being what was asked.
+
+    Tying the two together instead means a longer question stays one
+    question on any assistant, and lengthening a caller's allowed pause is
+    done where CLAUDE.md says it should be - by turn sensitivity, which the
+    operator controls - rather than by a constant in here that silently
+    overrides it.
+
+    The margin covers the gap between the detector deciding the caller has
+    stopped and the transcriber starting to count: without it the two
+    thresholds race, and the gate wins about as often as not.
+    """
+
+    configured = config.STT_GATE_HANGOVER_SECONDS
+
+    if silence_threshold_secs is None:
+        return configured
+
+    return max(configured, silence_threshold_secs + _GATE_HANGOVER_MARGIN_SECONDS)
+
+
 class SpeechToTextProcessor(FrameProcessor):
     """
     Bridges Norma's SpeechToTextProvider contract (norma_shared.speech)
@@ -291,7 +331,7 @@ class SpeechToTextProcessor(FrameProcessor):
         self._speech_gate = (
             SpeechGate(
                 pre_roll_seconds=config.STT_GATE_PRE_ROLL_SECONDS,
-                hangover_seconds=config.STT_GATE_HANGOVER_SECONDS,
+                hangover_seconds=_gate_hangover_seconds(silence_threshold_secs),
                 sample_rate=AUDIO_SAMPLE_RATE_HZ,
             )
             if config.STT_GATE_ON_SPEECH and turn_detector is not None
