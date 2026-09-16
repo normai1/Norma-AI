@@ -15,6 +15,8 @@ from typing import Any
 from urllib.parse import urlencode
 
 import httpx
+
+from norma_shared.speech_http_client import get_speech_http_client
 import websockets
 import websockets.exceptions
 
@@ -148,8 +150,9 @@ class ElevenLabsTTS:
     Text-to-speech via ElevenLabs' streaming HTTP endpoint.
 
     Accepts an injected httpx.AsyncClient for testing (MockTransport); when
-    none is given, a client is created and closed per call so the provider
-    itself never needs explicit lifecycle management from its caller.
+    none is given it uses the process-wide kept-alive client, because a
+    handshake per call is paid once per *sentence* on the audio path - see
+    norma_shared.speech_http_client.
     """
 
     def __init__(
@@ -167,6 +170,32 @@ class ElevenLabsTTS:
         self._model_id = model_id
         self._timeout_seconds = timeout_seconds
 
+    async def warm(self) -> None:
+        """
+        Open the connection before a caller needs it.
+
+        The first request of a session pays DNS, TCP and TLS before any audio
+        can start, and the turn metrics show it: across 200 real turns the
+        first turn of a call ran 668ms of text-to-speech against 488ms on
+        later turns. Called at session start, while the greeting is playing,
+        which is the one moment in a call when a round trip costs nobody
+        anything.
+
+        A cheap authenticated GET rather than a synthesis request: it
+        establishes the pooled connection without spending the operator's
+        characters. Never raises - a warm that did not work leaves the call
+        exactly where it would have been without it.
+        """
+
+        try:
+            await (self._client or get_speech_http_client()).get(
+                f"{self._base_url}/v1/models",
+                headers={"xi-api-key": self._api_key},
+                timeout=self._timeout_seconds,
+            )
+        except Exception:
+            logger.debug("speech connection warm-up did not complete", exc_info=True)
+
     async def synthesize(
         self,
         text: str,
@@ -178,8 +207,11 @@ class ElevenLabsTTS:
         if not text:
             return
 
-        client = self._client or httpx.AsyncClient()
-        owns_client = self._client is None
+        # The shared, kept-alive client by default. Opening one here instead
+        # costs a handshake before any audio can start, once per sentence -
+        # see norma_shared.speech_http_client for the measurement.
+        client = self._client or get_speech_http_client()
+        owns_client = False
 
         # ElevenLabs' own documented mechanism for keeping prosody
         # continuous when one piece of speech is requested as several
@@ -228,8 +260,11 @@ class ElevenLabsTTS:
                 await client.aclose()
 
     async def list_voices(self) -> Sequence[Voice]:
-        client = self._client or httpx.AsyncClient()
-        owns_client = self._client is None
+        # The shared, kept-alive client by default. Opening one here instead
+        # costs a handshake before any audio can start, once per sentence -
+        # see norma_shared.speech_http_client for the measurement.
+        client = self._client or get_speech_http_client()
+        owns_client = False
 
         voices: list[Voice] = []
         next_page_token: str | None = None

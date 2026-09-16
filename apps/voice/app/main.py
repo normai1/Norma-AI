@@ -8,6 +8,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI, WebSocket
 from norma_shared.correlation import CallContext, bind_call_context, unbind_call_context
 from norma_shared.logging_setup import configure_logging, install_redaction
+from norma_shared.speech_http_client import close_speech_http_client
 from norma_shared.voice_session_ticket import (
     InvalidVoiceSessionTicket,
     decode_voice_session_ticket,
@@ -72,6 +73,10 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
     install_redaction()
 
     yield
+
+    # The kept-alive connection to the speech provider, which every sentence
+    # of every reply goes through.
+    await close_speech_http_client()
 
 
 app = FastAPI(title="Norma AI Voice", lifespan=lifespan)
@@ -169,6 +174,15 @@ async def media_session(
         provider = get_stt_provider()
         llm_provider = get_llm_provider()
         tts_provider = get_tts_provider()
+
+        # Same reasoning as the retrieval warm above, for the other hosted
+        # provider on the turn path: open the connection while the greeting
+        # is playing rather than in front of the caller's first answer.
+        for provider_with_warm in (tts_provider, llm_provider):
+            warm = getattr(provider_with_warm, "warm", None)
+
+            if warm is not None:
+                _start_background(warm())
         worker = build_voice_session_pipeline_worker(
             websocket,
             provider,

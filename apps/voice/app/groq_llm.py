@@ -19,6 +19,7 @@ and none is available - unlike OpenAI proper, this SDK's create() has no
 `stream_options` parameter at all, which is the first thing tried.
 """
 
+import logging
 from collections.abc import AsyncIterator, Sequence
 
 import groq
@@ -27,6 +28,8 @@ from norma_shared.token_cost import TokenUsage
 
 from app.conversation import Message
 from app.llm import LLMProviderTimeout, LLMProviderUnavailable, LLMRateLimited
+
+logger = logging.getLogger(__name__)
 
 # Matches app/anthropic_llm.py's own precedent exactly - a starting value
 # for a conversational spoken reply, not a tuned product decision.
@@ -53,6 +56,30 @@ class GroqLLM:
         self._max_tokens = max_tokens
         self._client = client or groq.AsyncGroq(api_key=api_key)
         self._last_usage: TokenUsage | None = None
+
+    async def warm(self) -> None:
+        """
+        Open the connection before a caller needs it.
+
+        The first request of a session pays DNS, TCP and TLS before a single
+        token can stream back, and the turn metrics show what that costs:
+        across 200 real turns the first turn of a call waited 1400ms for a
+        first token against 883ms on later turns. Called at session start,
+        while the greeting is playing.
+
+        Listing models rather than sending a completion, deliberately: it
+        opens the same connection and spends none of the realtime model's
+        tokens-per-minute allowance, which is already the binding constraint
+        on how many turns a conversation can have.
+
+        Never raises - a warm that did not work leaves the call exactly where
+        it would have been without it.
+        """
+
+        try:
+            await self._client.models.list()
+        except Exception:
+            logger.debug("llm connection warm-up did not complete", exc_info=True)
 
     def last_usage(self) -> TokenUsage | None:
         return self._last_usage
