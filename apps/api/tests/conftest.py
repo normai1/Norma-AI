@@ -179,7 +179,7 @@ async def embedding_provider() -> MockEmbeddingProvider:
     """
     The deterministic embedding double a test can inspect directly
     (embedded_texts) or force to fail (failure), injected in place of a
-    real OpenAI call.
+    real call to a hosted embedding provider.
     """
 
     return MockEmbeddingProvider()

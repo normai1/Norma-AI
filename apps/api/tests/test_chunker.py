@@ -187,8 +187,8 @@ def test_chunks_are_not_small_enough_to_stop_discriminating() -> None:
 
 def test_a_model_without_a_tokenizer_still_chunks() -> None:
     """
-    EMBEDDING_MODEL is operator-configurable and legitimately holds names with
-    no Hugging Face tokenizer - OpenAI's, or whatever the mock provider is
+    EMBEDDING_MODEL is operator-configurable and legitimately holds names
+    with no Hugging Face tokenizer - whatever the mock provider happens to be
     pointed at. Chunking has to keep working there.
     """
 

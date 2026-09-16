@@ -6,7 +6,7 @@ model - an in-process sentence-transformers model was evaluated and rejected
 working hosted provider and crashed on CPU via its own custom remote code,
 and even a healthy model's one-time load time on this environment's CPU was
 far too slow to be a safe bet against CLAUDE.md's retrieval latency budget.
-httpx-based, matching openai_embedding.py's shape exactly.
+httpx-based, and the only hosted embedding provider this project ships.
 """
 
 import httpx
@@ -25,7 +25,7 @@ _DEFAULT_TIMEOUT_SECONDS = 30.0
 def _raise_for_http_status(status_code: int) -> None:
     """
     Map any non-2xx response onto this module's error hierarchy, mirroring
-    openai_embedding.py's _raise_for_http_status - auth failure, an
+    the error hierarchy embedding.py defines - auth failure, an
     unsupported/unavailable model on the router, rate limit, and outage are
     all a 4xx/5xx here too.
     """
@@ -44,7 +44,8 @@ class HuggingFaceEmbeddingProvider:
 
     Accepts an injected httpx.AsyncClient for testing (MockTransport); when
     none is given, a client is created and closed per call, matching
-    OpenAIEmbeddingProvider's exact lifecycle-management precedent.
+    the shared client's lifecycle, owned by the application rather than by
+    this provider.
     """
 
     def __init__(

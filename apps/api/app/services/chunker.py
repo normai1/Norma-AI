@@ -140,7 +140,7 @@ def _length_function(model: str) -> Callable[[str], int]:
     How to measure a chunk against the budget.
 
     Falls back to a pessimistic characters-per-token estimate when the model
-    has no loadable tokenizer, so an OpenAI or mock embedding configuration
+    has no loadable tokenizer, so a mock or hosted embedding configuration
     still chunks sensibly. The estimate under-fills the window rather than
     overflowing it, because overflowing is the failure that is silent.
     """

@@ -146,9 +146,6 @@ class Settings(BaseSettings):
     # without deliberately configuring one.
     embedding_provider: str = "mock"
 
-    # Empty by default; the "openai" provider branch refuses to construct
-    # without a real key rather than failing mid-call.
-    openai_api_key: str = ""
 
     # Empty by default; the "huggingface" provider branch refuses to
     # construct without a real token rather than failing mid-call. Read from

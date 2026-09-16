@@ -70,16 +70,6 @@ async def test_the_huggingface_provider_is_built_with_the_shared_client(
     assert provider._client is get_embedding_http_client()
 
 
-async def test_the_openai_provider_is_built_with_the_shared_client(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    monkeypatch.setattr(settings, "openai_api_key", "a-key")
-
-    provider = get_embedding_provider("openai")
-
-    assert provider._client is get_embedding_http_client()
-
-
 async def test_an_injected_client_is_not_closed_by_the_provider() -> None:
     """
     The providers close only a client they created themselves. If that

@@ -1,6 +1,7 @@
 """
 Groq implementation of llm.py's contract, via its OpenAI-compatible chat
-completions endpoint. httpx-based, matching openai_embedding.py's shape.
+completions endpoint. httpx-based, matching huggingface_embedding.py's
+shape.
 """
 
 import re
@@ -136,7 +137,7 @@ class GroqLLMProvider:
 
     Accepts an injected httpx.AsyncClient for testing (MockTransport); when
     none is given, a client is created and closed per call, matching
-    OpenAIEmbeddingProvider's exact lifecycle-management precedent.
+    the same lifecycle-management precedent the embedding providers set.
     """
 
     def __init__(

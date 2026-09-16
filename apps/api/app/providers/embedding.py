@@ -1,6 +1,6 @@
 """
 Embedding provider contract: the interface every text-embedding
-implementation in this codebase is built against - mock (tests), OpenAI
+implementation in this codebase is built against - mock (tests), HuggingFace
 (production). Mirrors norma_shared/speech.py's shape.
 """
 

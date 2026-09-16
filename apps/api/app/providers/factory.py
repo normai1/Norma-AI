@@ -20,13 +20,12 @@ from app.providers.local_storage import LocalStorage
 from app.providers.mock_embedding import MockEmbeddingProvider
 from app.providers.mock_llm import MockLLMProvider
 from app.providers.mock_storage import MockStorage
-from app.providers.openai_embedding import OpenAIEmbeddingProvider
 from app.providers.s3_storage import S3Storage
 from app.providers.storage import StorageProvider
 
 _VALID_PROVIDER_NAMES = "'mock', 'elevenlabs'"
 _VALID_STORAGE_PROVIDER_NAMES = "'mock', 'local', 's3'"
-_VALID_EMBEDDING_PROVIDER_NAMES = "'mock', 'openai', 'huggingface'"
+_VALID_EMBEDDING_PROVIDER_NAMES = "'mock', 'huggingface'"
 _VALID_FAQ_GENERATION_PROVIDER_NAMES = "'mock', 'groq'"
 
 
@@ -63,14 +62,6 @@ class MissingS3ConfigError(ValueError):
 class UnknownEmbeddingProviderError(ValueError):
     """
     A configured EMBEDDING_PROVIDER name has no known implementation.
-    """
-
-
-class MissingOpenAiApiKeyError(ValueError):
-    """
-    The "openai" embedding provider was selected but OPENAI_API_KEY is
-    unset. Fails at construction, not on the first embed() call - the same
-    reasoning MissingElevenLabsApiKeyError already established.
     """
 
 
@@ -213,20 +204,6 @@ def get_embedding_provider(name: str | None = None) -> EmbeddingProvider:
 
     if provider_name == "mock":
         return MockEmbeddingProvider(dimension=settings.embedding_dimension)
-
-    if provider_name == "openai":
-        if not settings.openai_api_key:
-            raise MissingOpenAiApiKeyError(
-                "OPENAI_API_KEY is not set. The 'openai' embedding "
-                "provider requires it.",
-            )
-
-        return OpenAIEmbeddingProvider(
-            api_key=settings.openai_api_key,
-            model=settings.embedding_model,
-            dimension=settings.embedding_dimension,
-            client=get_embedding_http_client(),
-        )
 
     if provider_name == "huggingface":
         if not settings.hf_token:
