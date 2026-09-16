@@ -98,7 +98,7 @@ async def test_a_different_model_does_not_reuse_the_previous_model_s_vector() ->
     provider = _CountingProvider()
 
     await embed_query(provider, "bge-base", "What are your hours?")
-    await embed_query(provider, "text-embedding-3-small", "What are your hours?")
+    await embed_query(provider, "BAAI/bge-base-en-v1.5", "What are your hours?")
 
     assert len(provider.calls) == 2
 

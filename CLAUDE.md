@@ -289,7 +289,7 @@ Prefer existing scoping mechanisms over ad-hoc filters in every route.
 
 Use pgvector. Do not introduce Pinecone, Chroma, Weaviate, or another external vector store without an explicit architectural decision.
 
-- `EmbeddingProvider` implementations: `mock` (tests/fresh checkout default), `openai` (`text-embedding-3-small`, dimension 1536), `huggingface` (calls the hosted HuggingFace Inference Providers router — `router.huggingface.co/hf-inference/models/{model}/pipeline/feature-extraction` — rather than self-hosting a model in-process; needs `HF_TOKEN`).
+- `EmbeddingProvider` implementations: `mock` (tests/fresh checkout default), `huggingface` (`BAAI/bge-base-en-v1.5`, dimension 768 - calls the hosted HuggingFace Inference Providers router — `router.huggingface.co/hf-inference/models/{model}/pipeline/feature-extraction` — rather than self-hosting a model in-process; needs `HF_TOKEN`).
 - The `chunks.embedding` column's dimension (`apps/api/app/models/chunk.py`) reads from `settings.embedding_dimension` — never hardcode a dimension there. Changing `EMBEDDING_MODEL`/`EMBEDDING_DIMENSION` requires a migration that alters the column and nulls out now-incompatible existing embeddings; never truncate or pad them into the new width.
 - Keep the dimension configurable, and ensure the configured value matches actual provider output.
 - Test dimension compatibility before writing vectors.
@@ -347,8 +347,7 @@ Keep provider-specific code behind interfaces. The application must be able to s
 
 ```text
 LLMProvider              — realtime and post-call tiers
-EmbeddingProvider        — HuggingFace BAAI/bge-base-en-v1.5 (768), OpenAI
-                           text-embedding-3-small (1536), Mock — see 6.4
+EmbeddingProvider        — HuggingFace BAAI/bge-base-en-v1.5 (768), Mock — see 6.4
 SpeechToTextProvider     — ElevenLabs, Mock
 TextToSpeechProvider     — ElevenLabs, Mock
 TelephonyProvider        — Twilio, Telnyx, SIP trunk, Mock

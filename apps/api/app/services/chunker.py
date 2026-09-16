@@ -120,10 +120,11 @@ def _load_tokenizer(model: str):
     failed here, on both load time and a crash inside the model's own code.
 
     Returns None rather than raising for a model that has no Hugging Face
-    tokenizer at all: EMBEDDING_MODEL is operator-configurable and legitimately
-    holds OpenAI names like "text-embedding-3-small", and the mock provider
-    uses whatever is configured without caring. Chunking must still work
-    there - see _length_function for what happens instead.
+    tokenizer at all. EMBEDDING_MODEL is operator-configurable and need not
+    name a Hugging Face model: a hosted provider's own identifier has no
+    tokenizer to download, and the mock provider uses whatever is configured
+    without caring what it is. Chunking must still work there - see
+    _length_function for what happens instead.
     """
 
     try:

@@ -445,7 +445,7 @@ Call audio, transcripts, and extracted fields are the most sensitive data in the
 
 ### Vector configuration
 
-Embedding provider for the MVP is **OpenAI `text-embedding-3-small`** behind the `EmbeddingProvider` abstraction. Vector dimension:
+Embedding provider for the MVP is **HuggingFace `BAAI/bge-base-en-v1.5`** behind the `EmbeddingProvider` abstraction. Vector dimension:
 
 ```text
 1536
@@ -567,11 +567,11 @@ Environment: `LLM_PROVIDER`, `LLM_REALTIME_MODEL`, `LLM_POSTCALL_MODEL`, `ANTHRO
 ```text
 EmbeddingProvider
     ├── OpenAIEmbeddingProvider
-    │      └── text-embedding-3-small → 1536 dimensions
+    │      └── BAAI/bge-base-en-v1.5 → 768 dimensions
     └── MockEmbeddingProvider
 ```
 
-Configuration: `OPENAI_API_KEY`, `EMBEDDING_MODEL=text-embedding-3-small`, `EMBEDDING_DIMENSION=1536`.
+Configuration: `HF_TOKEN`, `EMBEDDING_MODEL=BAAI/bge-base-en-v1.5`, `EMBEDDING_DIMENSION=768`.
 
 ### Telephony
 

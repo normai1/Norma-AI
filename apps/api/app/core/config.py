@@ -156,12 +156,12 @@ class Settings(BaseSettings):
     # own tooling names this value.
     hf_token: str = ""
 
-    embedding_model: str = "text-embedding-3-small"
+    embedding_model: str = "BAAI/bge-base-en-v1.5"
 
     # Must match the actual dimension the configured model/provider
     # produces, and the chunks table's vector column width - never "fixed"
     # by truncating or padding a mismatched vector (CLAUDE.md section 6.4).
-    embedding_dimension: int = 1536
+    embedding_dimension: int = 768
 
     # ------------------------------------------------------------------
     # Website crawling

@@ -114,7 +114,7 @@ this one.
 15. **Website ingestion** - crawl a supplied domain, extract page content, handle recrawl and content-hash dedup.
 16. **Manual FAQ entries** - operator-authored Q&A pairs as a first-class knowledge source.
 17. **Document processing pipeline** - parse, normalize, and chunk every source type, with status tracking and retryable failures.
-18. **Vector knowledge indexing** - OpenAI `text-embedding-3-small` embeddings at 1536 dimensions in pgvector, scoped by organization, workspace, and assistant.
+18. **Vector knowledge indexing** - HuggingFace `BAAI/bge-base-en-v1.5` embeddings at 768 dimensions in pgvector, scoped by organization, workspace, and assistant.
 19. **Low-latency retrieval** - tenant-scoped semantic retrieval and context builder that fits inside the in-call turn budget, source attribution recorded per answer.
 20. **Real-time voice session engine** - **the core product.** Sub-items are independent build slices, but the item is only complete when a full spoken conversation works end to end.
     - 20a framework selection + media transport (LiveKit Agents vs Pipecat, decided here), 20b streaming STT w/ glossary biasing, 20c turn detection (VAD + semantic, operator-configurable sensitivity), 20d LLM turn loop, 20e streaming TTS + barge-in, 20f latency instrumentation (p95 budget enforced in CI), 20g session resilience (provider timeouts/retries/failover).
@@ -441,7 +441,7 @@ else"). `status` stays a separate lifecycle marker from the configuration itself
 - `metadata` (JSONB) - page/section/offset for citation
 - `embedding` (`vector(1536)`) - pgvector column
 
-> **The RAG contract is locked.** OpenAI `text-embedding-3-small` at **1536** dimensions, matching
+> **The RAG contract is locked.** HuggingFace `BAAI/bge-base-en-v1.5` at **768** dimensions, matching
 > the embedding-dimension setting and the `vector(1536)` column. Embeddings of different dimensions
 > must never be mixed in one column. Changing the model or dimension later requires an explicit
 > migration **and** reindex strategy - never "fix" a mismatch by editing the column.
@@ -644,9 +644,9 @@ behind `LLMProvider`. Environment: `LLM_PROVIDER`, `LLM_REALTIME_MODEL`, `LLM_PO
 
 ### Embeddings
 
-`EmbeddingProvider` -> `OpenAIEmbeddingProvider` (`text-embedding-3-small`, 1536 dims) for
+`EmbeddingProvider` -> `HuggingFaceEmbeddingProvider` (`BAAI/bge-base-en-v1.5`, 768 dims) for
 production, `MockEmbeddingProvider` (deterministic) for tests. Configuration:
-`OPENAI_API_KEY`, `EMBEDDING_MODEL=text-embedding-3-small`, `EMBEDDING_DIMENSION=1536`.
+`HF_TOKEN`, `EMBEDDING_MODEL=BAAI/bge-base-en-v1.5`, `EMBEDDING_DIMENSION=768`.
 
 ### Speech
 
