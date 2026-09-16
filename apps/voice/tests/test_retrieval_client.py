@@ -437,3 +437,70 @@ async def test_every_other_failure_is_also_a_failed_lookup() -> None:
 
         assert context == "", name
         assert context.lookup_failed is True, name
+
+
+async def test_a_slow_first_attempt_is_retried_rather_than_abandoned(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """
+    The regression for "it should answer on the first attempt".
+
+    The hosted embedding provider is erratic rather than steadily slow.
+    Measured on one call, the same knowledge answered a question in 4148ms
+    and then in 190ms - so the caller was told it could not be found, asked
+    again, and got the answer. Asking once should be enough.
+    """
+
+    attempts = {"n": 0}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        attempts["n"] += 1
+
+        if attempts["n"] == 1:
+            raise httpx.ReadTimeout("slow tail", request=request)
+
+        return httpx.Response(200, json={"context": "We open at nine."})
+
+    context = await fetch_retrieved_context(
+        _ASSISTANT_ID, "what are your hours", client=_client_returning(handler)
+    )
+
+    assert attempts["n"] == 2, "the slow attempt was abandoned instead of retried"
+    assert context == "We open at nine."
+    assert context.lookup_failed is False
+
+
+async def test_the_retry_is_bounded_by_a_total_the_caller_would_tolerate(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """
+    The retry must not become a second full wait. The budget is a total
+    across attempts, because what a caller notices is the silence, not how
+    many requests were behind it - and a long enough silence makes them
+    speak again and barge in on their own pending turn, which is why the
+    single timeout was lowered in the first place.
+    """
+
+    from app import retrieval_client
+
+    monkeypatch.setattr(retrieval_client, "_TIMEOUT_SECONDS", 2.0)
+    # A total so small that nothing is left for a second attempt. Set below
+    # _MIN_RETRY_SECONDS rather than just below the first timeout, because
+    # the budget is spent in real elapsed time and a mocked failure returns
+    # instantly - which is also the correct behaviour: a first attempt that
+    # fails quickly should leave room to try again.
+    monkeypatch.setattr(retrieval_client, "_TOTAL_BUDGET_SECONDS", 0.5)
+
+    attempts = {"n": 0}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        attempts["n"] += 1
+
+        raise httpx.ReadTimeout("slow", request=request)
+
+    context = await fetch_retrieved_context(
+        _ASSISTANT_ID, "anything", client=_client_returning(handler)
+    )
+
+    assert attempts["n"] == 1, "retried with no budget left for it to finish in"
+    assert context.lookup_failed is True

@@ -48,6 +48,17 @@ logger = logging.getLogger(__name__)
 # affordable and a looser one unnecessary.
 _TIMEOUT_SECONDS = float(os.environ.get("RETRIEVAL_TIMEOUT_SECONDS", "1.5"))
 
+# The longest a caller will sit in silence for retrieval, across every
+# attempt. One attempt that fails and one that succeeds has to fit inside
+# this, or the retry trades a missing answer for the failure the single
+# timeout was lowered to avoid: a caller who assumes they were not heard,
+# speaks again, and barges in on their own pending turn.
+_TOTAL_BUDGET_SECONDS = float(os.environ.get("RETRIEVAL_TOTAL_BUDGET_SECONDS", "3.5"))
+
+# Below this there is not enough left for a retry to plausibly finish, and
+# starting one only adds silence before the same answer.
+_MIN_RETRY_SECONDS = 0.75
+
 
 class RetrievedContext(str):
     """
@@ -95,12 +106,54 @@ async def fetch_retrieved_context(
             # provider is a hosted API, not a local model, and a cold or
             # queued call can take several seconds - see
             # HuggingFaceEmbeddingProvider's own, much longer timeout.
-            logger.warning(
-                "retrieval timed out after %.1fs: assistant=%s",
+            #
+            # Its slowness is erratic rather than steady, which is what makes
+            # a second attempt worth making instead of giving up. Measured on
+            # one call, the same knowledge answered a question in 4148ms and
+            # then in 190ms - so the caller was told the assistant could not
+            # find it, asked again, and got the answer. Reported as "it
+            # should answer on the first attempt", which is the right ask:
+            # from a caller's side, asking once should be enough.
+            #
+            # Bounded by a total, not by a count, because what a caller
+            # actually notices is how long they sit in silence. The first
+            # attempt has already spent its budget; the retry gets whatever
+            # is left of the total and no more.
+            remaining = _TOTAL_BUDGET_SECONDS - (time.monotonic() - started)
+
+            if remaining < _MIN_RETRY_SECONDS:
+                logger.warning(
+                    "retrieval timed out after %.1fs: assistant=%s",
+                    time.monotonic() - started,
+                    assistant_id,
+                )
+
+                return RetrievedContext(lookup_failed=True)
+
+            logger.info(
+                "retrieval timed out after %.1fs - retrying with %.1fs left: "
+                "assistant=%s",
                 time.monotonic() - started,
+                remaining,
                 assistant_id,
             )
-            return RetrievedContext(lookup_failed=True)
+
+            try:
+                response = await owned_client.post(
+                    f"{config.API_INTERNAL_URL}/internal/v1/assistants/"
+                    f"{assistant_id}/retrieve",
+                    json={"query": query},
+                    headers=internal_headers(),
+                    timeout=remaining,
+                )
+            except (httpx.TimeoutException, httpx.HTTPError):
+                logger.warning(
+                    "retrieval timed out twice after %.1fs: assistant=%s",
+                    time.monotonic() - started,
+                    assistant_id,
+                )
+
+                return RetrievedContext(lookup_failed=True)
         except httpx.HTTPError as exc:
             logger.warning(
                 "retrieval request failed: assistant=%s error=%s",
