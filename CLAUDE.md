@@ -289,7 +289,11 @@ Prefer existing scoping mechanisms over ad-hoc filters in every route.
 
 Use pgvector. Do not introduce Pinecone, Chroma, Weaviate, or another external vector store without an explicit architectural decision.
 
-- `EmbeddingProvider` implementations: `mock` (tests/fresh checkout default), `huggingface` (`BAAI/bge-base-en-v1.5`, dimension 768 - calls the hosted HuggingFace Inference Providers router — `router.huggingface.co/hf-inference/models/{model}/pipeline/feature-extraction` — rather than self-hosting a model in-process; needs `HF_TOKEN`).
+- `EmbeddingProvider` implementations, all at `BAAI/bge-base-en-v1.5`, dimension 768:
+  - `mock` — tests and fresh-checkout default.
+  - `local` — runs the model in the API process with ONNX Runtime. **The production choice.** Measured in this project's container: 106ms p50, 137ms p95, no network in the retrieval path. Two things it depends on, both of which have their own comments: the model loads at startup rather than on first use (a first caller who pays a 60s load times out, which is the failure §6.4 used to record as a reason not to self-host), and inference runs in `asyncio.to_thread` so 100ms of CPU does not stall the process. `intra_op_num_threads` is pinned — onnxruntime's default of "every core" measured 4x slower.
+  - `huggingface` — the hosted Inference Providers router (`router.huggingface.co/hf-inference/models/{model}/pipeline/feature-extraction`; needs `HF_TOKEN`). Retained as the fallback, but **not** the default any more: measured at 280-430ms warm and 4-12s cold on roughly one call in three, which exceeds the voice plane's retrieval budget, so on a third of first questions the knowledge was indexed, scored well, and never reached the model.
+- The earlier in-process attempt this section used to warn about was a *different* shape of thing and the distinction is why `local` exists: that was a multilingual model with no hosted provider, loaded through sentence-transformers, running its own `trust_remote_code` Python, which crashed on CPU on first inference. `local` runs an ONNX graph exported by the model's own authors, with no custom code path. Verify a model this way before adopting it, rather than assuming either outcome generalises.
 - The `chunks.embedding` column's dimension (`apps/api/app/models/chunk.py`) reads from `settings.embedding_dimension` — never hardcode a dimension there. Changing `EMBEDDING_MODEL`/`EMBEDDING_DIMENSION` requires a migration that alters the column and nulls out now-incompatible existing embeddings; never truncate or pad them into the new width.
 - Keep the dimension configurable, and ensure the configured value matches actual provider output.
 - Test dimension compatibility before writing vectors.
@@ -816,9 +820,12 @@ ANTHROPIC_API_KEY
 ANTHROPIC_BASE_URL
 
 # Embeddings
-HF_TOKEN
+EMBEDDING_PROVIDER
 EMBEDDING_MODEL
 EMBEDDING_DIMENSION
+EMBEDDING_LOCAL_PATH
+EMBEDDING_LOCAL_THREADS
+HF_TOKEN
 
 # Speech
 STT_PROVIDER

@@ -41,10 +41,28 @@ RUN pip install --no-cache-dir --upgrade pip \
 # deployment without egress to huggingface.co would silently fall back to the
 # character estimate instead of the real token count.
 #
-# Only the tokenizer: a vocabulary file, not model weights. Build-arg driven
-# so an image built for a different EMBEDDING_MODEL bakes that one instead.
+# Build-arg driven so an image built for a different EMBEDDING_MODEL bakes
+# that one instead.
 ARG EMBEDDING_TOKENIZER=BAAI/bge-base-en-v1.5
 RUN python -c "from transformers import AutoTokenizer; AutoTokenizer.from_pretrained('${EMBEDDING_TOKENIZER}')"
+
+# The model's weights, for EMBEDDING_PROVIDER=local. Same reasoning as the
+# tokenizer above and more of it: this is ~440MB, so a container that had to
+# fetch it at startup would take minutes to become useful, and the first
+# caller to arrive during that would time out - which is the exact failure
+# CLAUDE.md section 6.4 records from the previous in-process attempt.
+#
+# The ONNX export only - not the PyTorch weights sitting beside it in the
+# same repository, which nothing here can run and which would double the
+# image for no purpose. providers/local_embedding.py resolves the model
+# through this same cache at runtime and finds it already present.
+#
+# Set EMBEDDING_WEIGHTS to an empty string to skip this and keep the image
+# small, for a deployment that uses the hosted provider.
+ARG EMBEDDING_WEIGHTS=BAAI/bge-base-en-v1.5
+RUN if [ -n "${EMBEDDING_WEIGHTS}" ]; then \
+        python -c "from huggingface_hub import snapshot_download; snapshot_download('${EMBEDDING_WEIGHTS}', allow_patterns=['onnx/model.onnx', '*.json', 'vocab.txt', '*.txt'])"; \
+    fi
 
 COPY . .
 

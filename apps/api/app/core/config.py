@@ -160,6 +160,33 @@ class Settings(BaseSettings):
     # by truncating or padding a mismatched vector (CLAUDE.md section 6.4).
     embedding_dimension: int = 768
 
+    # Where the "local" provider finds the model's files. Set this in any
+    # image that bakes the model in, so startup cannot reach the network:
+    # left empty, the provider resolves embedding_model through the
+    # HuggingFace cache and downloads it if the machine has never seen it,
+    # which is convenient in development and wrong in production.
+    embedding_local_path: str = ""
+
+    # How many CPU threads one embedding may use. 0 leaves onnxruntime's
+    # default, which is every core, and that is the worst setting measured -
+    # this process is a web server with its own worker pool, and a batch of
+    # one through a 109M BERT has little parallelism to spend eight cores on,
+    # so the threads mostly synchronise with each other.
+    #
+    # Swept in this project's container (8 visible cores), single short
+    # query, p50/p95 in ms:
+    #
+    #     1 thread    679 / 1802
+    #     2 threads   106 /  137     <- this
+    #     4 threads   124 /  176
+    #     8 threads   283 /  540
+    #     default     447 / 1021
+    #
+    # Re-measure before changing it on a host with a different core count;
+    # the right value follows the machine, which is why it is configuration
+    # rather than a constant.
+    embedding_local_threads: int = 2
+
     # ------------------------------------------------------------------
     # Website crawling
     # ------------------------------------------------------------------

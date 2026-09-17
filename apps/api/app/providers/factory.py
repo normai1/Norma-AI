@@ -16,6 +16,7 @@ from app.providers.embedding_http_client import get_embedding_http_client
 from app.providers.groq_llm import GroqLLMProvider
 from app.providers.huggingface_embedding import HuggingFaceEmbeddingProvider
 from app.providers.llm import LLMProvider
+from app.providers.local_embedding import LocalEmbeddingProvider
 from app.providers.local_storage import LocalStorage
 from app.providers.mock_embedding import MockEmbeddingProvider
 from app.providers.mock_llm import MockLLMProvider
@@ -25,7 +26,7 @@ from app.providers.storage import StorageProvider
 
 _VALID_PROVIDER_NAMES = "'mock', 'elevenlabs'"
 _VALID_STORAGE_PROVIDER_NAMES = "'mock', 'local', 's3'"
-_VALID_EMBEDDING_PROVIDER_NAMES = "'mock', 'huggingface'"
+_VALID_EMBEDDING_PROVIDER_NAMES = "'mock', 'local', 'huggingface'"
 _VALID_FAQ_GENERATION_PROVIDER_NAMES = "'mock', 'groq'"
 
 
@@ -204,6 +205,17 @@ def get_embedding_provider(name: str | None = None) -> EmbeddingProvider:
 
     if provider_name == "mock":
         return MockEmbeddingProvider(dimension=settings.embedding_dimension)
+
+    if provider_name == "local":
+        # No credential to check, and deliberately no eager load here: the
+        # model is loaded by the startup warm-up, and a provider constructed
+        # per request must not block on a 440MB file.
+        return LocalEmbeddingProvider(
+            model=settings.embedding_model,
+            dimension=settings.embedding_dimension,
+            model_path=settings.embedding_local_path,
+            threads=settings.embedding_local_threads,
+        )
 
     if provider_name == "huggingface":
         if not settings.hf_token:

@@ -64,3 +64,11 @@ langsmith==0.12.4
 # tokenizer, so chunks are sized against the limit that actually
 # truncates them. Tokenizer only - no model weights are ever loaded.
 transformers==5.17.0
+# Runs the embedding model in this process (EMBEDDING_PROVIDER=local),
+# replacing a hosted API call inside the retrieval turn budget. CPU only -
+# no torch, no CUDA: the ONNX graph is the whole runtime.
+onnxruntime==1.30.0
+# Resolves the embedding model's files from the HuggingFace cache when
+# EMBEDDING_LOCAL_PATH is unset. Already present transitively via
+# transformers; declared because local_embedding.py imports it directly.
+huggingface-hub==1.31.0
