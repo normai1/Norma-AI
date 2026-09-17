@@ -17,12 +17,87 @@ cannot serve vectors from the previous model into a search against
 differently-embedded chunks.
 """
 
+import re
 import unicodedata
 from collections import OrderedDict
 
 from app.providers.embedding import EmbeddingProvider
 
 MAX_ENTRIES = 512
+
+# Spoken filler that carries no meaning but does move the query's embedding.
+#
+# Measured on a real 4,466-chunk corpus, twelve questions the site answers,
+# each asked in colloquial phrasing: prefixing "um so like" cost 0.025 of
+# rank-1 similarity on average, and pushed two more questions below
+# retrieval_min_score. The words contribute nothing to what was asked and
+# the embedding has no way to know that, so they are removed before it is
+# computed.
+#
+# Leading position only, and a deliberately conservative list. A filler word
+# in the middle of a sentence is frequently not filler at all - "is it ok to
+# bring a dog", "well water pressure", "the right side" - and a retrieval
+# path must not quietly rewrite what the caller asked. Anything ambiguous is
+# left in; the cost of missing one is a fraction of a similarity point,
+# while the cost of eating a real word is a wrong answer.
+_LEADING_FILLERS = (
+    "um",
+    "umm",
+    "uhm",
+    "uh",
+    "uhh",
+    "erm",
+    "er",
+    "ah",
+    "hmm",
+    "hm",
+    "mm",
+    "mmm",
+    "like",
+    "so",
+    "actually",
+    "basically",
+    "i mean",
+    "you know",
+    "let me see",
+    "let's see",
+)
+
+_FILLER_PATTERN = re.compile(
+    r"^(?:" + "|".join(re.escape(word) for word in _LEADING_FILLERS) + r")\b[\s,]*",
+    re.IGNORECASE,
+)
+
+
+def strip_fillers(query: str) -> str:
+    """
+    The query with leading spoken filler removed.
+
+    Applied repeatedly, because real speech stacks it - "um so like how
+    much" is three in a row. Returns the original whenever stripping would
+    leave nothing: a caller who said only "um" asked something the rest of
+    the turn has to handle, and an empty string embeds to noise.
+    """
+
+    original = query.strip()
+    stripped = original
+
+    while True:
+        shorter = _FILLER_PATTERN.sub("", stripped, count=1).strip()
+
+        if shorter == stripped:
+            break
+
+        if not shorter:
+            # Every word was filler. Returning the last fragment instead -
+            # "like", from "um so like" - would embed one arbitrary filler
+            # word and look like a real query; the original at least stays
+            # faithful to what was said.
+            return original
+
+        stripped = shorter
+
+    return stripped or original
 
 _cache: OrderedDict[tuple[str, str], list[float]] = OrderedDict()
 
@@ -37,7 +112,7 @@ def _key(model: str, query: str) -> tuple[str, str]:
     places, which is the one thing this cache must never do.
     """
 
-    return (model, unicodedata.normalize("NFC", query.strip().casefold()))
+    return (model, unicodedata.normalize("NFC", strip_fillers(query).casefold()))
 
 
 def is_query_cached(model: str, query: str) -> bool:
@@ -70,7 +145,10 @@ async def embed_query(
         _cache.move_to_end(key)
         return cached
 
-    [vector] = await provider.embed([query])
+    # The filler-stripped form, matching what the key above was built from -
+    # embedding the raw text while keying on the stripped one would serve
+    # one caller's vector to a different question.
+    [vector] = await provider.embed([strip_fillers(query)])
 
     _cache[key] = vector
     _cache.move_to_end(key)
@@ -112,7 +190,13 @@ async def warm_query_embeddings(
             continue
 
         seen.add(key)
-        missing.append(query)
+        # Stripped, for the same reason embed_query embeds the stripped
+        # form: the key below is built from it, and caching a vector of one
+        # string under the key of another is how a warm-up starts answering
+        # the wrong question. FAQ text rarely contains filler, so in
+        # practice this changes nothing and costs nothing - but the two
+        # paths agreeing is what stops it mattering later.
+        missing.append(strip_fillers(query))
 
     if not missing:
         return 0

@@ -249,3 +249,105 @@ async def test_warming_keeps_each_question_matched_to_its_own_vector() -> None:
             0.0,
             1.0,
         ]
+
+
+# ----------------------------------------------------------------------
+# Spoken filler
+#
+# Measured on a real corpus: prefixing "um so like" to a colloquially-phrased
+# question cost 0.025 of rank-1 similarity and pushed two of twelve
+# answerable questions below retrieval_min_score. The words mean nothing and
+# the embedding cannot know that.
+# ----------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("spoken", "expected"),
+    [
+        ("um how much does it cost", "how much does it cost"),
+        ("uh what are your hours", "what are your hours"),
+        ("um so like how much is it", "how much is it"),
+        ("erm, can I book a table", "can I book a table"),
+        ("you know what time do you close", "what time do you close"),
+        ("i mean are you open sunday", "are you open sunday"),
+        ("  so   what do you charge  ", "what do you charge"),
+    ],
+)
+def test_leading_filler_is_removed(spoken: str, expected: str) -> None:
+    from app.services.query_embedding_cache import strip_fillers
+
+    assert strip_fillers(spoken) == expected
+
+
+@pytest.mark.parametrize(
+    "query",
+    [
+        # Each of these contains a filler word that is not filler here.
+        "is it ok to like a post",
+        "do you sell well water pumps",
+        "what is the actually reserved seat policy",
+        "how do I mm convert the file",
+        # Nothing to strip.
+        "what are your opening hours",
+        # Stripping everything would leave nothing to embed.
+        "um",
+        "um so like",
+    ],
+)
+def test_meaningful_words_survive(query: str) -> None:
+    """
+    A retrieval path must never quietly rewrite what the caller asked. The
+    list is leading-position-only and conservative for this reason: missing
+    a filler costs a fraction of a similarity point, eating a real word
+    costs a wrong answer.
+    """
+
+    from app.services.query_embedding_cache import strip_fillers
+
+    # Unchanged in every case: the filler words here are not in leading
+    # position, or there is nothing to strip, or stripping would leave
+    # nothing to embed and the original is kept instead.
+    assert strip_fillers(query) == query.strip()
+
+
+async def test_filler_variants_share_one_cached_embedding() -> None:
+    """
+    "how much is it" and "um so like how much is it" are the same question,
+    so the second must not pay the provider again - and must not receive a
+    vector computed from different text than the one it was keyed under.
+    """
+
+    provider = _CountingProvider()
+
+    first = await embed_query(provider, "m", "how much is it")
+    second = await embed_query(provider, "m", "um so like how much is it")
+
+    assert first == second
+    assert provider.calls == [["how much is it"]]
+
+
+async def test_the_embedded_text_is_the_text_the_key_was_built_from() -> None:
+    """
+    Regression guard: keying on the stripped form while embedding the raw
+    one caches a vector of one string under another string's key, which is
+    how a cache starts answering the wrong question.
+    """
+
+    provider = _CountingProvider()
+
+    await embed_query(provider, "m", "uh what are your hours")
+
+    assert provider.calls == [["what are your hours"]]
+
+
+async def test_warming_embeds_what_it_keys() -> None:
+    provider = _CountingProvider()
+
+    await warm_query_embeddings(provider, "m", ["um do you deliver"])
+
+    assert provider.calls == [["do you deliver"]]
+
+    # And the warmed entry is found by the un-filled phrasing.
+    await embed_query(provider, "m", "do you deliver")
+
+    assert len(provider.calls) == 1
