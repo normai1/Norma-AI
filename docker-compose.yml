@@ -59,10 +59,11 @@ services:
 
   api:
     build:
-      context: ./apps/api
-      dockerfile: Dockerfile
-      additional_contexts:
-        shared: ./packages/shared
+      # The repository root, so one Dockerfile builds both here and on a
+      # platform with a single build context - see the note in
+      # apps/api/Dockerfile. .dockerignore keeps the context small.
+      context: .
+      dockerfile: apps/api/Dockerfile
 
     container_name: norma-api
     restart: unless-stopped

@@ -1,0 +1,163 @@
+# Render blueprint for Norma AI's control plane.
+#
+# This covers the FastAPI API, its PostgreSQL database, and its Key Value
+# store. It deliberately does NOT cover the other two pieces of the product:
+#
+#   apps/web    -> Vercel  (vercel.json in this repo)
+#   apps/voice  -> Fly.io  (not yet configured)
+#
+# apps/voice is the one that cannot move. It holds a WebSocket open for the
+# length of a call, and any platform free to reclaim an instance mid-request
+# ends live conversations to do it - CLAUDE.md section 38 treats that as a
+# hard requirement, not a preference. Render web services are not a safe home
+# for it, so it is absent here rather than half-configured.
+#
+# Deploy order is api -> voice -> web (section 38). The frontend is a shell
+# until this service has a public URL.
+#
+# No secret values are in this file. Anything marked `sync: false` is
+# prompted once at blueprint creation and then lives in Render's own
+# environment settings.
+
+databases:
+  - name: norma-postgres
+    databaseName: norma
+    user: norma
+    # pgvector is not enabled by a blueprint; the first `alembic upgrade
+    # head` runs `CREATE EXTENSION IF NOT EXISTS vector`, which is why the
+    # migration below has to succeed before the service starts serving.
+    postgresMajorVersion: "16"
+    plan: basic-256mb
+
+services:
+  - name: norma-redis
+    type: keyvalue
+    plan: starter
+    # Reachable only from inside this Render account's private network.
+    # Concurrency accounting and rate limiting live here; nothing outside
+    # needs to reach it.
+    ipAllowList: []
+    # Concurrency counters and call admission must not be silently evicted
+    # under memory pressure - a lost counter blocks a customer's calls
+    # (CLAUDE.md section 19). Fail loudly instead of quietly dropping keys.
+    maxmemoryPolicy: noeviction
+
+  - name: norma-api
+    type: web
+    runtime: docker
+    plan: standard
+
+    # The repository root, not apps/api. The image needs packages/shared as
+    # well as the service's own source, and dockerContext is a single path -
+    # Render has no equivalent of the named build contexts docker-compose
+    # used to use. .dockerignore keeps the context from including
+    # node_modules and git history.
+    dockerfilePath: ./apps/api/Dockerfile
+    dockerContext: .
+
+    healthCheckPath: /api/v1/health
+
+    # Runs after the build and before the new instance serves traffic, so a
+    # migration failure stops the deploy rather than leaving the schema
+    # behind the code. Additive and backwards-compatible migrations are a
+    # standing requirement (CLAUDE.md section 6.2): the API and the voice
+    # workers deploy separately and will briefly run different code against
+    # this schema.
+    preDeployCommand: alembic upgrade head
+
+    envVars:
+      - key: DATABASE_URL
+        fromDatabase:
+          name: norma-postgres
+          property: connectionString
+
+      - key: REDIS_URL
+        fromService:
+          name: norma-redis
+          type: keyvalue
+          property: connectionString
+
+      # Session signing, and the key the short-lived voice-session tickets
+      # are signed with. apps/voice must be given the SAME value, or every
+      # browser test call is rejected as an invalid ticket.
+      - key: SECRET_KEY
+        generateValue: true
+
+      # Authorises apps/voice's calls to this service's /internal routes.
+      # Also shared with apps/voice.
+      - key: INTERNAL_API_SECRET
+        generateValue: true
+
+      - key: ENVIRONMENT
+        value: production
+      - key: DEBUG
+        value: "false"
+      - key: LOG_LEVEL
+        value: INFO
+
+      # The deployed frontend's origin, e.g. https://<project>.vercel.app.
+      # A browser calling this API from anywhere else is refused, so this has
+      # to be set before the Vercel deployment can log in at all.
+      - key: CORS_ORIGINS
+        sync: false
+
+      # Embeddings run in this process (ONNX Runtime, no network in the
+      # retrieval path). The model is baked into the image, so nothing is
+      # downloaded at boot.
+      - key: EMBEDDING_PROVIDER
+        value: local
+      - key: EMBEDDING_MODEL
+        value: BAAI/bge-base-en-v1.5
+      - key: EMBEDDING_DIMENSION
+        value: "768"
+      # Pinned rather than left to onnxruntime's default of "every core",
+      # which measured 4x slower on a batch of one. Re-measure if this
+      # service's plan changes its core count.
+      - key: EMBEDDING_LOCAL_THREADS
+        value: "2"
+
+      - key: LLM_PROVIDER
+        value: groq
+      - key: LLM_REALTIME_MODEL
+        value: openai/gpt-oss-120b
+      - key: LLM_FALLBACK_MODEL
+        value: openai/gpt-oss-20b
+      - key: GROQ_API_KEY
+        sync: false
+      # Optional. A separate key so that processing a document cannot spend
+      # the token allowance a live call is answering from.
+      - key: GROQ_API_KEY_SECRET
+        sync: false
+
+      - key: FAQ_GENERATION_PROVIDER
+        value: groq
+      - key: FAQ_GENERATION_MODEL
+        sync: false
+
+      - key: ELEVENLABS_API_KEY
+        sync: false
+
+      # Object storage. Recordings and uploaded documents must not live on
+      # container-local disk (CLAUDE.md section 20) - Render's filesystem is
+      # ephemeral, so "local" here would silently lose every upload on the
+      # next deploy.
+      - key: STORAGE_PROVIDER
+        value: s3
+      - key: AWS_REGION
+        sync: false
+      - key: AWS_S3_BUCKET
+        sync: false
+      - key: AWS_ACCESS_KEY_ID
+        sync: false
+      - key: AWS_SECRET_ACCESS_KEY
+        sync: false
+
+      # Optional retrieval tracing. Leave LANGSMITH_API_KEY unset to disable.
+      # LANGSMITH_TRACE_TEXT must stay false anywhere real calls land: it
+      # sends caller questions and chunk text to a third party, which section
+      # 27's rule against logging transcript text covers with more force, not
+      # less.
+      - key: LANGSMITH_API_KEY
+        sync: false
+      - key: LANGSMITH_TRACE_TEXT
+        value: "false"

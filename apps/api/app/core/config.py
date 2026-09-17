@@ -1,7 +1,7 @@
 from functools import lru_cache
 from pathlib import Path
 
-from pydantic import Field, model_validator
+from pydantic import Field, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 # Anchored to this file, not the working directory, so the same .env is found
@@ -81,6 +81,35 @@ class Settings(BaseSettings):
     test_database_url: str = Field(
         default=("postgresql+asyncpg://norma:norma@localhost:5432/norma_test")
     )
+
+    @field_validator("database_url", "test_database_url")
+    @classmethod
+    def _name_the_async_driver(cls, value: str) -> str:
+        """
+        Accept a plain PostgreSQL URL and point it at asyncpg.
+
+        Every managed provider hands out `postgres://` or `postgresql://`,
+        because that is what the database speaks and the driver is the
+        application's business. SQLAlchemy reads the scheme as the driver
+        though, so the provider's own connection string resolves to psycopg2
+        - which is not installed, and would be the wrong shape anyway, since
+        this application's engine is async.
+
+        Rewriting it here rather than asking every deployment to hand-edit
+        the value: a URL copied verbatim from the platform is the thing
+        people will actually paste, and the failure it produces otherwise is
+        an import error about a driver nobody chose.
+
+        A URL that already names a driver is left exactly as it is - that is
+        someone being deliberate, including alembic/env.py swapping asyncpg
+        for psycopg to run migrations synchronously.
+        """
+
+        for prefix in ("postgresql://", "postgres://"):
+            if value.startswith(prefix):
+                return "postgresql+asyncpg://" + value[len(prefix) :]
+
+        return value
 
     # ------------------------------------------------------------------
     # Redis

@@ -1,0 +1,43 @@
+# Applies to any build whose context is the repository root, which today
+# means apps/api - it needs packages/shared as well as its own directory, and
+# a single context covering both is the only shape that works on a platform
+# that does not expose Docker's named build contexts. Render's dockerContext
+# is singular, so the additional_contexts trick docker-compose used cannot
+# survive a deploy there.
+#
+# Without this file, a root context sends the entire repository to the
+# daemon, which on this project is hundreds of megabytes of node_modules and
+# git history that the API image has no use for.
+
+.git
+.gitignore
+
+# Never in an image. The API reads its configuration from the environment the
+# platform provides; baking a local .env in would ship development secrets
+# into a deployed artefact.
+.env
+.env.*
+!.env.example
+
+**/node_modules
+**/.next
+**/__pycache__
+**/*.pyc
+**/.pytest_cache
+**/.ruff_cache
+**/.venv
+**/venv
+**/.mypy_cache
+
+# Test and build artefacts.
+**/test-results
+**/playwright-report
+**/.playwright
+**/coverage
+**/*.tsbuildinfo
+
+# Editor and OS noise.
+.vscode
+.idea
+**/.DS_Store
+**/Thumbs.db

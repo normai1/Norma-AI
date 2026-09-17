@@ -1,36 +1,74 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# Norma AI — web
 
-## Getting Started
+The Next.js control-plane frontend: authentication, organizations and
+workspaces, the assistant editor, knowledge management, and the in-browser
+test call.
 
-First, run the development server:
+## Local development
+
+The app expects the API and the voice worker to be running, which
+`docker compose up` in the repository root provides:
 
 ```bash
-npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
+npm install
+npm run dev          # http://localhost:3000
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+| command | does |
+| --- | --- |
+| `npm run dev` | development server |
+| `npm run build` | production build |
+| `npm test` | unit tests (vitest) |
+| `npm run test:e2e` | end-to-end tests (playwright) |
+| `npm run lint` | eslint |
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+## Deploying to Vercel
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+This app is the only part of Norma AI that belongs on Vercel. The API is a
+long-running FastAPI service and the voice worker holds WebSockets open for
+the length of a call — neither survives a platform that may reclaim an
+instance mid-request (see CLAUDE.md section 38, and `render.yaml` in the
+repository root for the API).
 
-## Learn More
+**Deploy the API first.** The frontend talks to it from the browser, so
+until it has a public URL there is nothing to log in against.
 
-To learn more about Next.js, take a look at the following resources:
+### Project settings
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
+| setting | value |
+| --- | --- |
+| Root Directory | `apps/web` |
+| Framework Preset | Next.js (auto-detected) |
+| Build / Install Command | leave as detected |
 
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
+`vercel.json` here sets only what the defaults do not cover: an
+`ignoreCommand` so a commit that touches only the API or the voice worker
+does not trigger a frontend rebuild.
 
-## Deploy on Vercel
+### Environment variables
 
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
+| name | example | notes |
+| --- | --- | --- |
+| `NEXT_PUBLIC_API_URL` | `https://norma-api.onrender.com` | no trailing slash |
+| `NEXT_PUBLIC_VOICE_WS_URL` | `wss://norma-voice.fly.dev` | `wss://`, not `ws://` — a page served over HTTPS cannot open an insecure WebSocket |
+| `NEXT_PUBLIC_ECHO_GATE` | unset | optional test-call diagnostic |
 
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+These are `NEXT_PUBLIC_`, so they are baked into the client bundle at build
+time: changing one requires a redeploy, not just a restart. They are public
+by construction — never put a secret behind that prefix.
+
+### After deploying
+
+Set `CORS_ORIGINS` on the API to this deployment's origin. Until you do,
+every request from the browser is refused and the login form fails with a
+network error rather than anything explanatory.
+
+Then check, in order:
+
+1. `/login` renders and a login succeeds — proves API reachability and CORS.
+2. `/assistants` lists assistants — proves authenticated requests work.
+3. `/assistants/<id>/test-call` connects — proves the voice worker's
+   WebSocket URL and the session ticket signing key match the API's.
+
+Step 3 fails while `apps/voice` is undeployed. That is expected, and it is
+the last piece of the deploy order.

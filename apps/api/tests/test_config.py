@@ -92,3 +92,54 @@ def test_unset_environment_still_accepts_a_strong_key(
     )
 
     assert settings.secret_key == STRONG_KEY
+
+
+# ----------------------------------------------------------------------
+# Database URL driver
+#
+# Every managed provider hands out a plain postgres:// or postgresql:// URL,
+# because the driver is the application's business rather than the
+# database's. SQLAlchemy reads the scheme AS the driver, so pasting the
+# provider's own connection string in resolves to psycopg2 - not installed,
+# and the wrong shape regardless, since this application's engine is async.
+#
+# The failure only appears on a deployed environment, which is the worst
+# place to discover it, so it is pinned here instead.
+# ----------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "given",
+    [
+        "postgresql://norma:pw@db.example.com:5432/norma",
+        "postgres://norma:pw@db.example.com:5432/norma",
+    ],
+)
+def test_a_providers_plain_url_is_pointed_at_the_async_driver(given: str) -> None:
+    settings = _settings(secret_key=STRONG_KEY, database_url=given)
+
+    assert settings.database_url.startswith("postgresql+asyncpg://")
+    # Everything after the scheme is untouched - credentials, host, port and
+    # database name are the provider's and must survive verbatim.
+    assert settings.database_url.endswith("norma:pw@db.example.com:5432/norma")
+
+
+def test_an_explicit_driver_is_left_alone() -> None:
+    """
+    Someone naming a driver is being deliberate - including alembic/env.py,
+    which swaps asyncpg for psycopg to run migrations synchronously against
+    this same value.
+    """
+
+    given = "postgresql+psycopg://norma:pw@localhost:5432/norma"
+
+    assert _settings(secret_key=STRONG_KEY, database_url=given).database_url == given
+
+
+def test_the_test_database_url_is_normalised_the_same_way() -> None:
+    settings = _settings(
+        secret_key=STRONG_KEY,
+        test_database_url="postgresql://norma:pw@localhost:5432/norma_test",
+    )
+
+    assert settings.test_database_url.startswith("postgresql+asyncpg://")

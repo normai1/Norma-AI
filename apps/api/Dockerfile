@@ -10,9 +10,17 @@ RUN apt-get update \
         curl \
     && rm -rf /var/lib/apt/lists/*
 
-# From docker-compose.yml's additional build context "shared" (item 20b) -
-# provider abstractions this service and apps/voice both depend on.
-COPY --from=shared . /packages/shared
+# Provider abstractions this service and apps/voice both depend on (item
+# 20b).
+#
+# The build context is the repository root, not apps/api, which is why this
+# and the COPYs below are repo-relative. It used to be a named build context
+# ("shared", declared in docker-compose.yml's additional_contexts) with a
+# context of apps/api - tidier, and undeployable: named contexts are a
+# buildx feature, and Render's dockerContext is a single path with no
+# equivalent. A Dockerfile that only builds under docker-compose is not a
+# deployment artefact.
+COPY packages/shared /packages/shared
 
 # The lock, not requirements.txt. requirements.txt is what this service asks
 # for; requirements.lock is every package that ends up installed, transitive
@@ -20,7 +28,7 @@ COPY --from=shared . /packages/shared
 # builds from one commit are the same image. Regenerate it with
 # scripts/lock-python-deps.sh after changing requirements.txt; both are copied
 # so the image carries the intent alongside the resolution.
-COPY requirements.txt requirements.lock ./
+COPY apps/api/requirements.txt apps/api/requirements.lock ./
 
 # --require-hashes: pip verifies every downloaded artefact against the lock
 # and refuses the install if any byte differs, so a version number cannot
@@ -64,7 +72,9 @@ RUN if [ -n "${EMBEDDING_WEIGHTS}" ]; then \
         python -c "from huggingface_hub import snapshot_download; snapshot_download('${EMBEDDING_WEIGHTS}', allow_patterns=['onnx/model.onnx', '*.json', 'vocab.txt', '*.txt'])"; \
     fi
 
-COPY . .
+# The service's own source. Repo-relative, and deliberately last: everything
+# above changes rarely, so a code edit rebuilds only this layer.
+COPY apps/api/ .
 
 EXPOSE 8000
 
